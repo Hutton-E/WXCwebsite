@@ -9,15 +9,15 @@ const resourceLinks = [
 function Home() {
   return (
     <>
-      <nav style={{ position: "fixed", top: 20, right: 20, zIndex: 15 }}>
+      <nav className="left-res-drop">
         <NavMenu label="View WXC Resources" items={resourceLinks} />
       </nav>
-      <div className="hero">
-        <img src={wartburgLogo} className="framework" alt="Wartburg Logo" />
-        <h1 className="welcome-text acme-regular">
-          Welcome, what do you want to do today?
-        </h1>
-      </div>
+
+      <img src={wartburgLogo} className="framework" alt="Wartburg Logo" />
+
+      <h1 className="welcome-text acme-regular">
+        Welcome, what do you want to do today?
+      </h1>
     </>
   );
 }

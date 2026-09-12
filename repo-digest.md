@@ -1,6 +1,6 @@
 # Repository Digest
 
-Generated: 2026-09-12T16:46:02.978Z
+Generated: 2026-09-12T17:17:50.196Z
 Root: `WXC_Website`
 
 ## Directory Structure
@@ -20,6 +20,7 @@ WXC_Website/
 │   │       ├── wartburg_knights_logo.png
 │   │       └── wartburg_logo.png
 │   ├── components/
+│   │   ├── backButton.tsx
 │   │   ├── background.tsx
 │   │   └── navMenu.tsx
 │   ├── pages/
@@ -73,6 +74,29 @@ _(binary or excluded — contents not inlined)_
 
 _(binary or excluded — contents not inlined)_
 
+### `src/components/backButton.tsx`
+
+```tsx
+import { useNavigate } from "react-router-dom";
+import backIcon from "../assets/icons/back_icon.png";
+
+function BackButton() {
+  const navigate = useNavigate();
+
+  return (
+    <button
+      className="back-button"
+      onClick={() => navigate(-1)}
+      aria-label="Go Back"
+    >
+      <img src={backIcon} alt="" />
+    </button>
+  );
+}
+export default BackButton;
+
+```
+
 ### `src/components/background.tsx`
 
 ```tsx
@@ -102,6 +126,7 @@ function Background({ imageUrl, opacity }: BackgroundProps) {
 }
 
 export default Background;
+
 ```
 
 ### `src/components/navMenu.tsx`
@@ -166,6 +191,7 @@ function NavMenu({ label, items }: NavMenuProps) {
 }
 
 export default NavMenu;
+
 ```
 
 ### `src/pages/about.tsx`
@@ -179,6 +205,7 @@ function AboutInfo() {
   );
 }
 export default AboutInfo;
+
 ```
 
 ### `src/pages/corePage.tsx`
@@ -193,6 +220,7 @@ function CorePage() {
   );
 }
 export default CorePage;
+
 ```
 
 ### `src/pages/error.tsx`
@@ -206,6 +234,7 @@ function ErrorPage() {
   );
 }
 export default ErrorPage;
+
 ```
 
 ### `src/pages/home.tsx`
@@ -222,20 +251,21 @@ const resourceLinks = [
 function Home() {
   return (
     <>
-      <nav style={{ position: "fixed", top: 20, right: 20, zIndex: 15 }}>
+      <nav className="top-nav">
         <NavMenu label="View WXC Resources" items={resourceLinks} />
       </nav>
-      <div className="hero">
-        <img src={wartburgLogo} className="framework" alt="Wartburg Logo" />
-        <h1 className="welcome-text acme-regular">
-          Welcome, what do you want to do today?
-        </h1>
-      </div>
+
+      <img src={wartburgLogo} className="framework" alt="Wartburg Logo" />
+
+      <h1 className="welcome-text acme-regular">
+        Welcome, what do you want to do today?
+      </h1>
     </>
   );
 }
 
 export default Home;
+
 ```
 
 ### `src/pages/mileagePage.tsx`
@@ -249,6 +279,7 @@ function MileagePage() {
   );
 }
 export default MileagePage;
+
 ```
 
 ### `src/pages/name_lookup.tsx`
@@ -262,6 +293,7 @@ function Lookup() {
   );
 }
 export default Lookup;
+
 ```
 
 ### `src/App.css`
@@ -273,11 +305,31 @@ export default Lookup;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: var(--space-md);
+  padding: var(--space-lg) var(--space-md);
+  min-height: 100svh;
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.welcome-text {
+  position: fixed;
+  top: 24vh;
+  left: 51vw;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  z-index: 10;
+  text-align: center;
+  white-space: nowrap; /* prevents awkward wrapping at odd widths — remove if you want it to wrap */
 }
 
 .framework {
-  max-width: 200px;
+  position: fixed;
+  top: 2vh;
+  left: 45vw;
+  width: var(--logo-width);
   height: auto;
+  z-index: 10;
 }
 
 .acme-regular {
@@ -286,27 +338,43 @@ export default Lookup;
   font-style: normal;
 }
 
+.top-nav {
+  position: fixed;
+  top: 35vh;
+  left: 20vw;
+  z-index: 15;
+}
+
 .nav-menu {
   position: relative;
   display: inline-block;
 }
+
 .nav-menu-trigger {
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: var(--text-h, white);
-  font-size: 16px;
-  padding: 10px 18px;
-  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+  border: 2px solid rgb(0, 0, 0);
+  color: rgb(0, 0, 0);
+  font-size: clamp(16px, 2.2vw, 20px);
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: clamp(12px, 2vw, 16px) clamp(20px, 3vw, 28px);
+  border-radius: 10px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 6px;
-  backdrop-filter: blur(6px);
-  transition: background 0.2s ease;
+  gap: 8px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  transition:
+    background 0.2s ease,
+    transform 0.15s ease,
+    box-shadow 0.2s ease;
 }
 
 .nav-menu-trigger:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.28);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
 }
 
 .nav-menu-arrow {
@@ -320,9 +388,11 @@ export default Lookup;
 
 .nav-menu-dropdown {
   position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  min-width: 200px;
+  top: calc(100% + var(--space-sm));
+  right: 0; /* anchor to the right so it doesn't run off-screen on small viewports */
+  left: auto;
+  min-width: var(--dropdown-min-width);
+  max-width: min(90vw, 280px);
   background: rgba(20, 20, 25, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 10px;
@@ -357,6 +427,34 @@ export default Lookup;
 .nav-menu-item:hover {
   background: rgba(255, 255, 255, 0.12);
 }
+
+.back-button {
+  position: fixed;
+  top: var(--space-sm);
+  left: var(--space-sm);
+  z-index: 15;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: clamp(6px, 1.2vw, 10px);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(6px);
+  transition: background 0.2s ease;
+}
+
+.back-button img {
+  width: var(--icon-size);
+  height: var(--icon-size);
+  display: block;
+}
+
+.back-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
 ```
 
 ### `src/App.tsx`
@@ -365,31 +463,52 @@ export default Lookup;
 import wartburgDroneShot from "./assets/still_pictures/wartburg_drone_1.png";
 import Background from "./components/background";
 import "./App.css";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import Home from "./pages/home";
 import Lookup from "./pages/name_lookup";
 import ErrorPage from "./pages/error";
 import AboutInfo from "./pages/about";
 import MileagePage from "./pages/mileagePage";
 import CorePage from "./pages/corePage";
+import BackButton from "./components/backButton";
 
-function App() {
+const BACK_BUTTON_ROUTES = new Set(["/"]);
+
+function AppContent() {
+  const location = useLocation();
+
+  const isKnownRoute = ["/", "/lookup", "/about", "/mileage", "/core"].includes(
+    location.pathname,
+  );
+  const showBackButton =
+    isKnownRoute && !BACK_BUTTON_ROUTES.has(location.pathname);
+
   return (
-    <BrowserRouter>
-      <Background imageUrl={wartburgDroneShot} opacity={0.7} />
+    <>
+      {showBackButton && <BackButton />}
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/lookup" element={<Lookup />} />
         <Route path="*" element={<ErrorPage />} />
         <Route path="/about" element={<AboutInfo />} />
-        <Route path="milage" element={<MileagePage />} />
-        <Route path="core" element={<CorePage />} />
+        <Route path="/mileage" element={<MileagePage />} />
+        <Route path="/core" element={<CorePage />} />
       </Routes>
+    </>
+  );
+}
+
+function App() {
+  return (
+    <BrowserRouter>
+      <Background imageUrl={wartburgDroneShot} opacity={0.7} />
+      <AppContent />
     </BrowserRouter>
   );
 }
 
 export default App;
+
 ```
 
 ### `src/index.css`
@@ -421,6 +540,16 @@ export default App;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Responsive spacing scale — grows/shrinks fluidly with viewport width */
+  --space-sm: clamp(12px, 2vw, 20px);
+  --space-md: clamp(16px, 3vw, 32px);
+  --space-lg: clamp(24px, 5vw, 56px);
+
+  /* Responsive sizing for repeated UI chrome */
+  --icon-size: clamp(20px, 3vw, 28px);
+  --logo-width: clamp(120px, 20vw, 220px);
+  --dropdown-min-width: clamp(160px, 30vw, 220px);
 
   @media (max-width: 1024px) {
     font-size: 16px;
@@ -475,23 +604,17 @@ h2 {
 }
 
 h1 {
-  font-size: 56px;
+  font-size: clamp(28px, 5.5vw, 56px);
   letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
+  margin: var(--space-md) 0;
 }
 h2 {
-  font-size: 24px;
+  font-size: clamp(18px, 3vw, 24px);
   line-height: 118%;
   letter-spacing: -0.24px;
   margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
 }
+
 p {
   margin: 0;
 }
@@ -510,21 +633,23 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
 ```
 
 ### `src/main.tsx`
 
 ```tsx
-import { StrictMode } from "react";
-import { createRoot } from "react-dom/client";
-import "./index.css";
-import App from "./App.tsx";
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.tsx'
 
-createRoot(document.getElementById("root")!).render(
+createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
   </StrictMode>,
-);
+)
+
 ```
 
 ### `.gitignore`
@@ -560,17 +685,17 @@ dist-ssr
 ### `eslint.config.js`
 
 ```javascript
-import js from "@eslint/js";
-import globals from "globals";
-import reactHooks from "eslint-plugin-react-hooks";
-import reactRefresh from "eslint-plugin-react-refresh";
-import tseslint from "typescript-eslint";
-import { defineConfig, globalIgnores } from "eslint/config";
+import js from '@eslint/js'
+import globals from 'globals'
+import reactHooks from 'eslint-plugin-react-hooks'
+import reactRefresh from 'eslint-plugin-react-refresh'
+import tseslint from 'typescript-eslint'
+import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(["dist"]),
+  globalIgnores(['dist']),
   {
-    files: ["**/*.{ts,tsx}"],
+    files: ['**/*.{ts,tsx}'],
     extends: [
       js.configs.recommended,
       tseslint.configs.recommended,
@@ -581,7 +706,8 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
-]);
+])
+
 ```
 
 ### `index.html`
@@ -600,6 +726,7 @@ export default defineConfig([
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
+
 ```
 
 ### `package-lock.json`
@@ -641,11 +768,12 @@ _(binary or excluded — contents not inlined)_
     "vite": "^8.3.0"
   }
 }
+
 ```
 
 ### `README.md`
 
-````markdown
+```markdown
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
@@ -665,9 +793,9 @@ If you are developing a production application, we recommend updating the config
 
 ```js
 export default defineConfig([
-  globalIgnores(["dist"]),
+  globalIgnores(['dist']),
   {
-    files: ["**/*.{ts,tsx}"],
+    files: ['**/*.{ts,tsx}'],
     extends: [
       // Other configs...
 
@@ -682,46 +810,47 @@ export default defineConfig([
     ],
     languageOptions: {
       parserOptions: {
-        project: ["./tsconfig.node.json", "./tsconfig.app.json"],
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
         tsconfigRootDir: import.meta.dirname,
       },
       // other options...
     },
   },
-]);
+])
+
 ```
-````
 
 You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
 
 ```js
 // eslint.config.js
-import reactX from "eslint-plugin-react-x";
-import reactDom from "eslint-plugin-react-dom";
+import reactX from 'eslint-plugin-react-x'
+import reactDom from 'eslint-plugin-react-dom'
 
 export default defineConfig([
-  globalIgnores(["dist"]),
+  globalIgnores(['dist']),
   {
-    files: ["**/*.{ts,tsx}"],
+    files: ['**/*.{ts,tsx}'],
     extends: [
       // Other configs...
       // Enable lint rules for React
-      reactX.configs["recommended-typescript"],
+      reactX.configs['recommended-typescript'],
       // Enable lint rules for React DOM
       reactDom.configs.recommended,
     ],
     languageOptions: {
       parserOptions: {
-        project: ["./tsconfig.node.json", "./tsconfig.app.json"],
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
         tsconfigRootDir: import.meta.dirname,
       },
       // other options...
     },
   },
-]);
+])
+
 ```
 
-````
+```
 
 ### `repo-digest.md`
 
@@ -1002,7 +1131,7 @@ function main() {
 
 main();
 
-````
+```
 
 ### `tsconfig.app.json`
 
@@ -1033,6 +1162,7 @@ main();
   },
   "include": ["src"]
 }
+
 ```
 
 ### `tsconfig.json`
@@ -1045,6 +1175,7 @@ main();
     { "path": "./tsconfig.node.json" }
   ]
 }
+
 ```
 
 ### `tsconfig.node.json`
@@ -1073,20 +1204,22 @@ main();
   },
   "include": ["vite.config.ts"]
 }
+
 ```
 
 ### `vite.config.ts`
 
 ```typescript
-import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite'
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-});
+})
+
 ```
 
----
 
-_Digest complete: 22 files inlined, 8 skipped (binary/excluded)._
+---
+_Digest complete: 23 files inlined, 8 skipped (binary/excluded)._

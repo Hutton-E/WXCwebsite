@@ -25,6 +25,16 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
+  /* Responsive spacing scale — grows/shrinks fluidly with viewport width */
+  --space-sm: clamp(12px, 2vw, 20px);
+  --space-md: clamp(16px, 3vw, 32px);
+  --space-lg: clamp(24px, 5vw, 56px);
+
+  /* Responsive sizing for repeated UI chrome */
+  --icon-size: clamp(20px, 3vw, 28px);
+  --logo-width: clamp(120px, 20vw, 220px);
+  --dropdown-min-width: clamp(160px, 30vw, 220px);
+
   @media (max-width: 1024px) {
     font-size: 16px;
   }
@@ -78,23 +88,17 @@ h2 {
 }
 
 h1 {
-  font-size: 56px;
+  font-size: clamp(28px, 5.5vw, 56px);
   letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
+  margin: var(--space-md) 0;
 }
 h2 {
-  font-size: 24px;
+  font-size: clamp(18px, 3vw, 24px);
   line-height: 118%;
   letter-spacing: -0.24px;
   margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
 }
+
 p {
   margin: 0;
 }
