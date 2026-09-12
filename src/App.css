@@ -7,12 +7,12 @@
 }
 
 .framework {
-  max-width: 300px;
+  max-width: 200px;
   height: auto;
 }
 
 .acme-regular {
   font-family: "Acme", sans-serif;
-  font-weight: 300px;
+  font-weight: 400px;
   font-style: normal;
 }

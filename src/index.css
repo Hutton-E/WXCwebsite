@@ -30,6 +30,14 @@
   }
 }
 
+@font-face {
+  font-family: "Acme";
+  src: url("./assets/fonts/Acme-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --text: #9ca3af;
