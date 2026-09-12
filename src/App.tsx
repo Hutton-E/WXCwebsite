@@ -15,9 +15,14 @@ const BACK_BUTTON_ROUTES = new Set(["/"]);
 function AppContent() {
   const location = useLocation();
 
-  const isKnownRoute = ["/", "/lookup", "/about", "/mileage", "/core"].includes(
-    location.pathname,
-  );
+  const isKnownRoute = [
+    "/",
+    "/lookup",
+    "/about",
+    "/mileage",
+    "/core",
+    "/error",
+  ].includes(location.pathname);
   const showBackButton =
     isKnownRoute && !BACK_BUTTON_ROUTES.has(location.pathname);
 
@@ -27,6 +32,7 @@ function AppContent() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/lookup" element={<Lookup />} />
+        <Route path="/error" element={<ErrorPage />} />
         <Route path="*" element={<ErrorPage />} />
         <Route path="/about" element={<AboutInfo />} />
         <Route path="/mileage" element={<MileagePage />} />

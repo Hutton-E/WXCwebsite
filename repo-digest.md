@@ -1,6 +1,6 @@
 # Repository Digest
 
-Generated: 2026-09-12T17:17:50.196Z
+Generated: 2026-09-12T17:26:11.246Z
 Root: `WXC_Website`
 
 ## Directory Structure
@@ -251,7 +251,7 @@ const resourceLinks = [
 function Home() {
   return (
     <>
-      <nav className="top-nav">
+      <nav className="left-res-drop">
         <NavMenu label="View WXC Resources" items={resourceLinks} />
       </nav>
 
@@ -338,10 +338,10 @@ export default Lookup;
   font-style: normal;
 }
 
-.top-nav {
+.left-res-drop {
   position: fixed;
   top: 35vh;
-  left: 20vw;
+  left: 15vw;
   z-index: 15;
 }
 
@@ -351,9 +351,9 @@ export default Lookup;
 }
 
 .nav-menu-trigger {
-  background: rgba(0, 0, 0, 0.18);
-  border: 2px solid rgb(0, 0, 0);
-  color: rgb(0, 0, 0);
+  background: rgba(0, 0, 0, 0.37);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  color: rgb(255, 255, 255);
   font-size: clamp(16px, 2.2vw, 20px);
   font-weight: 700;
   letter-spacing: 0.3px;
@@ -372,13 +372,14 @@ export default Lookup;
 }
 
 .nav-menu-trigger:hover {
-  background: rgba(255, 255, 255, 0.28);
+  background: rgba(0, 0, 0, 0.88);
   transform: translateY(-2px);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
 }
 
 .nav-menu-arrow {
-  font-size: 12px;
+  font-size: 14px;
+  color: white;
   transition: transform 0.2s ease;
 }
 
@@ -389,15 +390,15 @@ export default Lookup;
 .nav-menu-dropdown {
   position: absolute;
   top: calc(100% + var(--space-sm));
-  right: 0; /* anchor to the right so it doesn't run off-screen on small viewports */
+  right: 0;
   left: auto;
   min-width: var(--dropdown-min-width);
   max-width: min(90vw, 280px);
-  background: rgba(20, 20, 25, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.37);
+  border: 2px solid rgba(0, 0, 0, 0.589);
   border-radius: 10px;
-  padding: 6px;
-  backdrop-filter: blur(10px);
+  padding: 8px;
+  backdrop-filter: blur(8px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   z-index: 20;
   animation: dropdown-fade 0.15s ease-out;
@@ -416,16 +417,17 @@ export default Lookup;
 
 .nav-menu-item {
   display: block;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border-radius: 6px;
   color: white;
+  font-size: clamp(14px, 1.6vw, 16px);
+  font-weight: 600;
   text-decoration: none;
-  font-size: 15px;
   transition: background 0.15s ease;
 }
 
 .nav-menu-item:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.15);
 }
 
 .back-button {

@@ -15,7 +15,7 @@ function Home() {
 
       <img src={wartburgLogo} className="framework" alt="Wartburg Logo" />
 
-      <h1 className="welcome-text acme-regular">
+      <h1 className="welcome-text acme-regular text-outline">
         Welcome, what do you want to do today?
       </h1>
     </>

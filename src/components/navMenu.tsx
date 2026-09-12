@@ -29,7 +29,7 @@ function NavMenu({ label, items }: NavMenuProps) {
   return (
     <div className="nav-menu" ref={menuRef}>
       <button
-        className="nav-menu-trigger"
+        className="nav-menu-trigger acme-regular text-outline"
         onClick={() => setIsOpen((prev) => !prev)}
         aria-expanded={isOpen}
         aria-haspopup="true"
@@ -39,7 +39,7 @@ function NavMenu({ label, items }: NavMenuProps) {
       </button>
 
       {isOpen && (
-        <div className="nav-menu-dropdown">
+        <div className="nav-menu-dropdown acme-regular text-outline">
           {items.map((item) => (
             <Link
               key={item.path}
