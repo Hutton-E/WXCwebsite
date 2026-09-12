@@ -33,7 +33,7 @@
 
 .acme-regular {
   font-family: "Acme", sans-serif;
-  font-weight: 400; /* was "400px" — invalid unit, font-weight is unitless */
+  font-weight: 400;
   font-style: normal;
 }
 
@@ -56,9 +56,9 @@
 }
 
 .nav-menu-trigger {
-  background: rgba(0, 0, 0, 0.37);
+  background: rgba(240, 233, 233, 0.863);
   border: 2px solid rgba(0, 0, 0, 0.589);
-  color: rgb(255, 255, 255);
+  color: rgb(0, 0, 0);
   font-size: clamp(16px, 2.2vw, 35px);
   font-weight: 700;
   letter-spacing: 0.3px;
@@ -77,14 +77,14 @@
 }
 
 .nav-menu-trigger:hover {
-  background: rgba(0, 0, 0, 0.88);
+  background: rgba(90, 84, 84, 0.418);
   transform: translateY(-2px);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
 }
 
 .nav-menu-arrow {
   font-size: 14px;
-  color: white;
+  color: black;
   transition: transform 0.2s ease;
 }
 
@@ -99,7 +99,7 @@
   left: auto;
   min-width: var(--dropdown-min-width);
   max-width: min(90vw, 280px);
-  background: rgba(0, 0, 0, 0.37);
+  background: rgba(240, 233, 233, 0.863);
   border: 2px solid rgba(0, 0, 0, 0.589);
   border-radius: 10px;
   padding: 8px;
@@ -124,7 +124,7 @@
   display: block;
   padding: 12px 14px;
   border-radius: 6px;
-  color: white;
+  color: rgb(0, 0, 0);
   font-size: clamp(14px, 1.6vw, 25px);
   font-weight: 600;
   text-decoration: none;
@@ -132,15 +132,15 @@
 }
 
 .nav-menu-item:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(90, 84, 84, 0.418);
 }
 
 .back-button {
   position: fixed;
   top: var(--space-sm);
   left: var(--space-sm);
-  z-index: 35; /* was 15 — needs to be higher than .error-page's z-index: 30 */
-  background: rgba(0, 0, 0, 0.37);
+  z-index: 35;
+  background: rgba(240, 233, 233, 0.863);
   border: 2px solid rgba(0, 0, 0, 0.589);
   border-radius: 8px;
   padding: clamp(6px, 1.2vw, 10px);
@@ -159,7 +159,7 @@
 }
 
 .back-button:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(90, 84, 84, 0.418);
 }
 
 .error-page {
@@ -198,4 +198,141 @@
   margin: 0;
   white-space: nowrap;
   z-index: var(--z-overlay);
+}
+
+.identity-lookup {
+  position: fixed;
+  top: 45vh;
+  left: 50vw;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  text-align: center;
+  z-index: 10;
+}
+
+.identity-title {
+  margin: 0;
+  font-size: clamp(32px, 5vw, 56px);
+}
+
+.identity-input {
+  width: min(90vw, 400px);
+  padding: clamp(12px, 2vw, 16px) clamp(16px, 2.5vw, 20px);
+  font-size: clamp(16px, 2vw, 20px);
+  border-radius: 10px;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  color: black;
+  outline: none;
+}
+
+.identity-input:focus {
+  border-color: black;
+}
+
+.identity-results {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  width: min(90vw, 400px);
+  max-height: 240px;
+  overflow-y: auto;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+}
+
+.identity-result-item {
+  width: 100%;
+  text-align: left;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: rgb(0, 0, 0);
+  font-size: clamp(15px, 1.8vw, 18px);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.identity-result-item:hover {
+  background: rgba(90, 84, 84, 0.418);
+}
+
+.identity-no-match {
+  margin: 0;
+  font-size: clamp(14px, 1.6vw, 35px);
+}
+
+.switch-identity-link {
+  position: fixed;
+  top: 27vh;
+  left: 53vw;
+  transform: translateX(-50%);
+  background: none;
+  border: none;
+  color: white;
+  -webkit-text-stroke: 1px black;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  text-decoration: underline;
+  font-size: 35px;
+  cursor: pointer;
+  z-index: 10;
+  transition: opacity 0.15s ease;
+}
+
+.switch-identity-link:hover {
+  opacity: 0.8;
+}
+
+.switch-identity-confirm {
+  position: fixed;
+  top: 30vh;
+  left: 50vw;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+  padding: 10px 14px;
+  z-index: 10;
+  backdrop-filter: blur(6px);
+}
+
+.switch-identity-confirm-text {
+  color: black;
+  font-size: 25px;
+}
+
+.switch-identity-confirm-yes,
+.switch-identity-confirm-no {
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.switch-identity-confirm-yes {
+  background: rgba(0, 0, 0, 0.589);
+  color: white;
+}
+
+.switch-identity-confirm-no {
+  background: rgba(90, 84, 84, 0.418);
+  color: black;
+}
+
+.switch-identity-confirm-yes:hover,
+.switch-identity-confirm-no:hover {
+  opacity: 0.85;
 }

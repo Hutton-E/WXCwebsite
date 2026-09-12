@@ -9,6 +9,7 @@ import AboutInfo from "./pages/about";
 import MileagePage from "./pages/mileagePage";
 import CorePage from "./pages/corePage";
 import BackButton from "./components/backButton";
+import RequireIdentity from "./components/requireIdentity";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -31,12 +32,40 @@ function AppContent() {
       {showBackButton && <BackButton />}
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/lookup" element={<Lookup />} />
         <Route path="/error" element={<ErrorPage />} />
         <Route path="*" element={<ErrorPage />} />
-        <Route path="/about" element={<AboutInfo />} />
-        <Route path="/mileage" element={<MileagePage />} />
-        <Route path="/core" element={<CorePage />} />
+        <Route
+          path="/about"
+          element={
+            <RequireIdentity>
+              <AboutInfo />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/mileage"
+          element={
+            <RequireIdentity>
+              <MileagePage />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/core"
+          element={
+            <RequireIdentity>
+              <CorePage />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/lookup"
+          element={
+            <RequireIdentity>
+              <Lookup />
+            </RequireIdentity>
+          }
+        />
       </Routes>
     </>
   );

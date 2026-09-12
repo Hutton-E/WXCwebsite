@@ -1,6 +1,6 @@
 # Repository Digest
 
-Generated: 2026-09-12T17:26:11.246Z
+Generated: 2026-09-12T21:46:06.146Z
 Root: `WXC_Website`
 
 ## Directory Structure
@@ -22,7 +22,12 @@ WXC_Website/
 │   ├── components/
 │   │   ├── backButton.tsx
 │   │   ├── background.tsx
-│   │   └── navMenu.tsx
+│   │   ├── identityLookup.tsx
+│   │   ├── navMenu.tsx
+│   │   ├── requireIdentity.tsx
+│   │   └── switchIdentity.tsx
+│   ├── context/
+│   │   └── UserContext.tsx
 │   ├── pages/
 │   │   ├── about.tsx
 │   │   ├── corePage.tsx
@@ -129,6 +134,63 @@ export default Background;
 
 ```
 
+### `src/components/identityLookup.tsx`
+
+```tsx
+import { useState } from "react";
+import { useUser } from "../context/UserContext";
+
+// TODO: replace with real roster data parsed from your PDF (see the
+// pdf-parsing pipeline discussed earlier — this array is placeholder data).
+const ROSTER = ["Alex Johnson", "Jamie Smith", "Taylor Brown"];
+
+function IdentityLookup() {
+  const { setName } = useUser();
+  const [query, setQuery] = useState("");
+
+  const matches =
+    query.trim().length > 0
+      ? ROSTER.filter((n) => n.toLowerCase().includes(query.toLowerCase()))
+      : [];
+
+  return (
+    <div className="identity-lookup">
+      <h1 className="identity-title acme-regular text-outline">Who are you?</h1>
+      <input
+        type="text"
+        className="identity-input"
+        placeholder="Start typing your name..."
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        autoFocus
+      />
+      {matches.length > 0 && (
+        <ul className="identity-results">
+          {matches.map((n) => (
+            <li key={n}>
+              <button
+                className="identity-result-item"
+                onClick={() => setName(n)}
+              >
+                {n}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {query.trim().length > 0 && matches.length === 0 && (
+        <p className="identity-no-match acme-regular text-outline">
+          No match found — check your spelling.
+        </p>
+      )}
+    </div>
+  );
+}
+
+export default IdentityLookup;
+
+```
+
 ### `src/components/navMenu.tsx`
 
 ```tsx
@@ -163,7 +225,7 @@ function NavMenu({ label, items }: NavMenuProps) {
   return (
     <div className="nav-menu" ref={menuRef}>
       <button
-        className="nav-menu-trigger"
+        className="nav-menu-trigger acme-regular text-outline"
         onClick={() => setIsOpen((prev) => !prev)}
         aria-expanded={isOpen}
         aria-haspopup="true"
@@ -173,7 +235,7 @@ function NavMenu({ label, items }: NavMenuProps) {
       </button>
 
       {isOpen && (
-        <div className="nav-menu-dropdown">
+        <div className="nav-menu-dropdown acme-regular text-outline">
           {items.map((item) => (
             <Link
               key={item.path}
@@ -191,6 +253,118 @@ function NavMenu({ label, items }: NavMenuProps) {
 }
 
 export default NavMenu;
+
+```
+
+### `src/components/requireIdentity.tsx`
+
+```tsx
+import { Navigate, useLocation } from "react-router-dom";
+import type { ReactNode } from "react";
+import { useUser } from "../context/UserContext";
+
+function RequireIdentity({ children }: { children: ReactNode }) {
+  const { name } = useUser();
+  const location = useLocation();
+
+  if (!name) {
+    return <Navigate to="/" replace state={{ from: location }} />;
+  }
+
+  return <>{children}</>;
+}
+
+export default RequireIdentity;
+
+```
+
+### `src/components/switchIdentity.tsx`
+
+```tsx
+import { useState } from "react";
+import { useUser } from "../context/UserContext";
+
+function SwitchIdentityPrompt() {
+  const { clearName } = useUser();
+  const [confirming, setConfirming] = useState(false);
+
+  if (confirming) {
+    return (
+      <div className="switch-identity-confirm">
+        <span className="switch-identity-confirm-text acme-regular text-outline">
+          Not you? This will reset your selection.
+        </span>
+        <button className="switch-identity-confirm-yes" onClick={clearName}>
+          Yes, switch
+        </button>
+        <button
+          className="switch-identity-confirm-no"
+          onClick={() => setConfirming(false)}
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      className="switch-identity-link acme-regular text-outline"
+      onClick={() => setConfirming(true)}
+    >
+      Not you?
+    </button>
+  );
+}
+
+export default SwitchIdentityPrompt;
+
+```
+
+### `src/context/UserContext.tsx`
+
+```tsx
+import { createContext, useContext, useState, type ReactNode } from "react";
+
+interface UserContextValue {
+  name: string | null;
+  setName: (name: string) => void;
+  clearName: () => void;
+}
+
+const UserContext = createContext<UserContextValue | undefined>(undefined);
+const STORAGE_KEY = "wxc_selected_name";
+
+export function UserProvider({ children }: { children: ReactNode }) {
+  const [name, setNameState] = useState<string | null>(() =>
+    sessionStorage.getItem(STORAGE_KEY),
+  );
+
+  function setName(newName: string) {
+    sessionStorage.setItem(STORAGE_KEY, newName);
+    setNameState(newName);
+  }
+
+  function clearName() {
+    sessionStorage.removeItem(STORAGE_KEY);
+    setNameState(null);
+  }
+
+  return (
+    <UserContext.Provider value={{ name, setName, clearName }}>
+      {children}
+    </UserContext.Provider>
+  );
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function useUser() {
+  const context = useContext(UserContext);
+  if (!context) {
+    throw new Error("useUser must be used within a UserProvider");
+  }
+  return context;
+}
 
 ```
 
@@ -226,10 +400,23 @@ export default CorePage;
 ### `src/pages/error.tsx`
 
 ```tsx
+import { useLocation } from "react-router-dom";
+interface ErrorPageState {
+  message?: string;
+  code?: number;
+}
+
 function ErrorPage() {
+  const location = useLocation();
+
+  const state = (location.state as ErrorPageState) || {};
+  const message = state.message || "Something went wrong.";
+  const code = state.code || 404;
+
   return (
-    <div>
-      <h1>Error</h1>
+    <div className="error-page">
+      <h1 className="error-code acme-regular text-outline">{code}</h1>
+      <h2 className="error-message acme-regular text-outline">{message}</h2>
     </div>
   );
 }
@@ -242,6 +429,9 @@ export default ErrorPage;
 ```tsx
 import wartburgLogo from "../assets/still_pictures/wartburg_knights_logo_main.png";
 import NavMenu from "../components/navMenu";
+import IdentityLookup from "../components/identityLookup";
+import SwitchIdentityPrompt from "../components/switchIdentity";
+import { useUser } from "../context/UserContext";
 
 const resourceLinks = [
   { label: "View Mileage", path: "/mileage" },
@@ -249,17 +439,28 @@ const resourceLinks = [
 ];
 
 function Home() {
+  const { name } = useUser();
+
   return (
     <>
-      <nav className="left-res-drop">
-        <NavMenu label="View WXC Resources" items={resourceLinks} />
-      </nav>
-
       <img src={wartburgLogo} className="framework" alt="Wartburg Logo" />
 
-      <h1 className="welcome-text acme-regular">
-        Welcome, what do you want to do today?
+      <h1 className="welcome-text acme-regular text-outline">
+        {name
+          ? `Welcome, ${name}`
+          : "Welcome, please type your name and select it to view resources."}
       </h1>
+
+      {!name && <IdentityLookup />}
+      {name && (
+        <>
+          <nav className="left-res-drop">
+            <NavMenu label="View WXC Resources" items={resourceLinks} />
+          </nav>
+
+          <SwitchIdentityPrompt />
+        </>
+      )}
     </>
   );
 }
@@ -271,13 +472,25 @@ export default Home;
 ### `src/pages/mileagePage.tsx`
 
 ```tsx
+import { useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+
 function MileagePage() {
-  return (
-    <div>
-      <h1>Mileage</h1>
-    </div>
-  );
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    navigate("/error", {
+      replace: true,
+      state: {
+        message: "Uh oh, looks like this page isn't built yet. Check in later!",
+        code: 404,
+      },
+    });
+  }, [navigate]);
+
+  return null;
 }
+
 export default MileagePage;
 
 ```
@@ -320,7 +533,7 @@ export default Lookup;
   margin: 0;
   z-index: 10;
   text-align: center;
-  white-space: nowrap; /* prevents awkward wrapping at odd widths — remove if you want it to wrap */
+  white-space: nowrap;
 }
 
 .framework {
@@ -334,14 +547,20 @@ export default Lookup;
 
 .acme-regular {
   font-family: "Acme", sans-serif;
-  font-weight: 400px;
+  font-weight: 400;
   font-style: normal;
+}
+
+.text-outline {
+  color: white;
+  -webkit-text-stroke: 1px black;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
 }
 
 .left-res-drop {
   position: fixed;
   top: 35vh;
-  left: 15vw;
+  left: 10vw;
   z-index: 15;
 }
 
@@ -351,10 +570,10 @@ export default Lookup;
 }
 
 .nav-menu-trigger {
-  background: rgba(0, 0, 0, 0.37);
+  background: rgba(240, 233, 233, 0.863);
   border: 2px solid rgba(0, 0, 0, 0.589);
-  color: rgb(255, 255, 255);
-  font-size: clamp(16px, 2.2vw, 20px);
+  color: rgb(0, 0, 0);
+  font-size: clamp(16px, 2.2vw, 35px);
   font-weight: 700;
   letter-spacing: 0.3px;
   padding: clamp(12px, 2vw, 16px) clamp(20px, 3vw, 28px);
@@ -372,14 +591,14 @@ export default Lookup;
 }
 
 .nav-menu-trigger:hover {
-  background: rgba(0, 0, 0, 0.88);
+  background: rgba(90, 84, 84, 0.418);
   transform: translateY(-2px);
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
 }
 
 .nav-menu-arrow {
   font-size: 14px;
-  color: white;
+  color: black;
   transition: transform 0.2s ease;
 }
 
@@ -394,7 +613,7 @@ export default Lookup;
   left: auto;
   min-width: var(--dropdown-min-width);
   max-width: min(90vw, 280px);
-  background: rgba(0, 0, 0, 0.37);
+  background: rgba(240, 233, 233, 0.863);
   border: 2px solid rgba(0, 0, 0, 0.589);
   border-radius: 10px;
   padding: 8px;
@@ -419,24 +638,24 @@ export default Lookup;
   display: block;
   padding: 12px 14px;
   border-radius: 6px;
-  color: white;
-  font-size: clamp(14px, 1.6vw, 16px);
+  color: rgb(0, 0, 0);
+  font-size: clamp(14px, 1.6vw, 25px);
   font-weight: 600;
   text-decoration: none;
   transition: background 0.15s ease;
 }
 
 .nav-menu-item:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(90, 84, 84, 0.418);
 }
 
 .back-button {
   position: fixed;
   top: var(--space-sm);
   left: var(--space-sm);
-  z-index: 15;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  z-index: 35;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
   border-radius: 8px;
   padding: clamp(6px, 1.2vw, 10px);
   cursor: pointer;
@@ -454,7 +673,184 @@ export default Lookup;
 }
 
 .back-button:hover {
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(90, 84, 84, 0.418);
+}
+
+.error-page {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  text-align: center;
+  padding: var(--space-lg);
+  box-sizing: border-box;
+}
+
+.error-code {
+  position: fixed;
+  top: 10vh;
+  left: 50vw;
+  transform: translate(-50%, -50%);
+  font-size: clamp(64px, 12vw, 150px);
+  font-weight: 700;
+  margin: 0;
+  line-height: 1;
+  z-index: var(--z-overlay);
+}
+
+.error-message {
+  position: fixed;
+  top: 20vh;
+  left: 50vw;
+  transform: translate(-50%, -50%);
+  font-size: clamp(25px, 2.5vw, 50px);
+  font-weight: 500;
+  margin: 0;
+  white-space: nowrap;
+  z-index: var(--z-overlay);
+}
+
+.identity-lookup {
+  position: fixed;
+  top: 45vh;
+  left: 50vw;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  text-align: center;
+  z-index: 10;
+}
+
+.identity-title {
+  margin: 0;
+  font-size: clamp(32px, 5vw, 56px);
+}
+
+.identity-input {
+  width: min(90vw, 400px);
+  padding: clamp(12px, 2vw, 16px) clamp(16px, 2.5vw, 20px);
+  font-size: clamp(16px, 2vw, 20px);
+  border-radius: 10px;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  color: black;
+  outline: none;
+}
+
+.identity-input:focus {
+  border-color: black;
+}
+
+.identity-results {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  width: min(90vw, 400px);
+  max-height: 240px;
+  overflow-y: auto;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+}
+
+.identity-result-item {
+  width: 100%;
+  text-align: left;
+  padding: 12px 16px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: rgb(0, 0, 0);
+  font-size: clamp(15px, 1.8vw, 18px);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.identity-result-item:hover {
+  background: rgba(90, 84, 84, 0.418);
+}
+
+.identity-no-match {
+  margin: 0;
+  font-size: clamp(14px, 1.6vw, 35px);
+}
+
+.switch-identity-link {
+  position: fixed;
+  top: 27vh;
+  left: 53vw;
+  transform: translateX(-50%);
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+  padding: 8px 16px;
+  color: black;
+  text-decoration: underline;
+  font-size: 35px;
+  cursor: pointer;
+  z-index: 10;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  transition: background 0.2s ease;
+}
+
+.switch-identity-link:hover {
+  background: rgba(90, 84, 84, 0.418);
+}
+
+.switch-identity-confirm {
+  position: fixed;
+  top: 30vh;
+  left: 50vw;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+  padding: 10px 14px;
+  z-index: 10;
+  backdrop-filter: blur(6px);
+}
+
+.switch-identity-confirm-text {
+  color: black;
+  font-size: 25px;
+}
+
+.switch-identity-confirm-yes,
+.switch-identity-confirm-no {
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.switch-identity-confirm-yes {
+  background: rgba(0, 0, 0, 0.589);
+  color: white;
+}
+
+.switch-identity-confirm-no {
+  background: rgba(90, 84, 84, 0.418);
+  color: black;
+}
+
+.switch-identity-confirm-yes:hover,
+.switch-identity-confirm-no:hover {
+  opacity: 0.85;
 }
 
 ```
@@ -473,15 +869,21 @@ import AboutInfo from "./pages/about";
 import MileagePage from "./pages/mileagePage";
 import CorePage from "./pages/corePage";
 import BackButton from "./components/backButton";
+import RequireIdentity from "./components/requireIdentity";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
 function AppContent() {
   const location = useLocation();
 
-  const isKnownRoute = ["/", "/lookup", "/about", "/mileage", "/core"].includes(
-    location.pathname,
-  );
+  const isKnownRoute = [
+    "/",
+    "/lookup",
+    "/about",
+    "/mileage",
+    "/core",
+    "/error",
+  ].includes(location.pathname);
   const showBackButton =
     isKnownRoute && !BACK_BUTTON_ROUTES.has(location.pathname);
 
@@ -490,11 +892,40 @@ function AppContent() {
       {showBackButton && <BackButton />}
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/lookup" element={<Lookup />} />
+        <Route path="/error" element={<ErrorPage />} />
         <Route path="*" element={<ErrorPage />} />
-        <Route path="/about" element={<AboutInfo />} />
-        <Route path="/mileage" element={<MileagePage />} />
-        <Route path="/core" element={<CorePage />} />
+        <Route
+          path="/about"
+          element={
+            <RequireIdentity>
+              <AboutInfo />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/mileage"
+          element={
+            <RequireIdentity>
+              <MileagePage />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/core"
+          element={
+            <RequireIdentity>
+              <CorePage />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/lookup"
+          element={
+            <RequireIdentity>
+              <Lookup />
+            </RequireIdentity>
+          }
+        />
       </Routes>
     </>
   );
@@ -641,16 +1072,19 @@ code {
 ### `src/main.tsx`
 
 ```tsx
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import './index.css'
-import App from './App.tsx'
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import "./index.css";
+import App from "./App.tsx";
+import { UserProvider } from "./context/UserContext.tsx";
 
-createRoot(document.getElementById('root')!).render(
+createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <UserProvider>
+      <App />
+    </UserProvider>
   </StrictMode>,
-)
+);
 
 ```
 
@@ -1224,4 +1658,4 @@ export default defineConfig({
 
 
 ---
-_Digest complete: 23 files inlined, 8 skipped (binary/excluded)._
+_Digest complete: 27 files inlined, 8 skipped (binary/excluded)._
