@@ -66,6 +66,7 @@ const SKIP_CONTENT_FILES = new Set([
   "package-lock.json",
   "yarn.lock",
   "pnpm-lock.yaml",
+  "repo-digest.md",
 ]);
 
 // Max file size (bytes) to inline before truncating
