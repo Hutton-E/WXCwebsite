@@ -13,6 +13,7 @@ import RequireIdentity from "./components/requireIdentity";
 import FMS from "./pages/fms";
 import LiftingSheet from "./pages/liftingSheet";
 import ComingSoon from "./components/comingSoon";
+import TfrrsStats from "./pages/tfrrsStats";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -94,7 +95,7 @@ function AppContent() {
           path="/tfrrs-stats"
           element={
             <RequireIdentity>
-              <ComingSoon message="TFRRS stats aren't hooked up yet — check back soon!" />
+              <TfrrsStats />
             </RequireIdentity>
           }
         />

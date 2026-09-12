@@ -1,6 +1,6 @@
 # Repository Digest
 
-Generated: 2026-09-12T21:46:06.146Z
+Generated: 2026-09-12T22:28:43.045Z
 Root: `WXC_Website`
 
 ## Directory Structure
@@ -8,6 +8,10 @@ Root: `WXC_Website`
 ```
 WXC_Website/
 ├── public/
+├── scripts/
+│   ├── fech-tfrrs-ids.mjs
+│   ├── fetch-roster.mjs
+│   └── fetch-tfrrs-stats.mjs
 ├── src/
 │   ├── assets/
 │   │   ├── fonts/
@@ -22,17 +26,22 @@ WXC_Website/
 │   ├── components/
 │   │   ├── backButton.tsx
 │   │   ├── background.tsx
+│   │   ├── comingSoon.tsx
 │   │   ├── identityLookup.tsx
 │   │   ├── navMenu.tsx
 │   │   ├── requireIdentity.tsx
 │   │   └── switchIdentity.tsx
 │   ├── context/
 │   │   └── UserContext.tsx
+│   ├── data/
+│   │   └── distance_roster.json
 │   ├── pages/
 │   │   ├── about.tsx
 │   │   ├── corePage.tsx
 │   │   ├── error.tsx
+│   │   ├── fms.tsx
 │   │   ├── home.tsx
+│   │   ├── liftingSheet.tsx
 │   │   ├── mileagePage.tsx
 │   │   └── name_lookup.tsx
 │   ├── App.css
@@ -54,6 +63,420 @@ WXC_Website/
 ```
 
 ## File Contents
+
+### `scripts/fech-tfrrs-ids.mjs`
+
+```javascript
+#!/usr/bin/env node
+/**
+ * fetch-tfrrs-ids.mjs
+ *
+ * Matches athletes in src/data/distance_roster.json against TFRRS team
+ * roster pages, and adds a `tfrrsId` field to each matched athlete.
+ *
+ * TFRRS lists names as "Last, First" — this does a normalized match against
+ * your "First Last" roster names. Mismatches (nicknames, spelling
+ * differences) are logged so you can add manual overrides below.
+ *
+ * Usage: node scripts/fetch-tfrrs-ids.mjs
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import * as cheerio from "cheerio";
+
+const TFRRS_TEAMS = [
+  {
+    url: "https://www.tfrrs.org/teams/IA_college_m_Wartburg.html",
+    team: "mens-cross-country",
+  },
+  {
+    url: "https://www.tfrrs.org/teams/IA_college_f_Wartburg.html",
+    team: "womens-cross-country",
+  },
+];
+
+const ROSTER_PATH = path.resolve("src/data/distance_roster.json");
+
+// Add entries here when automatic matching fails due to spelling/nickname
+// differences between go-knights.net and TFRRS. Key = your roster id.
+const MANUAL_OVERRIDES = {
+  // "17015": "9444002", // e.g. Philip Dahlen -> TFRRS Phillip Dahlen
+  // "17028": "9444015", // e.g. Adam Wilke -> TFRRS Adam Wilkie
+};
+
+function normalize(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, "")
+    .trim();
+}
+
+async function fetchTfrrsRoster(url) {
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (roster-match-script)" },
+  });
+  if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
+  const html = await res.text();
+  const $ = cheerio.load(html);
+
+  const entries = [];
+
+  $("table").each((_, table) => {
+    const headerText = $(table)
+      .find("th")
+      .map((_, th) => $(th).text().trim())
+      .get()
+      .join("|");
+    if (!/name/i.test(headerText) || !/year/i.test(headerText)) return;
+
+    $(table)
+      .find("tbody tr")
+      .each((_, row) => {
+        const cells = $(row).find("td");
+        if (cells.length < 1) return;
+        const link = $(cells[0]).find("a").first();
+        const rawName = link.text().trim(); // "Last, First"
+        const href = link.attr("href") || "";
+        const tfrrsId = href.split("/").filter(Boolean)[1] || ""; // /athletes/{id}/...
+
+        if (!rawName || !tfrrsId) return;
+
+        const [last, first] = rawName.split(",").map((s) => s.trim());
+        if (!last || !first) return;
+
+        entries.push({
+          tfrrsId,
+          normalizedName: normalize(`${first} ${last}`),
+          rawName,
+        });
+      });
+  });
+
+  return entries;
+}
+
+async function main() {
+  const roster = JSON.parse(fs.readFileSync(ROSTER_PATH, "utf8"));
+
+  const allTfrrsEntries = [];
+  for (const { url, team } of TFRRS_TEAMS) {
+    console.log(`Fetching TFRRS roster for ${team}...`);
+    const entries = await fetchTfrrsRoster(url);
+    console.log(`  Found ${entries.length} TFRRS entries`);
+    allTfrrsEntries.push(...entries);
+  }
+
+  let matched = 0;
+  const unmatched = [];
+
+  for (const athlete of roster.athletes) {
+    if (MANUAL_OVERRIDES[athlete.id]) {
+      athlete.tfrrsId = MANUAL_OVERRIDES[athlete.id];
+      matched++;
+      continue;
+    }
+
+    const target = normalize(athlete.name);
+    const match = allTfrrsEntries.find((e) => e.normalizedName === target);
+
+    if (match) {
+      athlete.tfrrsId = match.tfrrsId;
+      matched++;
+    } else {
+      unmatched.push(athlete.name);
+    }
+  }
+
+  fs.writeFileSync(ROSTER_PATH, JSON.stringify(roster, null, 2), "utf8");
+
+  console.log(`\n✅ Matched ${matched}/${roster.athletes.length} athletes.`);
+  if (unmatched.length > 0) {
+    console.log(
+      `\n⚠️  Could not match ${unmatched.length} athletes automatically:`,
+    );
+    unmatched.forEach((n) => console.log(`   - ${n}`));
+    console.log(
+      "\nFind their TFRRS profile manually (search their name on tfrrs.org), " +
+        "grab the numeric ID from the profile URL, and add it to MANUAL_OVERRIDES in this script.",
+    );
+  }
+}
+
+main().catch((err) => {
+  console.error("Failed to match TFRRS IDs:", err);
+  process.exit(1);
+});
+```
+
+### `scripts/fetch-roster.mjs`
+
+```javascript
+#!/usr/bin/env node
+/**
+ * fetch-roster.mjs
+ *
+ * Fetches the men's and women's cross country rosters from go-knights.net,
+ * parses the roster table, and writes structured JSON to src/data/roster.json.
+ *
+ * Run this whenever the roster changes (each new season).
+ *
+ * Usage: node scripts/fetch-roster.mjs
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import * as cheerio from "cheerio";
+
+const TEAMS = [
+  {
+    url: "https://go-knights.net/sports/mens-cross-country/roster",
+    team: "mens-cross-country",
+  },
+  {
+    url: "https://go-knights.net/sports/womens-cross-country/roster",
+    team: "womens-cross-country",
+  },
+];
+
+const OUT_PATH = path.resolve("src/data/roster.json");
+
+async function fetchTeamRoster({ url, team }) {
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (roster-fetch-script)" },
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
+  }
+  const html = await res.text();
+  const $ = cheerio.load(html);
+
+  const athletes = [];
+
+  // Sidearm roster pages include an accessible <table> with headers like
+  // "Full Name", "Academic Year", "Hometown / High School". Find it generically
+  // by header text so this doesn't break if class names change.
+  $("table").each((_, table) => {
+    const headerText = $(table)
+      .find("th")
+      .map((_, th) => $(th).text().trim())
+      .get()
+      .join("|");
+    const looksLikeRoster =
+      /academic year/i.test(headerText) &&
+      /(hometown|high school)/i.test(headerText);
+
+    if (!looksLikeRoster) return;
+
+    $(table)
+      .find("tbody tr")
+      .each((_, row) => {
+        const cells = $(row).find("td");
+        if (cells.length < 3) return;
+
+        const nameCell = $(cells[0]);
+        const link = nameCell.find("a").first();
+        const name = link.text().trim() || nameCell.text().trim();
+        const href = link.attr("href") || "";
+        const id = href.split("/").filter(Boolean).pop() || "";
+
+        const year = $(cells[1]).text().trim();
+
+        const hometownRaw = $(cells[2]).text().trim();
+        const [hometown, highSchool] = hometownRaw
+          .split("/")
+          .map((s) => s.trim());
+
+        if (!name) return;
+
+        athletes.push({
+          id,
+          name,
+          team,
+          year,
+          hometown: hometown || "",
+          highSchool: highSchool || "",
+          profileUrl: href.startsWith("http")
+            ? href
+            : `https://go-knights.net${href}`,
+        });
+      });
+  });
+
+  return athletes;
+}
+
+async function main() {
+  const allAthletes = [];
+
+  for (const teamConfig of TEAMS) {
+    console.log(`Fetching ${teamConfig.team}...`);
+    const athletes = await fetchTeamRoster(teamConfig);
+    console.log(`  Found ${athletes.length} athletes`);
+    allAthletes.push(...athletes);
+  }
+
+  if (allAthletes.length === 0) {
+    console.error(
+      "⚠️  No athletes found. The site's table structure may have changed — " +
+        "inspect the page HTML and update the selectors in this script.",
+    );
+    process.exit(1);
+  }
+
+  const output = {
+    generatedAt: new Date().toISOString(),
+    sources: TEAMS.map((t) => t.url),
+    athletes: allAthletes,
+  };
+
+  fs.mkdirSync(path.dirname(OUT_PATH), { recursive: true });
+  fs.writeFileSync(OUT_PATH, JSON.stringify(output, null, 2), "utf8");
+
+  console.log(`✅ Wrote ${allAthletes.length} athletes to ${OUT_PATH}`);
+}
+
+main().catch((err) => {
+  console.error("Failed to fetch roster:", err);
+  process.exit(1);
+});
+```
+
+### `scripts/fetch-tfrrs-stats.mjs`
+
+```javascript
+#!/usr/bin/env node
+/**
+ * fetch-tfrrs-stats.mjs
+ *
+ * For every athlete with a tfrrsId in distance_roster.json, fetches their
+ * TFRRS profile and extracts their "College Bests" table — one best time
+ * per event, career-wide (not broken out by season/indoor/outdoor).
+ *
+ * Writes src/data/tfrrs_stats.json, keyed by your roster athlete id.
+ *
+ * Run this periodically during the season to keep bests current.
+ *
+ * Usage: node scripts/fetch-tfrrs-stats.mjs
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import * as cheerio from "cheerio";
+
+const ROSTER_PATH = path.resolve("src/data/distance_roster.json");
+const OUT_PATH = path.resolve("src/data/tfrrs_stats.json");
+
+// Be polite — TFRRS is a shared community resource, not an API.
+const DELAY_MS = 750;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchAthleteBests(tfrrsId, name) {
+  // The team ("Wartburg") and name-slug portion of the URL don't actually
+  // need to be correct for TFRRS to resolve the page — only the ID matters —
+  // but we build a plausible URL for clarity/debugging.
+  const slug = name.replace(/\s+/g, "_");
+  const url = `https://www.tfrrs.org/athletes/${tfrrsId}/Wartburg/${slug}.html`;
+
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (stats-fetch-script)" },
+  });
+  if (!res.ok) {
+    console.warn(`  ⚠️  ${name}: failed to fetch (${res.status}) — ${url}`);
+    return null;
+  }
+
+  const html = await res.text();
+  const $ = cheerio.load(html);
+
+  // The "College Bests" summary table is the first table on the page.
+  const bestsTable = $("table").first();
+  if (bestsTable.length === 0) {
+    console.warn(`  ⚠️  ${name}: no tables found on profile page`);
+    return null;
+  }
+
+  const events = [];
+  const cells = bestsTable.find("td").toArray();
+
+  // Cells alternate: [event label, result cell with a time link, event label, result cell, ...]
+  for (let i = 0; i < cells.length; i += 2) {
+    const labelCell = $(cells[i]);
+    const resultCell = $(cells[i + 1]);
+    if (!resultCell) continue;
+
+    const event = labelCell.text().trim();
+    const link = resultCell.find("a").first();
+    const time = link.text().trim();
+    const resultUrl = link.attr("href") || "";
+
+    if (!event || !time) continue;
+
+    events.push({
+      event,
+      time,
+      resultUrl: resultUrl.startsWith("http")
+        ? resultUrl
+        : `https://www.tfrrs.org${resultUrl}`,
+    });
+  }
+
+  return events;
+}
+
+async function main() {
+  const roster = JSON.parse(fs.readFileSync(ROSTER_PATH, "utf8"));
+  const athletesWithId = roster.athletes.filter((a) => a.tfrrsId);
+
+  if (athletesWithId.length === 0) {
+    console.error(
+      "No athletes have a tfrrsId yet. Run scripts/fetch-tfrrs-ids.mjs first.",
+    );
+    process.exit(1);
+  }
+
+  console.log(`Fetching stats for ${athletesWithId.length} athletes...\n`);
+
+  const stats = {};
+  let success = 0;
+  let failed = 0;
+
+  for (const athlete of athletesWithId) {
+    const events = await fetchAthleteBests(athlete.tfrrsId, athlete.name);
+    if (events && events.length > 0) {
+      stats[athlete.id] = {
+        name: athlete.name,
+        tfrrsId: athlete.tfrrsId,
+        fetchedAt: new Date().toISOString(),
+        bests: events,
+      };
+      console.log(`✅ ${athlete.name}: ${events.length} events`);
+      success++;
+    } else {
+      console.log(`⚠️  ${athlete.name}: no data found`);
+      failed++;
+    }
+    await sleep(DELAY_MS);
+  }
+
+  fs.writeFileSync(OUT_PATH, JSON.stringify(stats, null, 2), "utf8");
+
+  console.log(`\n✅ Wrote stats for ${success} athletes to ${OUT_PATH}`);
+  if (failed > 0) {
+    console.log(
+      `⚠️  ${failed} athletes had no data — check their tfrrsId or profile page manually.`,
+    );
+  }
+}
+
+main().catch((err) => {
+  console.error("Failed to fetch TFRRS stats:", err);
+  process.exit(1);
+});
+```
 
 ### `src/assets/fonts/Acme-Regular.ttf`
 
@@ -99,7 +522,6 @@ function BackButton() {
   );
 }
 export default BackButton;
-
 ```
 
 ### `src/components/background.tsx`
@@ -131,7 +553,35 @@ function Background({ imageUrl, opacity }: BackgroundProps) {
 }
 
 export default Background;
+```
 
+### `src/components/comingSoon.tsx`
+
+```tsx
+import { useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+
+const DEFAULT_MESSAGE =
+  "Uh oh, looks like this page isn't built yet. Check in later!";
+
+interface ComingSoonProps {
+  message?: string;
+}
+
+function ComingSoon({ message = DEFAULT_MESSAGE }: ComingSoonProps) {
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    navigate("/error", {
+      replace: true,
+      state: { message, code: 404 },
+    });
+  }, [navigate, message]);
+
+  return null;
+}
+
+export default ComingSoon;
 ```
 
 ### `src/components/identityLookup.tsx`
@@ -139,18 +589,17 @@ export default Background;
 ```tsx
 import { useState } from "react";
 import { useUser } from "../context/UserContext";
-
-// TODO: replace with real roster data parsed from your PDF (see the
-// pdf-parsing pipeline discussed earlier — this array is placeholder data).
-const ROSTER = ["Alex Johnson", "Jamie Smith", "Taylor Brown"];
+import rosterData from "../data/distance_roster.json";
 
 function IdentityLookup() {
-  const { setName } = useUser();
+  const { selectAthlete } = useUser();
   const [query, setQuery] = useState("");
 
   const matches =
     query.trim().length > 0
-      ? ROSTER.filter((n) => n.toLowerCase().includes(query.toLowerCase()))
+      ? rosterData.athletes.filter((a) =>
+          a.name.toLowerCase().includes(query.toLowerCase()),
+        )
       : [];
 
   return (
@@ -166,13 +615,13 @@ function IdentityLookup() {
       />
       {matches.length > 0 && (
         <ul className="identity-results">
-          {matches.map((n) => (
-            <li key={n}>
+          {matches.map((athlete) => (
+            <li key={athlete.id}>
               <button
                 className="identity-result-item"
-                onClick={() => setName(n)}
+                onClick={() => selectAthlete(athlete.id)}
               >
-                {n}
+                {athlete.name}
               </button>
             </li>
           ))}
@@ -188,7 +637,6 @@ function IdentityLookup() {
 }
 
 export default IdentityLookup;
-
 ```
 
 ### `src/components/navMenu.tsx`
@@ -253,7 +701,6 @@ function NavMenu({ label, items }: NavMenuProps) {
 }
 
 export default NavMenu;
-
 ```
 
 ### `src/components/requireIdentity.tsx`
@@ -264,10 +711,10 @@ import type { ReactNode } from "react";
 import { useUser } from "../context/UserContext";
 
 function RequireIdentity({ children }: { children: ReactNode }) {
-  const { name } = useUser();
+  const { athlete } = useUser();
   const location = useLocation();
 
-  if (!name) {
+  if (!athlete) {
     return <Navigate to="/" replace state={{ from: location }} />;
   }
 
@@ -275,7 +722,6 @@ function RequireIdentity({ children }: { children: ReactNode }) {
 }
 
 export default RequireIdentity;
-
 ```
 
 ### `src/components/switchIdentity.tsx`
@@ -285,7 +731,7 @@ import { useState } from "react";
 import { useUser } from "../context/UserContext";
 
 function SwitchIdentityPrompt() {
-  const { clearName } = useUser();
+  const { clearAthlete } = useUser();
   const [confirming, setConfirming] = useState(false);
 
   if (confirming) {
@@ -294,7 +740,7 @@ function SwitchIdentityPrompt() {
         <span className="switch-identity-confirm-text acme-regular text-outline">
           Not you? This will reset your selection.
         </span>
-        <button className="switch-identity-confirm-yes" onClick={clearName}>
+        <button className="switch-identity-confirm-yes" onClick={clearAthlete}>
           Yes, switch
         </button>
         <button
@@ -318,40 +764,60 @@ function SwitchIdentityPrompt() {
 }
 
 export default SwitchIdentityPrompt;
-
 ```
 
 ### `src/context/UserContext.tsx`
 
 ```tsx
 import { createContext, useContext, useState, type ReactNode } from "react";
+import rosterData from "../data/distance_roster.json";
+
+interface Athlete {
+  id: string;
+  name: string;
+  team: string;
+  year: string;
+  hometown: string;
+  highSchool: string;
+  profileUrl: string;
+}
 
 interface UserContextValue {
-  name: string | null;
-  setName: (name: string) => void;
-  clearName: () => void;
+  athleteId: string | null;
+  athlete: Athlete | null;
+  selectAthlete: (id: string) => void;
+  clearAthlete: () => void;
 }
 
 const UserContext = createContext<UserContextValue | undefined>(undefined);
-const STORAGE_KEY = "wxc_selected_name";
+const STORAGE_KEY = "wxc_selected_athlete_id";
+
+function findAthlete(id: string | null): Athlete | null {
+  if (!id) return null;
+  return rosterData.athletes.find((a) => a.id === id) ?? null;
+}
 
 export function UserProvider({ children }: { children: ReactNode }) {
-  const [name, setNameState] = useState<string | null>(() =>
+  const [athleteId, setAthleteIdState] = useState<string | null>(() =>
     sessionStorage.getItem(STORAGE_KEY),
   );
 
-  function setName(newName: string) {
-    sessionStorage.setItem(STORAGE_KEY, newName);
-    setNameState(newName);
+  function selectAthlete(id: string) {
+    sessionStorage.setItem(STORAGE_KEY, id);
+    setAthleteIdState(id);
   }
 
-  function clearName() {
+  function clearAthlete() {
     sessionStorage.removeItem(STORAGE_KEY);
-    setNameState(null);
+    setAthleteIdState(null);
   }
+
+  const athlete = findAthlete(athleteId);
 
   return (
-    <UserContext.Provider value={{ name, setName, clearName }}>
+    <UserContext.Provider
+      value={{ athleteId, athlete, selectAthlete, clearAthlete }}
+    >
       {children}
     </UserContext.Provider>
   );
@@ -365,7 +831,876 @@ export function useUser() {
   }
   return context;
 }
+```
 
+### `src/data/distance_roster.json`
+
+```json
+{
+  "generatedAt": "2026-09-12T00:00:00.000Z",
+  "sources": [
+    "https://go-knights.net/sports/mens-cross-country/roster",
+    "https://go-knights.net/sports/womens-cross-country/roster"
+  ],
+  "athletes": [
+    {
+      "id": "16912",
+      "name": "Nathan Ahern",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Cresco, Iowa",
+      "highSchool": "Crestwood",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathan-ahern/16912"
+    },
+    {
+      "id": "16913",
+      "name": "Ahmed Aldamak",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ahmed-aldamak/16913"
+    },
+    {
+      "id": "16914",
+      "name": "AJ Angus",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aj-angus/16914"
+    },
+    {
+      "id": "16915",
+      "name": "Cooper Bankston",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Baton Rouge, La.",
+      "highSchool": "St. Michael",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/cooper-bankston/16915"
+    },
+    {
+      "id": "17007",
+      "name": "Jack Behrens",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny Centennial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jack-behrens/17007"
+    },
+    {
+      "id": "16962",
+      "name": "Ethan Boston",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Linn-Mar",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ethan-boston/16962"
+    },
+    {
+      "id": "16963",
+      "name": "Ayden Buchanan",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Santa Clarita, Calif.",
+      "highSchool": "Valencia",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ayden-buchanan/16963"
+    },
+    {
+      "id": "16964",
+      "name": "Marcus Camacho",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Xavier",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/marcus-camacho/16964"
+    },
+    {
+      "id": "17014",
+      "name": "Jackson Cicchinelli",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Bristol, Rhode Island",
+      "highSchool": "Mt Hope",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jackson-cicchinelli/17014"
+    },
+    {
+      "id": "16965",
+      "name": "Cooper Cook",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/cooper-cook/16965"
+    },
+    {
+      "id": "16966",
+      "name": "Evan Cook",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Decatur, Ill.",
+      "highSchool": "Saint Teresa",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/evan-cook/16966"
+    },
+    {
+      "id": "16967",
+      "name": "Derek Coulter",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Oquawka, Ill.",
+      "highSchool": "Mercer County",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/derek-coulter/16967"
+    },
+    {
+      "id": "16968",
+      "name": "Mason Coulter",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Oquawka, Ill.",
+      "highSchool": "Mercer County",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/mason-coulter/16968"
+    },
+    {
+      "id": "17015",
+      "name": "Philip Dahlen",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Rochester, Minnesota",
+      "highSchool": "John Marshall",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/philip-dahlen/17015"
+    },
+    {
+      "id": "16969",
+      "name": "Aidan Decker",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aidan-decker/16969"
+    },
+    {
+      "id": "17016",
+      "name": "Dax Duffy",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Morton, Illinois",
+      "highSchool": "Peoria Notre Dame",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/dax-duffy/17016"
+    },
+    {
+      "id": "16878",
+      "name": "Hutton Edney",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Huntsville, Texas",
+      "highSchool": "New Waverly",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/hutton-edney/16878"
+    },
+    {
+      "id": "17017",
+      "name": "Toben Edney",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Huntsville, Texas",
+      "highSchool": "New Waverly",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/toben-edney/17017"
+    },
+    {
+      "id": "17018",
+      "name": "Aidan Feda",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Rochester, Minnesota",
+      "highSchool": "John Marshall",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aidan-feda/17018"
+    },
+    {
+      "id": "16972",
+      "name": "Dawson Fricke",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Blair, Neb.",
+      "highSchool": "Blair",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/dawson-fricke/16972"
+    },
+    {
+      "id": "17019",
+      "name": "Silas Gann",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Forest City, Iowa",
+      "highSchool": "Forest City",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/silas-gann/17019"
+    },
+    {
+      "id": "16881",
+      "name": "Luke Hagenberg",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Clive, Iowa",
+      "highSchool": "Des Moines Christian",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/luke-hagenberg/16881"
+    },
+    {
+      "id": "16928",
+      "name": "Isaiah Hammerand",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Epworth, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/isaiah-hammerand/16928"
+    },
+    {
+      "id": "16883",
+      "name": "Ryan Heden",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Bettendorf, Iowa",
+      "highSchool": "Bettendorf",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ryan-heden/16883"
+    },
+    {
+      "id": "16976",
+      "name": "Gage Heyne",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "North English, Iowa",
+      "highSchool": "English Valleys",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/gage-heyne/16976"
+    },
+    {
+      "id": "16885",
+      "name": "Alex Horstman",
+      "team": "mens-cross-country",
+      "year": "Gr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alex-horstman/16885"
+    },
+    {
+      "id": "16932",
+      "name": "Garrison Hubka",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Spring Valley, Minn.",
+      "highSchool": "Kingsland",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/garrison-hubka/16932"
+    },
+    {
+      "id": "16980",
+      "name": "Wes Hulseberg",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Williamsburg, Iowa",
+      "highSchool": "Williamsburg",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/wes-hulseberg/16980"
+    },
+    {
+      "id": "16982",
+      "name": "Camden Kilker",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Davenport, Iowa",
+      "highSchool": "Davenport West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/camden-kilker/16982"
+    },
+    {
+      "id": "16936",
+      "name": "Nathan Kinzer",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathan-kinzer/16936"
+    },
+    {
+      "id": "16891",
+      "name": "Caden Kueker",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Waverly, Iowa",
+      "highSchool": "Waverly-Shell Rock",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/caden-kueker/16891"
+    },
+    {
+      "id": "17904",
+      "name": "Riley Kuhn",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Linn Mar",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/riley-kuhn/17904"
+    },
+    {
+      "id": "17020",
+      "name": "Kasey Levinsohn",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Sheboygan, Wisconsin",
+      "highSchool": "North",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/kasey-levinsohn/17020"
+    },
+    {
+      "id": "17021",
+      "name": "Jackson Lewis",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny Centennial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jackson-lewis/17021"
+    },
+    {
+      "id": "16985",
+      "name": "Aaron Lursen",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Fort Dodge, Iowa",
+      "highSchool": "St. Edmond Catholic",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aaron-lursen/16985"
+    },
+    {
+      "id": "16939",
+      "name": "Connor Martin",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/connor-martin/16939"
+    },
+    {
+      "id": "16987",
+      "name": "Rylan Martin",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/rylan-martin/16987"
+    },
+    {
+      "id": "17022",
+      "name": "James Maso",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Plainfield, Illinois",
+      "highSchool": "Plainfield North",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/james-maso/17022"
+    },
+    {
+      "id": "17023",
+      "name": "Myles Matthias",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Denver, Iowa",
+      "highSchool": "Denver",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/myles-matthias/17023"
+    },
+    {
+      "id": "16895",
+      "name": "Jonathan Meyer",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Tama, Iowa",
+      "highSchool": "South Tama",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jonathan-meyer/16895"
+    },
+    {
+      "id": "16989",
+      "name": "Nathan Moore",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Wylie, Tex.",
+      "highSchool": "Wylie",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathan-moore/16989"
+    },
+    {
+      "id": "16943",
+      "name": "Drew Moser",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Clinton, Ill.",
+      "highSchool": "Clinton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/drew-moser/16943"
+    },
+    {
+      "id": "16991",
+      "name": "Carter Mulford",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Prairie",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carter-mulford/16991"
+    },
+    {
+      "id": "16899",
+      "name": "Ben Neville",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Urbandale, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ben-neville/16899"
+    },
+    {
+      "id": "17024",
+      "name": "Henry Nichols",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Silver Spring, Maryland",
+      "highSchool": "Northwood",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/henry-nichols/17024"
+    },
+    {
+      "id": "16993",
+      "name": "Caleb Olson",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "DeWitt, Iowa",
+      "highSchool": "Central DeWitt",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/caleb-olson/16993"
+    },
+    {
+      "id": "16947",
+      "name": "Brendan Owens",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny Centennial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brendan-owens/16947"
+    },
+    {
+      "id": "16903",
+      "name": "Alex Pries",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alex-pries/16903"
+    },
+    {
+      "id": "17025",
+      "name": "Joel Ramirez-Parra",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Storm Lake, Iowa",
+      "highSchool": "Storm Lake",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/joel-ramirez-parra/17025"
+    },
+    {
+      "id": "16997",
+      "name": "Jakob Regennitter",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jakob-regennitter/16997"
+    },
+    {
+      "id": "17030",
+      "name": "Logan Rosas",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Oakville, Iowa",
+      "highSchool": "Mediapolis",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/logan-rosas/17030"
+    },
+    {
+      "id": "16951",
+      "name": "AJ Schermerhorn",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny Centennial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aj-schermerhorn/16951"
+    },
+    {
+      "id": "16906",
+      "name": "Sawyer Schmidt",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Preston, Iowa",
+      "highSchool": "Northeast",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sawyer-schmidt/16906"
+    },
+    {
+      "id": "17000",
+      "name": "Andrew Smith",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Glenwood, Iowa",
+      "highSchool": "Glenwood",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-smith/17000"
+    },
+    {
+      "id": "16908",
+      "name": "Austin Soldwisch",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Waverly, Iowa",
+      "highSchool": "Waverly-Shell Rock",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/austin-soldwisch/16908"
+    },
+    {
+      "id": "17002",
+      "name": "Clay Warson",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Madrid, Iowa",
+      "highSchool": "Madrid",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/clay-warson/17002"
+    },
+    {
+      "id": "17027",
+      "name": "Simon Wendel",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Mediapolis, Iowa",
+      "highSchool": "Mediapolis",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/simon-wendel/17027"
+    },
+    {
+      "id": "16956",
+      "name": "Nolan Wieneke",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Juneau, Wis.",
+      "highSchool": "Dodgeland",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nolan-wieneke/16956"
+    },
+    {
+      "id": "17028",
+      "name": "Adam Wilke",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "De Witt, Iowa",
+      "highSchool": "Central Dewitt",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/adam-wilke/17028"
+    },
+    {
+      "id": "17004",
+      "name": "Solomon Zaugg",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Mediapolis, Iowa",
+      "highSchool": "Mediapolis",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/solomon-zaugg/17004"
+    },
+
+    {
+      "id": "15902",
+      "name": "Jade Anderson",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Des Moines Lincoln",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jade-anderson/15902"
+    },
+    {
+      "id": "15903",
+      "name": "Abbey Angus",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/abbey-angus/15903"
+    },
+    {
+      "id": "15904",
+      "name": "Sydney Bochmann",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Waverly, Iowa",
+      "highSchool": "Waverly-Shell Rock",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/sydney-bochmann/15904"
+    },
+    {
+      "id": "15926",
+      "name": "Jillian Borgelt",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Waunakee, Wis.",
+      "highSchool": "Waunakee",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jillian-borgelt/15926"
+    },
+    {
+      "id": "15905",
+      "name": "Nadia Bowden",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "New Lenox, Ill.",
+      "highSchool": "Lincoln Way Central",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/nadia-bowden/15905"
+    },
+    {
+      "id": "15927",
+      "name": "Lily Cooper",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Denver, Iowa",
+      "highSchool": "Denver",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lily-cooper/15927"
+    },
+    {
+      "id": "15906",
+      "name": "Morgan Engel",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Syosset, N.Y.",
+      "highSchool": "Syosset",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/morgan-engel/15906"
+    },
+    {
+      "id": "15907",
+      "name": "Kelly Giardina",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Rockford, Ill.",
+      "highSchool": "Rockford Christian",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kelly-giardina/15907"
+    },
+    {
+      "id": "15928",
+      "name": "Janae Hansen",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Mason City, Iowa",
+      "highSchool": "Mason City",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/janae-hansen/15928"
+    },
+    {
+      "id": "15908",
+      "name": "Makenna Hetrick",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Washington",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/makenna-hetrick/15908"
+    },
+    {
+      "id": "15909",
+      "name": "Sunny Horner",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "New Waverly, Texas",
+      "highSchool": "New Waverly",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/sunny-horner/15909"
+    },
+    {
+      "id": "15929",
+      "name": "Claire Hoyer",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Senior",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/claire-hoyer/15929"
+    },
+    {
+      "id": "15910",
+      "name": "Ella Johnson",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Prescott, Wis.",
+      "highSchool": "Prescott",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ella-johnson/15910"
+    },
+    {
+      "id": "15930",
+      "name": "Emrie Johnson",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Mount Vernon, Iowa",
+      "highSchool": "Mount Vernon",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/emrie-johnson/15930"
+    },
+    {
+      "id": "15911",
+      "name": "Allie Kounkel",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Clear Creek Amana",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allie-kounkel/15911"
+    },
+    {
+      "id": "15912",
+      "name": "Karle Kramer",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Monticello, Iowa",
+      "highSchool": "Monticello",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/karle-kramer/15912"
+    },
+    {
+      "id": "15913",
+      "name": "Lydia Maas",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Hampton, Iowa",
+      "highSchool": "Hampton-Dumont",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lydia-maas/15913"
+    },
+    {
+      "id": "15931",
+      "name": "Leah McDonald",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Wellington, Colo.",
+      "highSchool": "Poudre",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/leah-mcdonald/15931"
+    },
+    {
+      "id": "15914",
+      "name": "Maddie Merna",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Apex, N.C.",
+      "highSchool": "Middle Creek",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/maddie-merna/15914"
+    },
+    {
+      "id": "15915",
+      "name": "Haley Meyer",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "New Albin, Iowa",
+      "highSchool": "Kee",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/haley-meyer/15915"
+    },
+    {
+      "id": "15932",
+      "name": "Peyton Morey",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Spencer, Iowa",
+      "highSchool": "Spencer",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/peyton-morey/15932"
+    },
+    {
+      "id": "15916",
+      "name": "Zaya Peirce",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Lewistown, Ill.",
+      "highSchool": "Lewistown",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/zaya-peirce/15916"
+    },
+    {
+      "id": "15917",
+      "name": "Lily Peterson",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Hawley, Minn.",
+      "highSchool": "Hawley",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lily-peterson/15917"
+    },
+    {
+      "id": "15933",
+      "name": "Marissa Pewe",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/marissa-pewe/15933"
+    },
+    {
+      "id": "15918",
+      "name": "Megan Pickar",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "New Hampton, Iowa",
+      "highSchool": "New Hampton",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/megan-pickar/15918"
+    },
+    {
+      "id": "15919",
+      "name": "Anna Quillin",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Solon, Iowa",
+      "highSchool": "Solon",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/anna-quillin/15919"
+    },
+    {
+      "id": "15920",
+      "name": "Hannah Ramsey",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/hannah-ramsey/15920"
+    },
+    {
+      "id": "15921",
+      "name": "Kamryn Sherwood",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Danville, Iowa",
+      "highSchool": "Danville",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kamryn-sherwood/15921"
+    },
+    {
+      "id": "15922",
+      "name": "Allie Spredemann",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Sun Prairie, Wis.",
+      "highSchool": "Sun Prairie",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allie-spredemann/15922"
+    },
+    {
+      "id": "15923",
+      "name": "Cali Trygstad",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Clive, Iowa",
+      "highSchool": "West Des Moines Valley",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/cali-trygstad/15923"
+    },
+    {
+      "id": "15934",
+      "name": "Lailah Utnage",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Alvarado, Texas",
+      "highSchool": "Alvarado",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lailah-utnage/15934"
+    },
+    {
+      "id": "15924",
+      "name": "Ava Vance",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Huxley, Iowa",
+      "highSchool": "Ballard",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ava-vance/15924"
+    },
+    {
+      "id": "15935",
+      "name": "Ava Vanderheyden",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Nevada, Iowa",
+      "highSchool": "Nevada",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ava-vanderheyden/15935"
+    },
+    {
+      "id": "15925",
+      "name": "Grace Vortherms",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Austin, Minn.",
+      "highSchool": "Austin",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/grace-vortherms/15925"
+    },
+    {
+      "id": "15936",
+      "name": "Bethany Warren",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Forest City, Iowa",
+      "highSchool": "Forest City",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/bethany-warren/15936"
+    }
+  ]
+}
 ```
 
 ### `src/pages/about.tsx`
@@ -379,7 +1714,6 @@ function AboutInfo() {
   );
 }
 export default AboutInfo;
-
 ```
 
 ### `src/pages/corePage.tsx`
@@ -394,7 +1728,6 @@ function CorePage() {
   );
 }
 export default CorePage;
-
 ```
 
 ### `src/pages/error.tsx`
@@ -421,7 +1754,19 @@ function ErrorPage() {
   );
 }
 export default ErrorPage;
+```
 
+### `src/pages/fms.tsx`
+
+```tsx
+function FMS() {
+  return (
+    <div>
+      <h1>FMS</h1>
+    </div>
+  );
+}
+export default FMS;
 ```
 
 ### `src/pages/home.tsx`
@@ -436,26 +1781,37 @@ import { useUser } from "../context/UserContext";
 const resourceLinks = [
   { label: "View Mileage", path: "/mileage" },
   { label: "View Core", path: "/core" },
+  { label: "View FMS", path: "/fms" },
+  { label: "View Lifting Sheet", path: "/lifting_sheet" },
+];
+
+const statsLinks = [
+  { label: "View TFRRS Stats", path: "/tfrrs-stats" },
+  { label: "View Personal Records", path: "/personal-records" },
+  { label: "View Season Bests", path: "/season-bests" },
 ];
 
 function Home() {
-  const { name } = useUser();
+  const { athlete } = useUser();
 
   return (
     <>
       <img src={wartburgLogo} className="framework" alt="Wartburg Logo" />
 
       <h1 className="welcome-text acme-regular text-outline">
-        {name
-          ? `Welcome, ${name}`
+        {athlete
+          ? `Welcome, ${athlete.name}`
           : "Welcome, please type your name and select it to view resources."}
       </h1>
 
-      {!name && <IdentityLookup />}
-      {name && (
+      {!athlete && <IdentityLookup />}
+      {athlete && (
         <>
           <nav className="left-res-drop">
             <NavMenu label="View WXC Resources" items={resourceLinks} />
+          </nav>
+          <nav className="mid-res-drop">
+            <NavMenu label="View Personal Stats" items={statsLinks} />
           </nav>
 
           <SwitchIdentityPrompt />
@@ -466,7 +1822,19 @@ function Home() {
 }
 
 export default Home;
+```
 
+### `src/pages/liftingSheet.tsx`
+
+```tsx
+function LiftingSheet() {
+  return (
+    <div>
+      <h1>Lifting Sheet</h1>
+    </div>
+  );
+}
+export default LiftingSheet;
 ```
 
 ### `src/pages/mileagePage.tsx`
@@ -492,7 +1860,6 @@ function MileagePage() {
 }
 
 export default MileagePage;
-
 ```
 
 ### `src/pages/name_lookup.tsx`
@@ -506,7 +1873,6 @@ function Lookup() {
   );
 }
 export default Lookup;
-
 ```
 
 ### `src/App.css`
@@ -561,6 +1927,13 @@ export default Lookup;
   position: fixed;
   top: 35vh;
   left: 10vw;
+  z-index: 15;
+}
+
+.mid-res-drop {
+  position: fixed;
+  top: 35vh;
+  left: 41.5vw;
   z-index: 15;
 }
 
@@ -784,24 +2157,22 @@ export default Lookup;
 .switch-identity-link {
   position: fixed;
   top: 27vh;
-  left: 53vw;
+  left: 51vw;
   transform: translateX(-50%);
-  background: rgba(240, 233, 233, 0.863);
-  border: 2px solid rgba(0, 0, 0, 0.589);
-  border-radius: 10px;
-  padding: 8px 16px;
-  color: black;
+  background: none;
+  border: none;
+  color: white;
+  -webkit-text-stroke: 1px black;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
   text-decoration: underline;
   font-size: 35px;
   cursor: pointer;
   z-index: 10;
-  backdrop-filter: blur(8px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  transition: background 0.2s ease;
+  transition: opacity 0.15s ease;
 }
 
 .switch-identity-link:hover {
-  background: rgba(90, 84, 84, 0.418);
+  opacity: 0.8;
 }
 
 .switch-identity-confirm {
@@ -852,7 +2223,6 @@ export default Lookup;
 .switch-identity-confirm-no:hover {
   opacity: 0.85;
 }
-
 ```
 
 ### `src/App.tsx`
@@ -870,6 +2240,9 @@ import MileagePage from "./pages/mileagePage";
 import CorePage from "./pages/corePage";
 import BackButton from "./components/backButton";
 import RequireIdentity from "./components/requireIdentity";
+import FMS from "./pages/fms";
+import LiftingSheet from "./pages/liftingSheet";
+import ComingSoon from "./components/comingSoon";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -883,6 +2256,11 @@ function AppContent() {
     "/mileage",
     "/core",
     "/error",
+    "/fms",
+    "/lifting_sheet",
+    "/tfrrs-stats",
+    "/personal-records",
+    "/season-bests",
   ].includes(location.pathname);
   const showBackButton =
     isKnownRoute && !BACK_BUTTON_ROUTES.has(location.pathname);
@@ -898,7 +2276,7 @@ function AppContent() {
           path="/about"
           element={
             <RequireIdentity>
-              <AboutInfo />
+              <ComingSoon />
             </RequireIdentity>
           }
         />
@@ -906,7 +2284,7 @@ function AppContent() {
           path="/mileage"
           element={
             <RequireIdentity>
-              <MileagePage />
+              <ComingSoon />
             </RequireIdentity>
           }
         />
@@ -914,7 +2292,7 @@ function AppContent() {
           path="/core"
           element={
             <RequireIdentity>
-              <CorePage />
+              <ComingSoon />
             </RequireIdentity>
           }
         />
@@ -922,7 +2300,47 @@ function AppContent() {
           path="/lookup"
           element={
             <RequireIdentity>
-              <Lookup />
+              <ComingSoon />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/fms"
+          element={
+            <RequireIdentity>
+              <ComingSoon />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/lifting_sheet"
+          element={
+            <RequireIdentity>
+              <ComingSoon />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/tfrrs-stats"
+          element={
+            <RequireIdentity>
+              <ComingSoon message="TFRRS stats aren't hooked up yet — check back soon!" />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/personal-records"
+          element={
+            <RequireIdentity>
+              <ComingSoon message="Personal records aren't tracked yet — check back soon!" />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/season-bests"
+          element={
+            <RequireIdentity>
+              <ComingSoon message="Season bests aren't tracked yet — check back soon!" />
             </RequireIdentity>
           }
         />
@@ -941,7 +2359,6 @@ function App() {
 }
 
 export default App;
-
 ```
 
 ### `src/index.css`
@@ -1066,7 +2483,6 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
-
 ```
 
 ### `src/main.tsx`
@@ -1085,7 +2501,6 @@ createRoot(document.getElementById("root")!).render(
     </UserProvider>
   </StrictMode>,
 );
-
 ```
 
 ### `.gitignore`
@@ -1121,17 +2536,17 @@ dist-ssr
 ### `eslint.config.js`
 
 ```javascript
-import js from '@eslint/js'
-import globals from 'globals'
-import reactHooks from 'eslint-plugin-react-hooks'
-import reactRefresh from 'eslint-plugin-react-refresh'
-import tseslint from 'typescript-eslint'
-import { defineConfig, globalIgnores } from 'eslint/config'
+import js from "@eslint/js";
+import globals from "globals";
+import reactHooks from "eslint-plugin-react-hooks";
+import reactRefresh from "eslint-plugin-react-refresh";
+import tseslint from "typescript-eslint";
+import { defineConfig, globalIgnores } from "eslint/config";
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(["dist"]),
   {
-    files: ['**/*.{ts,tsx}'],
+    files: ["**/*.{ts,tsx}"],
     extends: [
       js.configs.recommended,
       tseslint.configs.recommended,
@@ -1142,8 +2557,7 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
-])
-
+]);
 ```
 
 ### `index.html`
@@ -1162,7 +2576,6 @@ export default defineConfig([
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
 ```
 
 ### `package-lock.json`
@@ -1182,7 +2595,10 @@ _(binary or excluded — contents not inlined)_
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "digest": "node repo-digest.mjs"
+    "digest": "node repo-digest.mjs",
+    "fetch-roster": "node scripts/fetch-roster.mjs",
+    "fetch-tfrrs-ids": "node scripts/fetch-tfrrs-ids.mjs",
+    "fetch-tfrrs-stats": "node scripts/fetch-tfrrs-stats.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
@@ -1195,6 +2611,7 @@ _(binary or excluded — contents not inlined)_
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "cheerio": "^1.2.0",
     "eslint": "^10.10.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.6",
@@ -1204,12 +2621,11 @@ _(binary or excluded — contents not inlined)_
     "vite": "^8.3.0"
   }
 }
-
 ```
 
 ### `README.md`
 
-```markdown
+````markdown
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
@@ -1229,9 +2645,9 @@ If you are developing a production application, we recommend updating the config
 
 ```js
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(["dist"]),
   {
-    files: ['**/*.{ts,tsx}'],
+    files: ["**/*.{ts,tsx}"],
     extends: [
       // Other configs...
 
@@ -1246,47 +2662,46 @@ export default defineConfig([
     ],
     languageOptions: {
       parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        project: ["./tsconfig.node.json", "./tsconfig.app.json"],
         tsconfigRootDir: import.meta.dirname,
       },
       // other options...
     },
   },
-])
-
+]);
 ```
+````
 
 You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
 
 ```js
 // eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+import reactX from "eslint-plugin-react-x";
+import reactDom from "eslint-plugin-react-dom";
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(["dist"]),
   {
-    files: ['**/*.{ts,tsx}'],
+    files: ["**/*.{ts,tsx}"],
     extends: [
       // Other configs...
       // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
+      reactX.configs["recommended-typescript"],
       // Enable lint rules for React DOM
       reactDom.configs.recommended,
     ],
     languageOptions: {
       parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
+        project: ["./tsconfig.node.json", "./tsconfig.app.json"],
         tsconfigRootDir: import.meta.dirname,
       },
       // other options...
     },
   },
-])
-
+]);
 ```
 
-```
+````
 
 ### `repo-digest.md`
 
@@ -1567,7 +2982,7 @@ function main() {
 
 main();
 
-```
+````
 
 ### `tsconfig.app.json`
 
@@ -1598,7 +3013,6 @@ main();
   },
   "include": ["src"]
 }
-
 ```
 
 ### `tsconfig.json`
@@ -1611,7 +3025,6 @@ main();
     { "path": "./tsconfig.node.json" }
   ]
 }
-
 ```
 
 ### `tsconfig.node.json`
@@ -1640,22 +3053,20 @@ main();
   },
   "include": ["vite.config.ts"]
 }
-
 ```
 
 ### `vite.config.ts`
 
 ```typescript
-import react from '@vitejs/plugin-react'
-import { defineConfig } from 'vite'
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-})
-
+});
 ```
 
-
 ---
-_Digest complete: 27 files inlined, 8 skipped (binary/excluded)._
+
+_Digest complete: 34 files inlined, 8 skipped (binary/excluded)._

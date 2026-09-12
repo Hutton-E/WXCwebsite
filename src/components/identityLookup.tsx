@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useUser } from "../context/UserContext";
-import rosterData from "../data/distance_roster.json";
+import rosterData from "../data/distance_roster_26.json";
 
 function IdentityLookup() {
   const { selectAthlete } = useUser();

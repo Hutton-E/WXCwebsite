@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
-import rosterData from "../data/distance_roster.json";
+import rosterData from "../data/distance_roster_26.json";
 
 interface Athlete {
   id: string;
