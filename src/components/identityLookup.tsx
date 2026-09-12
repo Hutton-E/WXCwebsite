@@ -1,17 +1,16 @@
 import { useState } from "react";
 import { useUser } from "../context/UserContext";
-
-// TODO: replace with real roster data parsed from your PDF (see the
-// pdf-parsing pipeline discussed earlier — this array is placeholder data).
-const ROSTER = ["Alex Johnson", "Jamie Smith", "Taylor Brown"];
+import rosterData from "../data/distance_roster.json";
 
 function IdentityLookup() {
-  const { setName } = useUser();
+  const { selectAthlete } = useUser();
   const [query, setQuery] = useState("");
 
   const matches =
     query.trim().length > 0
-      ? ROSTER.filter((n) => n.toLowerCase().includes(query.toLowerCase()))
+      ? rosterData.athletes.filter((a) =>
+          a.name.toLowerCase().includes(query.toLowerCase()),
+        )
       : [];
 
   return (
@@ -27,13 +26,13 @@ function IdentityLookup() {
       />
       {matches.length > 0 && (
         <ul className="identity-results">
-          {matches.map((n) => (
-            <li key={n}>
+          {matches.map((athlete) => (
+            <li key={athlete.id}>
               <button
                 className="identity-result-item"
-                onClick={() => setName(n)}
+                onClick={() => selectAthlete(athlete.id)}
               >
-                {n}
+                {athlete.name}
               </button>
             </li>
           ))}

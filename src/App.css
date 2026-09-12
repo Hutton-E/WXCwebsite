@@ -50,6 +50,13 @@
   z-index: 15;
 }
 
+.mid-res-drop {
+  position: fixed;
+  top: 35vh;
+  left: 41.5vw;
+  z-index: 15;
+}
+
 .nav-menu {
   position: relative;
   display: inline-block;
@@ -270,7 +277,7 @@
 .switch-identity-link {
   position: fixed;
   top: 27vh;
-  left: 53vw;
+  left: 51vw;
   transform: translateX(-50%);
   background: none;
   border: none;

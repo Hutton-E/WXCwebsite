@@ -10,6 +10,9 @@ import MileagePage from "./pages/mileagePage";
 import CorePage from "./pages/corePage";
 import BackButton from "./components/backButton";
 import RequireIdentity from "./components/requireIdentity";
+import FMS from "./pages/fms";
+import LiftingSheet from "./pages/liftingSheet";
+import ComingSoon from "./components/comingSoon";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -23,6 +26,11 @@ function AppContent() {
     "/mileage",
     "/core",
     "/error",
+    "/fms",
+    "/lifting_sheet",
+    "/tfrrs-stats",
+    "/personal-records",
+    "/season-bests",
   ].includes(location.pathname);
   const showBackButton =
     isKnownRoute && !BACK_BUTTON_ROUTES.has(location.pathname);
@@ -38,7 +46,7 @@ function AppContent() {
           path="/about"
           element={
             <RequireIdentity>
-              <AboutInfo />
+              <ComingSoon />
             </RequireIdentity>
           }
         />
@@ -46,7 +54,7 @@ function AppContent() {
           path="/mileage"
           element={
             <RequireIdentity>
-              <MileagePage />
+              <ComingSoon />
             </RequireIdentity>
           }
         />
@@ -54,7 +62,7 @@ function AppContent() {
           path="/core"
           element={
             <RequireIdentity>
-              <CorePage />
+              <ComingSoon />
             </RequireIdentity>
           }
         />
@@ -62,7 +70,47 @@ function AppContent() {
           path="/lookup"
           element={
             <RequireIdentity>
-              <Lookup />
+              <ComingSoon />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/fms"
+          element={
+            <RequireIdentity>
+              <ComingSoon />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/lifting_sheet"
+          element={
+            <RequireIdentity>
+              <ComingSoon />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/tfrrs-stats"
+          element={
+            <RequireIdentity>
+              <ComingSoon message="TFRRS stats aren't hooked up yet — check back soon!" />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/personal-records"
+          element={
+            <RequireIdentity>
+              <ComingSoon message="Personal records aren't tracked yet — check back soon!" />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/season-bests"
+          element={
+            <RequireIdentity>
+              <ComingSoon message="Season bests aren't tracked yet — check back soon!" />
             </RequireIdentity>
           }
         />

@@ -3,10 +3,10 @@ import type { ReactNode } from "react";
 import { useUser } from "../context/UserContext";
 
 function RequireIdentity({ children }: { children: ReactNode }) {
-  const { name } = useUser();
+  const { athlete } = useUser();
   const location = useLocation();
 
-  if (!name) {
+  if (!athlete) {
     return <Navigate to="/" replace state={{ from: location }} />;
   }
 

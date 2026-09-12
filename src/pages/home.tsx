@@ -7,26 +7,37 @@ import { useUser } from "../context/UserContext";
 const resourceLinks = [
   { label: "View Mileage", path: "/mileage" },
   { label: "View Core", path: "/core" },
+  { label: "View FMS", path: "/fms" },
+  { label: "View Lifting Sheet", path: "/lifting_sheet" },
+];
+
+const statsLinks = [
+  { label: "View TFRRS Stats", path: "/tfrrs-stats" },
+  { label: "View Personal Records", path: "/personal-records" },
+  { label: "View Season Bests", path: "/season-bests" },
 ];
 
 function Home() {
-  const { name } = useUser();
+  const { athlete } = useUser();
 
   return (
     <>
       <img src={wartburgLogo} className="framework" alt="Wartburg Logo" />
 
       <h1 className="welcome-text acme-regular text-outline">
-        {name
-          ? `Welcome, ${name}`
+        {athlete
+          ? `Welcome, ${athlete.name}`
           : "Welcome, please type your name and select it to view resources."}
       </h1>
 
-      {!name && <IdentityLookup />}
-      {name && (
+      {!athlete && <IdentityLookup />}
+      {athlete && (
         <>
           <nav className="left-res-drop">
             <NavMenu label="View WXC Resources" items={resourceLinks} />
+          </nav>
+          <nav className="mid-res-drop">
+            <NavMenu label="View Personal Stats" items={statsLinks} />
           </nav>
 
           <SwitchIdentityPrompt />

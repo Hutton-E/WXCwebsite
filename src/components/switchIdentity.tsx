@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useUser } from "../context/UserContext";
 
 function SwitchIdentityPrompt() {
-  const { clearName } = useUser();
+  const { clearAthlete } = useUser();
   const [confirming, setConfirming] = useState(false);
 
   if (confirming) {
@@ -11,7 +11,7 @@ function SwitchIdentityPrompt() {
         <span className="switch-identity-confirm-text acme-regular text-outline">
           Not you? This will reset your selection.
         </span>
-        <button className="switch-identity-confirm-yes" onClick={clearName}>
+        <button className="switch-identity-confirm-yes" onClick={clearAthlete}>
           Yes, switch
         </button>
         <button
