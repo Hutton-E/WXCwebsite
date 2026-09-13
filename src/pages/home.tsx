@@ -9,6 +9,7 @@ const resourceLinks = [
   { label: "View Core", path: "/core" },
   { label: "View FMS", path: "/fms" },
   { label: "View Lifting Sheet", path: "/lifting_sheet" },
+  { label: "View Tuesday Workout", path: "/tuesday_workout" },
 ];
 
 const statsLinks = [

@@ -1,16 +1,22 @@
 # Repository Digest
 
-Generated: 2026-09-13T02:42:20.842Z
+Generated: 2026-09-13T03:28:45.278Z
 Root: `WXC_Website`
 
 ## Directory Structure
 
 ```
 WXC_Website/
+├── mileageSheets/
+│   ├── XC 2026 Mileage 9-7.pdf
+│   └── XC 2026 Workouts 9-11.pdf
 ├── public/
 ├── scripts/
+│   ├── fetch-roster-by-year.mjs
 │   ├── fetch-roster-history.mjs
 │   ├── fetch-roster.mjs
+│   ├── fetch-tfrrs-ids-all-years.mjs
+│   ├── fetch-tfrrs-ids-historical.mjs
 │   ├── fetch-tfrrs-ids.mjs
 │   └── fetch-tfrrs-stats.mjs
 ├── src/
@@ -35,6 +41,15 @@ WXC_Website/
 │   ├── context/
 │   │   └── UserContext.tsx
 │   ├── data/
+│   │   ├── distance_roster_17.json
+│   │   ├── distance_roster_18.json
+│   │   ├── distance_roster_19.json
+│   │   ├── distance_roster_20.json
+│   │   ├── distance_roster_21.json
+│   │   ├── distance_roster_22.json
+│   │   ├── distance_roster_23.json
+│   │   ├── distance_roster_24.json
+│   │   ├── distance_roster_25.json
 │   │   ├── distance_roster_26.json
 │   │   ├── roster_history.json
 │   │   └── tfrrs_stats.json
@@ -47,7 +62,8 @@ WXC_Website/
 │   │   ├── liftingSheet.tsx
 │   │   ├── mileagePage.tsx
 │   │   ├── name_lookup.tsx
-│   │   └── tfrrsStats.tsx
+│   │   ├── tfrrsStats.tsx
+│   │   └── tuesdayWorkout.tsx
 │   ├── App.css
 │   ├── App.tsx
 │   ├── index.css
@@ -67,6 +83,231 @@ WXC_Website/
 ```
 
 ## File Contents
+
+### `mileageSheets/XC 2026 Mileage 9-7.pdf`
+
+_(binary or excluded — contents not inlined)_
+
+### `mileageSheets/XC 2026 Workouts 9-11.pdf`
+
+_(binary or excluded — contents not inlined)_
+
+### `scripts/fetch-roster-by-year.mjs`
+
+```javascript
+#!/usr/bin/env node
+/**
+ * fetch-roster-by-year.mjs
+ *
+ * Fetches men's + women's cross country rosters from go-knights.net for
+ * each year listed in YEARS, and writes one file per season:
+ *   src/data/distance_roster_{YY}.json   (e.g. distance_roster_25.json for 2025)
+ *
+ * These are separate from distance_roster_26.json (the current-season login
+ * roster used by identity lookup) — this script is for building out
+ * additional selectable seasons.
+ *
+ * Usage: node scripts/fetch-roster-by-year.mjs
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import * as cheerio from "cheerio";
+
+// Edit this list to add/remove seasons you want generated.
+const YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025];
+
+const TEAMS = [
+  {
+    baseUrl: "https://go-knights.net/sports/mens-cross-country/roster",
+    team: "mens-cross-country",
+  },
+  {
+    baseUrl: "https://go-knights.net/sports/womens-cross-country/roster",
+    team: "womens-cross-country",
+  },
+];
+
+const DELAY_MS = 700;
+
+const CLASS_YEAR_MAP = {
+  freshman: "Fr.",
+  sophomore: "So.",
+  junior: "Jr.",
+  senior: "Sr.",
+  graduate: "Gr.",
+};
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeClassYear(raw) {
+  const cleaned = raw.trim().replace(/\.$/, "").toLowerCase();
+  return CLASS_YEAR_MAP[cleaned] || raw.trim();
+}
+
+// ---------- MODERN TABLE PARSER ----------
+
+function parseModernTable($, team) {
+  const athletes = [];
+
+  $("table").each((_, table) => {
+    const headerText = $(table)
+      .find("th")
+      .map((_, th) => $(th).text().trim())
+      .get()
+      .join("|");
+    const looksLikeRoster =
+      /academic year/i.test(headerText) &&
+      /(hometown|high school)/i.test(headerText);
+    if (!looksLikeRoster) return;
+
+    $(table)
+      .find("tbody tr")
+      .each((_, row) => {
+        const cells = $(row).find("td");
+        if (cells.length < 3) return;
+
+        const nameCell = $(cells[0]);
+        const link = nameCell.find("a").first();
+        const name = link.text().trim() || nameCell.text().trim();
+        const href = link.attr("href") || "";
+        const id = href.split("/").filter(Boolean).pop() || "";
+
+        const classYear = $(cells[1]).text().trim();
+        const hometownRaw = $(cells[2]).text().trim();
+        const [hometown, highSchool] = hometownRaw
+          .split("/")
+          .map((s) => s.trim());
+
+        if (!name) return;
+
+        athletes.push({
+          id,
+          name,
+          team,
+          year: normalizeClassYear(classYear),
+          hometown: hometown || "",
+          highSchool: highSchool || "",
+          profileUrl: href.startsWith("http")
+            ? href
+            : `https://go-knights.net${href}`,
+        });
+      });
+  });
+
+  return athletes;
+}
+
+// ---------- LEGACY CARD PARSER (older seasons, e.g. 2014-style pages) ----------
+
+function parseLegacyCards($, team) {
+  const athletes = [];
+  const seen = new Set();
+
+  const classPattern =
+    /(Freshman|Sophomore|Junior|Senior|Graduate|Fr\.?|So\.?|Jr\.?|Sr\.?|Gr\.?)\s*\/\s*([^/]+?)\s*\/\s*([^/\n]+)/i;
+
+  $('a[href*="/roster/"]').each((_, el) => {
+    const href = $(el).attr("href") || "";
+    const match = href.match(/\/roster\/[^/]+\/(\d+)/);
+    if (!match) return;
+
+    const id = match[1];
+    if (seen.has(id)) return;
+
+    const name = $(el).text().trim();
+    if (!name || /full bio/i.test(name) || name.length < 3) return;
+
+    let container = $(el).parent();
+    let text = "";
+    for (let i = 0; i < 4 && container.length; i++) {
+      text = container.text();
+      if (classPattern.test(text)) break;
+      container = container.parent();
+    }
+
+    const classMatch = text.match(classPattern);
+    if (!classMatch) return;
+
+    seen.add(id);
+    athletes.push({
+      id,
+      name,
+      team,
+      year: normalizeClassYear(classMatch[1]),
+      hometown: classMatch[2].trim(),
+      highSchool: classMatch[3].trim(),
+      profileUrl: href.startsWith("http")
+        ? href
+        : `https://go-knights.net${href}`,
+    });
+  });
+
+  return athletes;
+}
+
+async function fetchTeamForYear({ baseUrl, team }, year) {
+  const url = `${baseUrl}/${year}`;
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (roster-by-year-script)" },
+  });
+  if (!res.ok) {
+    console.warn(`  ⚠️  ${team} ${year}: HTTP ${res.status}`);
+    return [];
+  }
+
+  const html = await res.text();
+  const $ = cheerio.load(html);
+
+  let athletes = parseModernTable($, team);
+  if (athletes.length === 0) {
+    athletes = parseLegacyCards($, team);
+    if (athletes.length > 0) console.log(`  (used legacy card parser)`);
+  }
+  return athletes;
+}
+
+async function main() {
+  for (const year of YEARS) {
+    console.log(`\n=== Season ${year} ===`);
+    const allAthletes = [];
+
+    for (const teamConfig of TEAMS) {
+      console.log(`Fetching ${teamConfig.team} ${year}...`);
+      const athletes = await fetchTeamForYear(teamConfig, year);
+      console.log(`  Found ${athletes.length} athletes`);
+      allAthletes.push(...athletes);
+      await sleep(DELAY_MS);
+    }
+
+    if (allAthletes.length === 0) {
+      console.warn(`⚠️  No athletes found for ${year} — skipping file write.`);
+      continue;
+    }
+
+    const shortYear = String(year % 100).padStart(2, "0");
+    const outPath = path.resolve(`src/data/distance_roster_${shortYear}.json`);
+
+    const output = {
+      generatedAt: new Date().toISOString(),
+      season: year,
+      sources: TEAMS.map((t) => `${t.baseUrl}/${year}`),
+      athletes: allAthletes,
+    };
+
+    fs.writeFileSync(outPath, JSON.stringify(output, null, 2), "utf8");
+    console.log(`✅ Wrote ${allAthletes.length} athletes to ${outPath}`);
+  }
+}
+
+main().catch((err) => {
+  console.error("Failed to fetch rosters by year:", err);
+  process.exit(1);
+});
+
+```
 
 ### `scripts/fetch-roster-history.mjs`
 
@@ -538,6 +779,498 @@ main().catch((err) => {
 
 ```
 
+### `scripts/fetch-tfrrs-ids-all-years.mjs`
+
+```javascript
+#!/usr/bin/env node
+/**
+ * fetch-tfrrs-ids-all-years.mjs
+ *
+ * Adds tfrrsId to every athlete across ALL src/data/distance_roster_*.json
+ * files, without re-scraping TFRRS once per season.
+ *
+ * How it works:
+ *   1. Builds a "name -> tfrrsId" lookup by:
+ *      a) Reading every already-known tfrrsId out of your existing
+ *         distance_roster_*.json files (distance_roster_26.json in
+ *         particular already has most matches from earlier work).
+ *      b) Fetching the CURRENT TFRRS team rosters (men's + women's) for
+ *         any names not already covered.
+ *   2. Applies that lookup, by normalized name, to every athlete in every
+ *      distance_roster_*.json file that doesn't already have a tfrrsId.
+ *
+ * IMPORTANT LIMITATION: TFRRS's team roster page only lists CURRENTLY
+ * ACTIVE athletes. Graduated/former athletes who only appear in older
+ * seasons (e.g. distance_roster_18.json) will NOT be found this way —
+ * this is the same limitation discussed earlier for historical data.
+ * Those will be reported as unmatched; add them to MANUAL_OVERRIDES below
+ * if you look up their TFRRS profile by hand.
+ *
+ * Usage: node scripts/fetch-tfrrs-ids-all-years.mjs
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import * as cheerio from "cheerio";
+
+const DATA_DIR = path.resolve("src/data");
+
+const TFRRS_TEAMS = [
+  {
+    url: "https://www.tfrrs.org/teams/IA_college_m_Wartburg.html",
+    team: "mens-cross-country",
+  },
+  {
+    url: "https://www.tfrrs.org/teams/IA_college_f_Wartburg.html",
+    team: "womens-cross-country",
+  },
+];
+
+// Keyed by normalized name. Add entries here for athletes you've manually
+// found on TFRRS (e.g. graduated athletes not on the current team page,
+// or spelling mismatches like "Philip"/"Phillip").
+const MANUAL_OVERRIDES = {
+  "philip dahlen": "9444002",
+  "adam wilke": "9444015",
+};
+
+function normalize(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, "")
+    .trim();
+}
+
+function findRosterFiles() {
+  return fs
+    .readdirSync(DATA_DIR)
+    .filter(
+      (f) =>
+        /^distance_roster_\d+\.json$/.test(f) ||
+        f === "distance_roster_26.json",
+    )
+    .map((f) => path.join(DATA_DIR, f));
+}
+
+function loadRoster(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function saveRoster(filePath, data) {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+
+async function fetchCurrentTfrrsRoster(url) {
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (tfrrs-all-years-script)" },
+  });
+  if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
+  const html = await res.text();
+  const $ = cheerio.load(html);
+
+  const entries = [];
+
+  $("table").each((_, table) => {
+    const headerText = $(table)
+      .find("th")
+      .map((_, th) => $(th).text().trim())
+      .get()
+      .join("|");
+    if (!/name/i.test(headerText) || !/year/i.test(headerText)) return;
+
+    $(table)
+      .find("tbody tr")
+      .each((_, row) => {
+        const cells = $(row).find("td");
+        if (cells.length < 1) return;
+        const link = $(cells[0]).find("a").first();
+        const rawName = link.text().trim(); // "Last, First"
+        const href = link.attr("href") || "";
+        const tfrrsId = href.split("/").filter(Boolean)[1] || "";
+
+        if (!rawName || !tfrrsId) return;
+
+        const [last, first] = rawName.split(",").map((s) => s.trim());
+        if (!last || !first) return;
+
+        entries.push({
+          tfrrsId,
+          normalizedName: normalize(`${first} ${last}`),
+        });
+      });
+  });
+
+  return entries;
+}
+
+async function main() {
+  const rosterFiles = findRosterFiles();
+  if (rosterFiles.length === 0) {
+    console.error(`No distance_roster_*.json files found in ${DATA_DIR}`);
+    process.exit(1);
+  }
+
+  console.log(`Found ${rosterFiles.length} roster file(s):`);
+  rosterFiles.forEach((f) => console.log(`  - ${path.basename(f)}`));
+
+  // ---------- Step 1: seed the lookup from existing tfrrsId values ----------
+  const nameToId = new Map();
+
+  for (const [normalizedName, id] of Object.entries(MANUAL_OVERRIDES)) {
+    nameToId.set(normalizedName, id);
+  }
+
+  const rosters = rosterFiles.map((filePath) => ({
+    filePath,
+    data: loadRoster(filePath),
+  }));
+
+  for (const { data } of rosters) {
+    for (const athlete of data.athletes) {
+      if (athlete.tfrrsId && !nameToId.has(normalize(athlete.name))) {
+        nameToId.set(normalize(athlete.name), athlete.tfrrsId);
+      }
+    }
+  }
+
+  console.log(
+    `\nSeeded ${nameToId.size} known name -> tfrrsId matches from existing files + overrides.`,
+  );
+
+  // ---------- Step 2: fetch current TFRRS roster for anything new ----------
+  console.log(`\nFetching current TFRRS rosters for any additional matches...`);
+  for (const { url, team } of TFRRS_TEAMS) {
+    console.log(`  ${team}...`);
+    const entries = await fetchCurrentTfrrsRoster(url);
+    let added = 0;
+    for (const entry of entries) {
+      if (!nameToId.has(entry.normalizedName)) {
+        nameToId.set(entry.normalizedName, entry.tfrrsId);
+        added++;
+      }
+    }
+    console.log(`    +${added} new names added to lookup`);
+  }
+
+  console.log(`\nTotal known name -> tfrrsId matches: ${nameToId.size}`);
+
+  // ---------- Step 3: apply the lookup to every roster file ----------
+  let grandTotalMatched = 0;
+  let grandTotalAthletes = 0;
+  const stillUnmatched = new Set();
+
+  for (const { filePath, data } of rosters) {
+    let matchedInFile = 0;
+
+    for (const athlete of data.athletes) {
+      grandTotalAthletes++;
+      if (athlete.tfrrsId) {
+        matchedInFile++;
+        continue;
+      }
+      const id = nameToId.get(normalize(athlete.name));
+      if (id) {
+        athlete.tfrrsId = id;
+        matchedInFile++;
+      } else {
+        stillUnmatched.add(athlete.name);
+      }
+    }
+
+    saveRoster(filePath, data);
+    grandTotalMatched += matchedInFile;
+
+    console.log(
+      `${path.basename(filePath)}: ${matchedInFile}/${data.athletes.length} matched`,
+    );
+  }
+
+  console.log(
+    `\n✅ Overall: ${grandTotalMatched}/${grandTotalAthletes} athlete-season entries now have a tfrrsId.`,
+  );
+
+  if (stillUnmatched.size > 0) {
+    console.log(
+      `\n⚠️  ${stillUnmatched.size} unique name(s) could not be matched (likely graduated/former athletes not on the current TFRRS team page):`,
+    );
+    [...stillUnmatched].sort().forEach((n) => console.log(`   - ${n}`));
+    console.log(
+      "\nTo fix a specific person: search their name on tfrrs.org, find their profile, " +
+        "grab the numeric ID from the URL, and add a lowercase entry to MANUAL_OVERRIDES " +
+        'in this script, e.g.: "jane smith": "1234567"',
+    );
+  }
+}
+
+main().catch((err) => {
+  console.error("Failed to match TFRRS IDs across years:", err);
+  process.exit(1);
+});
+
+```
+
+### `scripts/fetch-tfrrs-ids-historical.mjs`
+
+```javascript
+#!/usr/bin/env node
+/**
+ * fetch-tfrrs-ids-historical.mjs
+ *
+ * Unlike fetch-tfrrs-ids-all-years.mjs (which only reads the CURRENT TFRRS
+ * team roster — limited to currently-eligible athletes), this script reads
+ * the season dropdown on the TFRRS team page itself, discovers every
+ * available season's `config_hnd` value, and fetches EACH season's roster
+ * snapshot. Since TFRRS assigns one permanent ID per athlete across their
+ * whole career, this surfaces real tfrrsIds for graduated athletes who
+ * don't appear on the current team page at all.
+ *
+ * Then applies the resulting name -> tfrrsId lookup to every
+ * src/data/distance_roster_*.json file.
+ *
+ * Usage: node scripts/fetch-tfrrs-ids-historical.mjs
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import * as cheerio from "cheerio";
+
+const DATA_DIR = path.resolve("src/data");
+
+const TFRRS_TEAMS = [
+  {
+    url: "https://www.tfrrs.org/teams/IA_college_m_Wartburg.html",
+    team: "mens-cross-country",
+  },
+  {
+    url: "https://www.tfrrs.org/teams/IA_college_f_Wartburg.html",
+    team: "womens-cross-country",
+  },
+];
+
+const DELAY_MS = 600;
+
+const MANUAL_OVERRIDES = {
+  "philip dahlen": "9444002",
+  "adam wilke": "9444015",
+  "philip dahlen": "9444002",
+  "adam wilke": "9444015",
+  "cameron noreen": "8271797",
+  "alex childs": "6915220",
+  "maria colette choi lei": "9017626",
+  "benjamin rhodes": "7699569",
+  "madison prier": "8352882",
+};
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalize(name) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// ---------- Discover every "Cross Country" season option on the page ----------
+
+function findXcSeasonOptions($) {
+  const options = [];
+
+  $("select option").each((_, el) => {
+    const value = $(el).attr("value");
+    const text = $(el).text().trim();
+    if (!value) return;
+    // Only care about Cross Country seasons — indoor/outdoor track rosters
+    // aren't relevant to your distance-roster identity data.
+    if (/cross country/i.test(text)) {
+      options.push({ value, text });
+    }
+  });
+
+  return options;
+}
+
+// ---------- Parse a roster table (same shape as the current-page parser) ----------
+
+function parseRosterTable($) {
+  const entries = [];
+
+  $("table").each((_, table) => {
+    const headerText = $(table)
+      .find("th")
+      .map((_, th) => $(th).text().trim())
+      .get()
+      .join("|");
+    if (!/name/i.test(headerText) || !/year/i.test(headerText)) return;
+
+    $(table)
+      .find("tbody tr")
+      .each((_, row) => {
+        const cells = $(row).find("td");
+        if (cells.length < 1) return;
+        const link = $(cells[0]).find("a").first();
+        const rawName = link.text().trim(); // "Last, First"
+        const href = link.attr("href") || "";
+        const tfrrsId = href.split("/").filter(Boolean)[1] || "";
+
+        if (!rawName || !tfrrsId) return;
+
+        const [last, first] = rawName.split(",").map((s) => s.trim());
+        if (!last || !first) return;
+
+        entries.push({
+          tfrrsId,
+          normalizedName: normalize(`${first} ${last}`),
+        });
+      });
+  });
+
+  return entries;
+}
+
+async function fetchPage(url) {
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (tfrrs-historical-script)" },
+  });
+  if (!res.ok) {
+    console.warn(`  ⚠️  HTTP ${res.status} — ${url}`);
+    return null;
+  }
+  const html = await res.text();
+  return cheerio.load(html);
+}
+
+// ---------- Roster file helpers ----------
+
+function findRosterFiles() {
+  return fs
+    .readdirSync(DATA_DIR)
+    .filter((f) => /^distance_roster_\d+\.json$/.test(f))
+    .map((f) => path.join(DATA_DIR, f));
+}
+
+function loadRoster(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function saveRoster(filePath, data) {
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+}
+
+async function main() {
+  const nameToId = new Map();
+  for (const [name, id] of Object.entries(MANUAL_OVERRIDES)) {
+    nameToId.set(name, id);
+  }
+
+  // ---------- Step 1: discover + fetch every historical season per team ----------
+  for (const { url, team } of TFRRS_TEAMS) {
+    console.log(`\n=== ${team} ===`);
+    console.log(`Fetching base page to discover season options: ${url}`);
+    const $base = await fetchPage(url);
+    if (!$base) continue;
+
+    const seasonOptions = findXcSeasonOptions($base);
+    console.log(
+      `Found ${seasonOptions.length} Cross Country season option(s):`,
+    );
+    seasonOptions.forEach((o) =>
+      console.log(`   - ${o.text} (config_hnd=${o.value})`),
+    );
+
+    // Also parse the base page itself (covers the current/default season).
+    const baseEntries = parseRosterTable($base);
+    let addedFromBase = 0;
+    for (const e of baseEntries) {
+      if (!nameToId.has(e.normalizedName)) {
+        nameToId.set(e.normalizedName, e.tfrrsId);
+        addedFromBase++;
+      }
+    }
+    console.log(`Base page: +${addedFromBase} new names`);
+
+    // Fetch each historical season snapshot.
+    const cleanBaseUrl = url.replace(/\.html$/, "");
+    for (const { value, text } of seasonOptions) {
+      const seasonUrl = `${cleanBaseUrl}?config_hnd=${value}`;
+      const $season = await fetchPage(seasonUrl);
+      await sleep(DELAY_MS);
+      if (!$season) continue;
+
+      const entries = parseRosterTable($season);
+      let added = 0;
+      for (const e of entries) {
+        if (!nameToId.has(e.normalizedName)) {
+          nameToId.set(e.normalizedName, e.tfrrsId);
+          added++;
+        }
+      }
+      console.log(`  ${text}: ${entries.length} athletes, +${added} new names`);
+    }
+  }
+
+  console.log(
+    `\nTotal known name -> tfrrsId matches after historical crawl: ${nameToId.size}`,
+  );
+
+  // ---------- Step 2: apply to every distance_roster_*.json ----------
+  const rosterFiles = findRosterFiles();
+  let grandTotalMatched = 0;
+  let grandTotalAthletes = 0;
+  const stillUnmatched = new Set();
+
+  console.log(`\nApplying matches to ${rosterFiles.length} roster file(s)...`);
+
+  for (const filePath of rosterFiles) {
+    const data = loadRoster(filePath);
+    let matchedInFile = 0;
+
+    for (const athlete of data.athletes) {
+      grandTotalAthletes++;
+      if (athlete.tfrrsId) {
+        matchedInFile++;
+        continue;
+      }
+      const id = nameToId.get(normalize(athlete.name));
+      if (id) {
+        athlete.tfrrsId = id;
+        matchedInFile++;
+      } else {
+        stillUnmatched.add(athlete.name);
+      }
+    }
+
+    saveRoster(filePath, data);
+    grandTotalMatched += matchedInFile;
+    console.log(
+      `${path.basename(filePath)}: ${matchedInFile}/${data.athletes.length} matched`,
+    );
+  }
+
+  console.log(
+    `\n✅ Overall: ${grandTotalMatched}/${grandTotalAthletes} athlete-season entries now have a tfrrsId.`,
+  );
+
+  if (stillUnmatched.size > 0) {
+    console.log(`\n⚠️  ${stillUnmatched.size} name(s) still unmatched:`);
+    [...stillUnmatched].sort().forEach((n) => console.log(`   - ${n}`));
+    console.log(
+      "\nThese may be pre-2010ish athletes (before TFRRS's own data goes back), " +
+        "name-spelling mismatches, or athletes TFRRS never had results for. " +
+        "Add confirmed matches to MANUAL_OVERRIDES.",
+    );
+  }
+}
+
+main().catch((err) => {
+  console.error("Failed historical TFRRS ID matching:", err);
+  process.exit(1);
+});
+
+```
+
 ### `scripts/fetch-tfrrs-ids.mjs`
 
 ```javascript
@@ -691,13 +1424,21 @@ main().catch((err) => {
 /**
  * fetch-tfrrs-stats.mjs
  *
- * For every athlete with a tfrrsId in distance_roster.json, fetches their
- * TFRRS profile and extracts their "College Bests" table — one best time
- * per event, career-wide (not broken out by season/indoor/outdoor).
+ * Scans EVERY src/data/distance_roster_*.json file, collects every unique
+ * tfrrsId across all seasons (the same real person may appear in several
+ * yearly files but always shares one tfrrsId — TFRRS IDs are stable across
+ * a career, unlike go-knights' per-season roster IDs), and fetches each
+ * unique athlete's "College Bests" table exactly once.
  *
- * Writes src/data/tfrrs_stats.json, keyed by your roster athlete id.
+ * Writes src/data/tfrrs_stats.json KEYED BY tfrrsId (not by roster id),
+ * so any season's athlete record can look up its own stats via
+ * athlete.tfrrsId, regardless of which year's file it came from.
  *
- * Run this periodically during the season to keep bests current.
+ * Supports two tfrrsId shapes:
+ *   - A plain numeric ID (e.g. "8271797") -> builds the standard
+ *     tfrrs.org/athletes/{id}/Wartburg/{Name}.html URL.
+ *   - A full URL already (for TFRRS's alternate hashed-profile format,
+ *     e.g. "https://www.tfrrs.org/athlete/{hash}.html") -> used as-is.
  *
  * Usage: node scripts/fetch-tfrrs-stats.mjs
  */
@@ -706,22 +1447,32 @@ import fs from "node:fs";
 import path from "node:path";
 import * as cheerio from "cheerio";
 
-const ROSTER_PATH = path.resolve("src/data/distance_roster.json");
+const DATA_DIR = path.resolve("src/data");
 const OUT_PATH = path.resolve("src/data/tfrrs_stats.json");
-
-// Be polite — TFRRS is a shared community resource, not an API.
-const DELAY_MS = 750;
+const DELAY_MS = 700;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchAthleteBests(tfrrsId, name) {
-  // The team ("Wartburg") and name-slug portion of the URL don't actually
-  // need to be correct for TFRRS to resolve the page — only the ID matters —
-  // but we build a plausible URL for clarity/debugging.
+function findRosterFiles() {
+  return fs
+    .readdirSync(DATA_DIR)
+    .filter((f) => /^distance_roster_\d+\.json$/.test(f))
+    .map((f) => path.join(DATA_DIR, f));
+}
+
+function resolveProfileUrl(tfrrsId, name) {
+  if (tfrrsId.startsWith("http")) {
+    // Hashed-format profile — already a full, usable URL.
+    return tfrrsId;
+  }
   const slug = name.replace(/\s+/g, "_");
-  const url = `https://www.tfrrs.org/athletes/${tfrrsId}/Wartburg/${slug}.html`;
+  return `https://www.tfrrs.org/athletes/${tfrrsId}/Wartburg/${slug}.html`;
+}
+
+async function fetchAthleteBests(tfrrsId, name) {
+  const url = resolveProfileUrl(tfrrsId, name);
 
   const res = await fetch(url, {
     headers: { "User-Agent": "Mozilla/5.0 (stats-fetch-script)" },
@@ -734,7 +1485,6 @@ async function fetchAthleteBests(tfrrsId, name) {
   const html = await res.text();
   const $ = cheerio.load(html);
 
-  // The "College Bests" summary table is the first table on the page.
   const bestsTable = $("table").first();
   if (bestsTable.length === 0) {
     console.warn(`  ⚠️  ${name}: no tables found on profile page`);
@@ -744,7 +1494,6 @@ async function fetchAthleteBests(tfrrsId, name) {
   const events = [];
   const cells = bestsTable.find("td").toArray();
 
-  // Cells alternate: [event label, result cell with a time link, event label, result cell, ...]
   for (let i = 0; i < cells.length; i += 2) {
     const labelCell = $(cells[i]);
     const resultCell = $(cells[i + 1]);
@@ -770,35 +1519,55 @@ async function fetchAthleteBests(tfrrsId, name) {
 }
 
 async function main() {
-  const roster = JSON.parse(fs.readFileSync(ROSTER_PATH, "utf8"));
-  const athletesWithId = roster.athletes.filter((a) => a.tfrrsId);
-
-  if (athletesWithId.length === 0) {
-    console.error(
-      "No athletes have a tfrrsId yet. Run scripts/fetch-tfrrs-ids.mjs first.",
-    );
+  const rosterFiles = findRosterFiles();
+  if (rosterFiles.length === 0) {
+    console.error(`No distance_roster_*.json files found in ${DATA_DIR}`);
     process.exit(1);
   }
 
-  console.log(`Fetching stats for ${athletesWithId.length} athletes...\n`);
+  console.log(
+    `Scanning ${rosterFiles.length} roster file(s) for unique tfrrsIds...`,
+  );
+
+  // Map keyed by tfrrsId -> a representative display name (whichever we see first).
+  const uniqueAthletes = new Map();
+
+  for (const filePath of rosterFiles) {
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    for (const athlete of data.athletes) {
+      if (athlete.tfrrsId && !uniqueAthletes.has(athlete.tfrrsId)) {
+        uniqueAthletes.set(athlete.tfrrsId, athlete.name);
+      }
+    }
+  }
+
+  console.log(
+    `Found ${uniqueAthletes.size} unique athletes (by tfrrsId) across all seasons.\n`,
+  );
 
   const stats = {};
   let success = 0;
   let failed = 0;
+  let index = 0;
 
-  for (const athlete of athletesWithId) {
-    const events = await fetchAthleteBests(athlete.tfrrsId, athlete.name);
+  for (const [tfrrsId, name] of uniqueAthletes) {
+    index++;
+    const events = await fetchAthleteBests(tfrrsId, name);
     if (events && events.length > 0) {
-      stats[athlete.id] = {
-        name: athlete.name,
-        tfrrsId: athlete.tfrrsId,
+      stats[tfrrsId] = {
+        name,
+        tfrrsId,
         fetchedAt: new Date().toISOString(),
         bests: events,
       };
-      console.log(`✅ ${athlete.name}: ${events.length} events`);
+      console.log(
+        `✅ [${index}/${uniqueAthletes.size}] ${name}: ${events.length} events`,
+      );
       success++;
     } else {
-      console.log(`⚠️  ${athlete.name}: no data found`);
+      console.log(
+        `⚠️  [${index}/${uniqueAthletes.size}] ${name}: no data found`,
+      );
       failed++;
     }
     await sleep(DELAY_MS);
@@ -809,7 +1578,7 @@ async function main() {
   console.log(`\n✅ Wrote stats for ${success} athletes to ${OUT_PATH}`);
   if (failed > 0) {
     console.log(
-      `⚠️  ${failed} athletes had no data — check their tfrrsId or profile page manually.`,
+      `⚠️  ${failed} athletes had no data — check their tfrrsId manually.`,
     );
   }
 }
@@ -935,22 +1704,60 @@ export default ComingSoon;
 ```tsx
 import { useState } from "react";
 import { useUser } from "../context/UserContext";
-import rosterData from "../data/distance_roster_26.json";
+
+// Direct imports so we can search within a specific season's roster.
+// (UserContext still auto-discovers every file for the lookup-by-id step,
+// but the search UI needs the raw athlete lists per season.)
+const rosterModules = import.meta.glob("../data/distance_roster_*.json", {
+  eager: true,
+}) as Record<
+  string,
+  { season: number; athletes: { id: string; name: string }[] }
+>;
+
+function buildRostersBySeason() {
+  const map: Record<number, { id: string; name: string }[]> = {};
+  for (const mod of Object.values(rosterModules)) {
+    if (mod.season && mod.athletes) map[mod.season] = mod.athletes;
+  }
+  return map;
+}
+
+const rostersBySeason = buildRostersBySeason();
+const seasons = Object.keys(rostersBySeason)
+  .map(Number)
+  .sort((a, b) => b - a);
 
 function IdentityLookup() {
   const { selectAthlete } = useUser();
+  const [season, setSeason] = useState<number>(seasons[0]);
   const [query, setQuery] = useState("");
 
+  const roster = rostersBySeason[season] || [];
   const matches =
     query.trim().length > 0
-      ? rosterData.athletes.filter((a) =>
-          a.name.toLowerCase().includes(query.toLowerCase()),
-        )
+      ? roster.filter((a) => a.name.toLowerCase().includes(query.toLowerCase()))
       : [];
 
   return (
     <div className="identity-lookup">
       <h1 className="identity-title acme-regular text-outline">Who are you?</h1>
+
+      <select
+        className="identity-year-select"
+        value={season}
+        onChange={(e) => {
+          setSeason(Number(e.target.value));
+          setQuery("");
+        }}
+      >
+        {seasons.map((s) => (
+          <option key={s} value={s}>
+            {s} Season
+          </option>
+        ))}
+      </select>
+
       <input
         type="text"
         className="identity-input"
@@ -965,7 +1772,7 @@ function IdentityLookup() {
             <li key={athlete.id}>
               <button
                 className="identity-result-item"
-                onClick={() => selectAthlete(athlete.id)}
+                onClick={() => selectAthlete(athlete.id, season)}
               >
                 {athlete.name}
               </button>
@@ -1120,7 +1927,6 @@ export default SwitchIdentityPrompt;
 
 ```tsx
 import { createContext, useContext, useState, type ReactNode } from "react";
-import rosterData from "../data/distance_roster_26.json";
 
 interface Athlete {
   id: string;
@@ -1132,41 +1938,89 @@ interface Athlete {
   profileUrl: string;
 }
 
+interface RosterFile {
+  season: number;
+  athletes: Athlete[];
+}
+
 interface UserContextValue {
   athleteId: string | null;
+  season: number | null;
   athlete: Athlete | null;
-  selectAthlete: (id: string) => void;
+  availableSeasons: number[];
+  selectAthlete: (id: string, season: number) => void;
   clearAthlete: () => void;
 }
 
 const UserContext = createContext<UserContextValue | undefined>(undefined);
-const STORAGE_KEY = "wxc_selected_athlete_id";
+const ID_KEY = "wxc_selected_athlete_id";
+const SEASON_KEY = "wxc_selected_season";
 
-function findAthlete(id: string | null): Athlete | null {
-  if (!id) return null;
-  return rosterData.athletes.find((a) => a.id === id) ?? null;
+// Eagerly loads every distance_roster_*.json file in src/data at build time.
+const rosterModules = import.meta.glob("../data/distance_roster_*.json", {
+  eager: true,
+}) as Record<string, RosterFile>;
+
+function parseSeasonFromPath(filePath: string): number | null {
+  const match = filePath.match(/distance_roster_(\d{2})\.json$/);
+  if (!match) return null;
+  return 2000 + parseInt(match[1], 10);
+}
+
+const rostersBySeason: Record<number, Athlete[]> = {};
+for (const [filePath, mod] of Object.entries(rosterModules)) {
+  const season = mod.season ?? parseSeasonFromPath(filePath);
+  if (season && mod.athletes) {
+    rostersBySeason[season] = mod.athletes;
+  }
+}
+
+const availableSeasons = Object.keys(rostersBySeason)
+  .map(Number)
+  .sort((a, b) => b - a); // newest first
+
+function findAthlete(id: string | null, season: number | null): Athlete | null {
+  if (!id || !season) return null;
+  const roster = rostersBySeason[season];
+  if (!roster) return null;
+  return roster.find((a) => a.id === id) ?? null;
 }
 
 export function UserProvider({ children }: { children: ReactNode }) {
   const [athleteId, setAthleteIdState] = useState<string | null>(() =>
-    sessionStorage.getItem(STORAGE_KEY),
+    sessionStorage.getItem(ID_KEY),
   );
+  const [season, setSeasonState] = useState<number | null>(() => {
+    const stored = sessionStorage.getItem(SEASON_KEY);
+    return stored ? parseInt(stored, 10) : null;
+  });
 
-  function selectAthlete(id: string) {
-    sessionStorage.setItem(STORAGE_KEY, id);
+  function selectAthlete(id: string, selectedSeason: number) {
+    sessionStorage.setItem(ID_KEY, id);
+    sessionStorage.setItem(SEASON_KEY, String(selectedSeason));
     setAthleteIdState(id);
+    setSeasonState(selectedSeason);
   }
 
   function clearAthlete() {
-    sessionStorage.removeItem(STORAGE_KEY);
+    sessionStorage.removeItem(ID_KEY);
+    sessionStorage.removeItem(SEASON_KEY);
     setAthleteIdState(null);
+    setSeasonState(null);
   }
 
-  const athlete = findAthlete(athleteId);
+  const athlete = findAthlete(athleteId, season);
 
   return (
     <UserContext.Provider
-      value={{ athleteId, athlete, selectAthlete, clearAthlete }}
+      value={{
+        athleteId,
+        season,
+        athlete,
+        availableSeasons,
+        selectAthlete,
+        clearAthlete,
+      }}
     >
       {children}
     </UserContext.Provider>
@@ -1182,6 +2036,6807 @@ export function useUser() {
   return context;
 }
 
+```
+
+### `src/data/distance_roster_17.json`
+
+```json
+{
+  "generatedAt": "2026-09-13T02:47:02.303Z",
+  "season": 2017,
+  "sources": [
+    "https://go-knights.net/sports/mens-cross-country/roster/2017",
+    "https://go-knights.net/sports/womens-cross-country/roster/2017"
+  ],
+  "athletes": [
+    {
+      "id": "6480",
+      "name": "Ali Ali",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "Iowa City West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ali-ali/6480",
+      "tfrrsId": "6592806"
+    },
+    {
+      "id": "6469",
+      "name": "Caleb Appleton",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Bemidji, Minn.",
+      "highSchool": "Bemidji",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/caleb-appleton/6469",
+      "tfrrsId": "6139222"
+    },
+    {
+      "id": "6470",
+      "name": "Mitch Black",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Waterloo, Iowa",
+      "highSchool": "Waterloo West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/mitch-black/6470",
+      "tfrrsId": "4989898"
+    },
+    {
+      "id": "6481",
+      "name": "Christian Brothers",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Nevarre, Fla.",
+      "highSchool": "Nevarre",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/christian-brothers/6481",
+      "tfrrsId": "6592810"
+    },
+    {
+      "id": "6471",
+      "name": "Ben Coleman",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "St. Louis Park, Minn.",
+      "highSchool": "St. Louis Park",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ben-coleman/6471",
+      "tfrrsId": "5146929"
+    },
+    {
+      "id": "6482",
+      "name": "Liam Conroy",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Mount Vernon, Iowa",
+      "highSchool": "Mount Vernon",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/liam-conroy/6482",
+      "tfrrsId": "6592811"
+    },
+    {
+      "id": "6483",
+      "name": "Ryan Dalton",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Clinton, Iowa",
+      "highSchool": "South Brunswick",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ryan-dalton/6483",
+      "tfrrsId": "6592812"
+    },
+    {
+      "id": "6486",
+      "name": "Matt Egts",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Bloomington, Ill.",
+      "highSchool": "Normal Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/matt-egts/6486",
+      "tfrrsId": "6592814"
+    },
+    {
+      "id": "6487",
+      "name": "Joe Freiburger",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Holy Cross, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/joe-freiburger/6487",
+      "tfrrsId": "6592815"
+    },
+    {
+      "id": "6488",
+      "name": "Jon Fuentes",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Barrington, Ill.",
+      "highSchool": "Barrington",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jon-fuentes/6488",
+      "tfrrsId": "6139227"
+    },
+    {
+      "id": "6489",
+      "name": "Matt Heinzman",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Royal Oak, Mich.",
+      "highSchool": "Bishop Foley Catholic",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/matt-heinzman/6489",
+      "tfrrsId": "6592819"
+    },
+    {
+      "id": "6490",
+      "name": "Drew Hoffman",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Manitowoc, Wis.",
+      "highSchool": "Manitowoc Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/drew-hoffman/6490",
+      "tfrrsId": "6592820"
+    },
+    {
+      "id": "6473",
+      "name": "Karl Jaeschke",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Bettendorf, Iowa",
+      "highSchool": "Pleasant Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/karl-jaeschke/6473",
+      "tfrrsId": "5873589"
+    },
+    {
+      "id": "6474",
+      "name": "Eli Kaczinski",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Charlotte, Iowa",
+      "highSchool": "Northeast-Goose Lake",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/eli-kaczinski/6474",
+      "tfrrsId": "5146940"
+    },
+    {
+      "id": "6491",
+      "name": "Frosty Lorimer",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Springville, Iowa",
+      "highSchool": "Springville",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/frosty-lorimer/6491",
+      "tfrrsId": "6592823"
+    },
+    {
+      "id": "6492",
+      "name": "Sam Madson",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Omaha, Neb.",
+      "highSchool": "Westside High",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-madson/6492",
+      "tfrrsId": "6592826"
+    },
+    {
+      "id": "6493",
+      "name": "Curren Matthias",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Denver, Iowa",
+      "highSchool": "Denver",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/curren-matthias/6493",
+      "tfrrsId": "6592827"
+    },
+    {
+      "id": "6495",
+      "name": "Jay Mixdorf",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jay-mixdorf/6495",
+      "tfrrsId": "7043061"
+    },
+    {
+      "id": "6476",
+      "name": "Aaron O'Leary",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Waterloo, Iowa",
+      "highSchool": "Waterloo West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aaron-o-leary/6476",
+      "tfrrsId": "5146950"
+    },
+    {
+      "id": "6496",
+      "name": "Sam Pinkowski",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "La Crosse, Wis.",
+      "highSchool": "La Crosse Central",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-pinkowski/6496",
+      "tfrrsId": "6592831"
+    },
+    {
+      "id": "6477",
+      "name": "Casey Roberts",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Saydel",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/casey-roberts/6477",
+      "tfrrsId": "5600665"
+    },
+    {
+      "id": "6497",
+      "name": "Zac Sapiot",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Yokosuka, Japan",
+      "highSchool": "Nile C Kinnick High School",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/zac-sapiot/6497",
+      "tfrrsId": "6426438"
+    },
+    {
+      "id": "6478",
+      "name": "Conor Sapp",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/conor-sapp/6478",
+      "tfrrsId": "6139240"
+    },
+    {
+      "id": "6498",
+      "name": "Matthew Schneider",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "Iowa City West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/matthew-schneider/6498",
+      "tfrrsId": "6426439"
+    },
+    {
+      "id": "6479",
+      "name": "Joel Toppin",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Clear Lake, Iowa",
+      "highSchool": "Garner Hayfield",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/joel-toppin/6479",
+      "tfrrsId": "5146959"
+    },
+    {
+      "id": "6500",
+      "name": "Spencer Warehime",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Gowrie, Iowa",
+      "highSchool": "Southeast Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/spencer-warehime/6500",
+      "tfrrsId": "6592835"
+    },
+    {
+      "id": "6501",
+      "name": "Noah Worthington",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/noah-worthington/6501",
+      "tfrrsId": "6592836"
+    },
+    {
+      "id": "6502",
+      "name": "Jordan Yessak",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Vinton, Iowa",
+      "highSchool": "Dunkerton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jordan-yessak/6502",
+      "tfrrsId": "6592838"
+    },
+    {
+      "id": "6461",
+      "name": "Janelle Baeskens",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Upland, Calif.",
+      "highSchool": "Claremont",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/janelle-baeskens/6461",
+      "tfrrsId": "6592715"
+    },
+    {
+      "id": "6443",
+      "name": "Ashlyn Bagge",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Independence, Iowa",
+      "highSchool": "Independence",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ashlyn-bagge/6443",
+      "tfrrsId": "6139110"
+    },
+    {
+      "id": "6444",
+      "name": "Nicole Breitbach",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "North Buena Vista, Iowa",
+      "highSchool": "Clayton Ridge",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/nicole-breitbach/6444",
+      "tfrrsId": "5600619"
+    },
+    {
+      "id": "6445",
+      "name": "Maddie Carlsen",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Rice Lake, Wis.",
+      "highSchool": "Rice Lake",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/maddie-carlsen/6445",
+      "tfrrsId": "5146966"
+    },
+    {
+      "id": "6462",
+      "name": "Cassidy Christopher",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/cassidy-christopher/6462",
+      "tfrrsId": "6592717"
+    },
+    {
+      "id": "6464",
+      "name": "Carina Collet",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/carina-collet/6464",
+      "tfrrsId": "6592718"
+    },
+    {
+      "id": "6463",
+      "name": "Clare Davison",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Carson City, Nev.",
+      "highSchool": "Sierra Lutheran",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/clare-davison/6463",
+      "tfrrsId": "6592719"
+    },
+    {
+      "id": "6446",
+      "name": "Jackie Falconer",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Coggon, Iowa",
+      "highSchool": "North Linn",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jackie-falconer/6446",
+      "tfrrsId": "5982721"
+    },
+    {
+      "id": "6447",
+      "name": "Miranda Fober",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Denver, Iowa",
+      "highSchool": "Denver",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/miranda-fober/6447",
+      "tfrrsId": "5146969"
+    },
+    {
+      "id": "6448",
+      "name": "Natalie Fober",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Denver, Iowa",
+      "highSchool": "Denver",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/natalie-fober/6448",
+      "tfrrsId": "6139117"
+    },
+    {
+      "id": "6466",
+      "name": "Jacque Garza",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Grayslake, Ill.",
+      "highSchool": "Grayslake North",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jacque-garza/6466",
+      "tfrrsId": "6592724"
+    },
+    {
+      "id": "6468",
+      "name": "Gabi Gonzalez",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Wills Point, Texas",
+      "highSchool": "Wills Point",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/gabi-gonzalez/6468",
+      "tfrrsId": "6426421"
+    },
+    {
+      "id": "6449",
+      "name": "Haley  Harms",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Albert Lea, Minn.",
+      "highSchool": "Albert Lea",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/haley-harms/6449",
+      "tfrrsId": "5600620"
+    },
+    {
+      "id": "6450",
+      "name": "Kylie Kelchen",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Cascade, Iowa",
+      "highSchool": "Cascade",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kylie-kelchen/6450",
+      "tfrrsId": "6139134"
+    },
+    {
+      "id": "6451",
+      "name": "Maddie Kemp",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Waterloo, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/maddie-kemp/6451",
+      "tfrrsId": "5146976"
+    },
+    {
+      "id": "6452",
+      "name": "Parry Larson",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cologne, Minn.",
+      "highSchool": "Central",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/parry-larson/6452",
+      "tfrrsId": "6139135"
+    },
+    {
+      "id": "6453",
+      "name": "Beth Mallon",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Davenport, Iowa",
+      "highSchool": "Davenport Assumption",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/beth-mallon/6453",
+      "tfrrsId": "5146993"
+    },
+    {
+      "id": "6454",
+      "name": "Gabrielle Marchino",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Highlands Ranch, Colo.",
+      "highSchool": "Valor Christian",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/gabrielle-marchino/6454",
+      "tfrrsId": "4989878"
+    },
+    {
+      "id": "6455",
+      "name": "Shaelyn McEnany",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Independence, Iowa",
+      "highSchool": "Independence",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/shaelyn-mcenany/6455",
+      "tfrrsId": "5600621"
+    },
+    {
+      "id": "6456",
+      "name": "Abigail Mokhtary",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "St. Stephen",
+      "highSchool": "Holdingford",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/abigail-mokhtary/6456"
+    },
+    {
+      "id": "6467",
+      "name": "Aryka Parsons",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Wapello, Iowa",
+      "highSchool": "Wapello",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/aryka-parsons/6467",
+      "tfrrsId": "6426422"
+    },
+    {
+      "id": "6457",
+      "name": "Alison  Rusch",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Wahlert",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/alison-rusch/6457",
+      "tfrrsId": "5600622"
+    },
+    {
+      "id": "6458",
+      "name": "Meghan Silbernagel",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Madison, Wis.",
+      "highSchool": "Madison Memorial",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/meghan-silbernagel/6458",
+      "tfrrsId": "5146998"
+    },
+    {
+      "id": "6459",
+      "name": "Ashley Stevens",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Windsor Heights, Iowa",
+      "highSchool": "Des Moines Christian",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ashley-stevens/6459",
+      "tfrrsId": "5600623"
+    }
+  ]
+}
+```
+
+### `src/data/distance_roster_18.json`
+
+```json
+{
+  "generatedAt": "2026-09-13T02:47:04.074Z",
+  "season": 2018,
+  "sources": [
+    "https://go-knights.net/sports/mens-cross-country/roster/2018",
+    "https://go-knights.net/sports/womens-cross-country/roster/2018"
+  ],
+  "athletes": [
+    {
+      "id": "7257",
+      "name": "Ali Ali",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "Iowa City West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ali-ali/7257",
+      "tfrrsId": "6592806"
+    },
+    {
+      "id": "7258",
+      "name": "Caleb Appleton",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Bemidji, Minn.",
+      "highSchool": "Bemidji",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/caleb-appleton/7258",
+      "tfrrsId": "6139222"
+    },
+    {
+      "id": "7321",
+      "name": "Patrick Breitsprecher",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Dayton, Iowa",
+      "highSchool": "Southeast Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/patrick-breitsprecher/7321",
+      "tfrrsId": "6915234"
+    },
+    {
+      "id": "7322",
+      "name": "Callum Brittain",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "White River Junction, Ver.",
+      "highSchool": "Hartford",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/callum-brittain/7322",
+      "tfrrsId": "7043032"
+    },
+    {
+      "id": "7259",
+      "name": "Christian Brothers",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Nevarre, Fla.",
+      "highSchool": "Nevarre",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/christian-brothers/7259",
+      "tfrrsId": "6592810"
+    },
+    {
+      "id": "7260",
+      "name": "Liam Conroy",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Mount Vernon, Iowa",
+      "highSchool": "Mount Vernon",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/liam-conroy/7260",
+      "tfrrsId": "6592811"
+    },
+    {
+      "id": "7261",
+      "name": "Ryan Dalton",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Clinton, Iowa",
+      "highSchool": "South Brunswick",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ryan-dalton/7261",
+      "tfrrsId": "6592812"
+    },
+    {
+      "id": "7323",
+      "name": "Collin Day",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "West Des Moines, Iowa",
+      "highSchool": "West Des Moines Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/collin-day/7323",
+      "tfrrsId": "6592813"
+    },
+    {
+      "id": "7262",
+      "name": "Matt Egts",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Bloomington, Ill.",
+      "highSchool": "Normal Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/matt-egts/7262",
+      "tfrrsId": "6592814"
+    },
+    {
+      "id": "7324",
+      "name": "Andrew Ellison",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline Senior",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-ellison/7324",
+      "tfrrsId": "7043035"
+    },
+    {
+      "id": "7263",
+      "name": "Joe Freiburger",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Holy Cross, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/joe-freiburger/7263",
+      "tfrrsId": "6592815"
+    },
+    {
+      "id": "7264",
+      "name": "Jon Fuentes",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Barrington, Ill.",
+      "highSchool": "Barrington",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jon-fuentes/7264",
+      "tfrrsId": "6139227"
+    },
+    {
+      "id": "7325",
+      "name": "Eli Hedden",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Madison, Wis.",
+      "highSchool": "Madison Memorial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/eli-hedden/7325",
+      "tfrrsId": "7043037"
+    },
+    {
+      "id": "7265",
+      "name": "Matt Heinzman",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Royal Oak, Mich.",
+      "highSchool": "Bishop Foley Catholic",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/matt-heinzman/7265",
+      "tfrrsId": "6592819"
+    },
+    {
+      "id": "7266",
+      "name": "Drew Hoffman",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Manitowoc, Wis.",
+      "highSchool": "Manitowoc Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/drew-hoffman/7266",
+      "tfrrsId": "6592820"
+    },
+    {
+      "id": "7327",
+      "name": "Alec Ille",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Blooming Prairie, Minn.",
+      "highSchool": "Blooming Prairie",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alec-ille/7327",
+      "tfrrsId": "7043039"
+    },
+    {
+      "id": "7328",
+      "name": "Greyson Kincaid",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Senior",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/greyson-kincaid/7328",
+      "tfrrsId": "7043058"
+    },
+    {
+      "id": "7267",
+      "name": "Frosty Lorimer",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Springville, Iowa",
+      "highSchool": "Springville",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/frosty-lorimer/7267",
+      "tfrrsId": "6592823"
+    },
+    {
+      "id": "7268",
+      "name": "Sam Madson",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Omaha, Neb.",
+      "highSchool": "Westside High",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-madson/7268",
+      "tfrrsId": "6592826"
+    },
+    {
+      "id": "7330",
+      "name": "Dalton Martin",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Rock Island, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/dalton-martin/7330",
+      "tfrrsId": "7043060"
+    },
+    {
+      "id": "7269",
+      "name": "Curren Matthias",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Denver, Iowa",
+      "highSchool": "Denver",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/curren-matthias/7269",
+      "tfrrsId": "6592827"
+    },
+    {
+      "id": "7270",
+      "name": "Jay Mixdorf",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jay-mixdorf/7270",
+      "tfrrsId": "7043061"
+    },
+    {
+      "id": "7271",
+      "name": "Sam Pinkowski",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "La Crosse, Wis.",
+      "highSchool": "La Crosse Central",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-pinkowski/7271",
+      "tfrrsId": "6592831"
+    },
+    {
+      "id": "7272",
+      "name": "Casey Roberts",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Saydel",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/casey-roberts/7272",
+      "tfrrsId": "5600665"
+    },
+    {
+      "id": "7273",
+      "name": "Conor Sapp",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/conor-sapp/7273",
+      "tfrrsId": "6139240"
+    },
+    {
+      "id": "7274",
+      "name": "Matthew Schneider",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "Iowa City West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/matthew-schneider/7274",
+      "tfrrsId": "6426439"
+    },
+    {
+      "id": "7331",
+      "name": "Mark Schulz",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Kennedy",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/mark-schulz/7331",
+      "tfrrsId": "6915233"
+    },
+    {
+      "id": "7326",
+      "name": "Morgan Shirley-Fairbairn",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Bismarck, N.D.",
+      "highSchool": "Bismarck",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/morgan-shirley-fairbairn/7326",
+      "tfrrsId": "7043077"
+    },
+    {
+      "id": "7275",
+      "name": "Spencer Warehime",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Gowrie, Iowa",
+      "highSchool": "Southeast Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/spencer-warehime/7275",
+      "tfrrsId": "6592835"
+    },
+    {
+      "id": "7276",
+      "name": "Noah Worthington",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/noah-worthington/7276",
+      "tfrrsId": "6592836"
+    },
+    {
+      "id": "7277",
+      "name": "Jordan Yessak",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Vinton, Iowa",
+      "highSchool": "Dunkerton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jordan-yessak/7277",
+      "tfrrsId": "6592838"
+    },
+    {
+      "id": "7333",
+      "name": "Brandi Antonio",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Deerfield Beach, Fla.",
+      "highSchool": "Pope John Paul II",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/brandi-antonio/7333",
+      "tfrrsId": "7042947"
+    },
+    {
+      "id": "7243",
+      "name": "Janelle Baeskens",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Upland, Calif.",
+      "highSchool": "Claremont",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/janelle-baeskens/7243",
+      "tfrrsId": "6592715"
+    },
+    {
+      "id": "7334",
+      "name": "Trinity Borland",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Bettendorf, Iowa",
+      "highSchool": "Bettendorf",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/trinity-borland/7334",
+      "tfrrsId": "7042949"
+    },
+    {
+      "id": "7344",
+      "name": "Bri Bower",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Montgomery, Ill.",
+      "highSchool": "Mapke Park-Kaneland",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/bri-bower/7344",
+      "tfrrsId": "6915217"
+    },
+    {
+      "id": "7244",
+      "name": "Nicole Breitbach",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "North Buena Vista, Iowa",
+      "highSchool": "Clayton Ridge",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/nicole-breitbach/7244",
+      "tfrrsId": "5600619"
+    },
+    {
+      "id": "7335",
+      "name": "Alex Childs",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Fremont, Calif.",
+      "highSchool": "James Logan",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/alex-childs/7335",
+      "tfrrsId": "6915220"
+    },
+    {
+      "id": "7245",
+      "name": "Cassidy Christopher",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/cassidy-christopher/7245",
+      "tfrrsId": "6592717"
+    },
+    {
+      "id": "7246",
+      "name": "Carina Collet",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/carina-collet/7246",
+      "tfrrsId": "6592718"
+    },
+    {
+      "id": "7247",
+      "name": "Clare Davison",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Carson City, Nev.",
+      "highSchool": "Sierra Lutheran",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/clare-davison/7247",
+      "tfrrsId": "6592719"
+    },
+    {
+      "id": "7336",
+      "name": "Gabi Erdelac-Newman",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Buckeye, Ariz.",
+      "highSchool": "Wickenburg",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/gabi-erdelac-newman/7336",
+      "tfrrsId": "7042955"
+    },
+    {
+      "id": "7337",
+      "name": "Tessa Fields",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Lowden, Iowa",
+      "highSchool": "North Cedar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/tessa-fields/7337",
+      "tfrrsId": "7042974"
+    },
+    {
+      "id": "7249",
+      "name": "Natalie Fober",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Denver, Iowa",
+      "highSchool": "Denver",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/natalie-fober/7249",
+      "tfrrsId": "6139117"
+    },
+    {
+      "id": "7250",
+      "name": "Jacque Garza",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Grayslake, Ill.",
+      "highSchool": "Grayslake North",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jacque-garza/7250",
+      "tfrrsId": "6592724"
+    },
+    {
+      "id": "7252",
+      "name": "Haley  Harms",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Albert Lea, Minn.",
+      "highSchool": "Albert Lea",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/haley-harms/7252",
+      "tfrrsId": "5600620"
+    },
+    {
+      "id": "7338",
+      "name": "Anna Hertz",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/anna-hertz/7338",
+      "tfrrsId": "7042976"
+    },
+    {
+      "id": "7253",
+      "name": "Kylie Kelchen",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Cascade, Iowa",
+      "highSchool": "Cascade",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kylie-kelchen/7253",
+      "tfrrsId": "6139134"
+    },
+    {
+      "id": "7339",
+      "name": "Riley Mayer",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Fort Dodge, Iowa",
+      "highSchool": "Saint Edmond",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/riley-mayer/7339",
+      "tfrrsId": "7042980"
+    },
+    {
+      "id": "7254",
+      "name": "Shaelyn McEnany",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Independence, Iowa",
+      "highSchool": "Independence",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/shaelyn-mcenany/7254",
+      "tfrrsId": "5600621"
+    },
+    {
+      "id": "7340",
+      "name": "Moriah Morter",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Muscatine, Iowa",
+      "highSchool": "Muscatine",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/moriah-morter/7340",
+      "tfrrsId": "7042982"
+    },
+    {
+      "id": "7341",
+      "name": "Alissa Neubauer",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Swisher, Iowa",
+      "highSchool": "Cedar Rapids Prairie",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/alissa-neubauer/7341",
+      "tfrrsId": "6915225"
+    },
+    {
+      "id": "7255",
+      "name": "Alison  Rusch",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Wahlert",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/alison-rusch/7255",
+      "tfrrsId": "5600622"
+    },
+    {
+      "id": "7342",
+      "name": "Emma Sinnwell",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Nashua, Iowa",
+      "highSchool": "Nashua-Plainfield",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/emma-sinnwell/7342",
+      "tfrrsId": "6915226"
+    },
+    {
+      "id": "7343",
+      "name": "Faith Soto",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Victorville, Calif.",
+      "highSchool": "Riverside",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/faith-soto/7343",
+      "tfrrsId": "7043022"
+    },
+    {
+      "id": "7256",
+      "name": "Ashley Stevens",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Windsor Heights, Iowa",
+      "highSchool": "Des Moines Christian",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ashley-stevens/7256",
+      "tfrrsId": "5600623"
+    }
+  ]
+}
+```
+
+### `src/data/distance_roster_19.json`
+
+```json
+{
+  "generatedAt": "2026-09-13T02:47:05.840Z",
+  "season": 2019,
+  "sources": [
+    "https://go-knights.net/sports/mens-cross-country/roster/2019",
+    "https://go-knights.net/sports/womens-cross-country/roster/2019"
+  ],
+  "athletes": [
+    {
+      "id": "8084",
+      "name": "Ali Ali",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "Iowa City West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ali-ali/8084",
+      "tfrrsId": "6592806"
+    },
+    {
+      "id": "8085",
+      "name": "Caleb Appleton",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Bemidji, Minn.",
+      "highSchool": "Bemidji",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/caleb-appleton/8085",
+      "tfrrsId": "6139222"
+    },
+    {
+      "id": "8087",
+      "name": "Callum Brittain",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "White River Junction, Ver.",
+      "highSchool": "Hartford",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/callum-brittain/8087",
+      "tfrrsId": "7043032"
+    },
+    {
+      "id": "8119",
+      "name": "Christopher Collet",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/christopher-collet/8119",
+      "tfrrsId": "7370510"
+    },
+    {
+      "id": "8089",
+      "name": "Liam Conroy",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Mount Vernon, Iowa",
+      "highSchool": "Mount Vernon",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/liam-conroy/8089",
+      "tfrrsId": "6592811"
+    },
+    {
+      "id": "8090",
+      "name": "Ryan Dalton",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Clinton, Iowa",
+      "highSchool": "South Brunswick",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ryan-dalton/8090",
+      "tfrrsId": "6592812"
+    },
+    {
+      "id": "8091",
+      "name": "Collin Day",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "West Des Moines, Iowa",
+      "highSchool": "West Des Moines Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/collin-day/8091",
+      "tfrrsId": "6592813"
+    },
+    {
+      "id": "8092",
+      "name": "Matt Egts",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Bloomington, Ill.",
+      "highSchool": "Normal Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/matt-egts/8092",
+      "tfrrsId": "6592814"
+    },
+    {
+      "id": "8093",
+      "name": "Andrew Ellison",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline Senior",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-ellison/8093",
+      "tfrrsId": "7043035"
+    },
+    {
+      "id": "8094",
+      "name": "Joe Freiburger",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Holy Cross, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/joe-freiburger/8094",
+      "tfrrsId": "6592815"
+    },
+    {
+      "id": "8095",
+      "name": "Jon Fuentes",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Barrington, Ill.",
+      "highSchool": "Barrington",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jon-fuentes/8095",
+      "tfrrsId": "6139227"
+    },
+    {
+      "id": "8097",
+      "name": "Matt Heinzman",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Royal Oak, Mich.",
+      "highSchool": "Bishop Foley Catholic",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/matt-heinzman/8097",
+      "tfrrsId": "6592819"
+    },
+    {
+      "id": "8126",
+      "name": "Nick Henry",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cheney, Wash.",
+      "highSchool": "Medical Lake",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nick-henry/8126",
+      "tfrrsId": "7370512"
+    },
+    {
+      "id": "8098",
+      "name": "Drew Hoffman",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Manitowoc, Wis.",
+      "highSchool": "Manitowoc Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/drew-hoffman/8098",
+      "tfrrsId": "6592820"
+    },
+    {
+      "id": "8099",
+      "name": "Alec Ille",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Blooming Prairie, Minn.",
+      "highSchool": "Blooming Prairie",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alec-ille/8099",
+      "tfrrsId": "7043039"
+    },
+    {
+      "id": "8100",
+      "name": "Greyson Kincaid",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Senior",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/greyson-kincaid/8100",
+      "tfrrsId": "7043058"
+    },
+    {
+      "id": "8116",
+      "name": "Alexander Lawrence",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Stewartville, Minn.",
+      "highSchool": "Stewartville",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alexander-lawrence/8116"
+    },
+    {
+      "id": "8101",
+      "name": "Frosty Lorimer",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Springville, Iowa",
+      "highSchool": "Springville",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/frosty-lorimer/8101",
+      "tfrrsId": "6592823"
+    },
+    {
+      "id": "8102",
+      "name": "Sam Madson",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Omaha, Neb.",
+      "highSchool": "Westside High",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-madson/8102",
+      "tfrrsId": "6592826"
+    },
+    {
+      "id": "8103",
+      "name": "Dalton Martin",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Rock Island, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/dalton-martin/8103",
+      "tfrrsId": "7043060"
+    },
+    {
+      "id": "8127",
+      "name": "Sean McDermott",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Madrid, Iowa",
+      "highSchool": "Madrid",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sean-mcdermott/8127",
+      "tfrrsId": "7370516"
+    },
+    {
+      "id": "8105",
+      "name": "Jay Mixdorf",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jay-mixdorf/8105",
+      "tfrrsId": "7043061"
+    },
+    {
+      "id": "8106",
+      "name": "Sam Pinkowski",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "La Crosse, Wis.",
+      "highSchool": "La Crosse Central",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-pinkowski/8106",
+      "tfrrsId": "6592831"
+    },
+    {
+      "id": "8118",
+      "name": "Brice Rhodes",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Herbert Hoover",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brice-rhodes/8118",
+      "tfrrsId": "7370517"
+    },
+    {
+      "id": "8108",
+      "name": "Conor Sapp",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/conor-sapp/8108",
+      "tfrrsId": "6139240"
+    },
+    {
+      "id": "8115",
+      "name": "Wyatt  Schmidt",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Preston, Iowa",
+      "highSchool": "Northeast",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/wyatt-schmidt/8115",
+      "tfrrsId": "8659713"
+    },
+    {
+      "id": "8125",
+      "name": "Michael  Schmitz",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/michael-schmitz/8125",
+      "tfrrsId": "7370519"
+    },
+    {
+      "id": "8111",
+      "name": "Morgan Shirley-Fairbairn",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Bismarck, N.D.",
+      "highSchool": "Bismarck",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/morgan-shirley-fairbairn/8111",
+      "tfrrsId": "7043077"
+    },
+    {
+      "id": "8124",
+      "name": "Jacob VanderWilt",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Eldora, Iowa",
+      "highSchool": "South Hardin",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-vanderwilt/8124",
+      "tfrrsId": "7370522"
+    },
+    {
+      "id": "8112",
+      "name": "Spencer Warehime",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Gowrie, Iowa",
+      "highSchool": "Southeast Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/spencer-warehime/8112",
+      "tfrrsId": "6592835"
+    },
+    {
+      "id": "8113",
+      "name": "Noah Worthington",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/noah-worthington/8113",
+      "tfrrsId": "6592836"
+    },
+    {
+      "id": "8114",
+      "name": "Jordan Yessak",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Vinton, Iowa",
+      "highSchool": "Dunkerton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jordan-yessak/8114",
+      "tfrrsId": "6592838"
+    },
+    {
+      "id": "8129",
+      "name": "Brandi Antonio",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Deerfield Beach, Fla.",
+      "highSchool": "Pope John Paul II",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/brandi-antonio/8129",
+      "tfrrsId": "7042947"
+    },
+    {
+      "id": "8130",
+      "name": "Janelle Baeskens",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Upland, Calif.",
+      "highSchool": "Claremont",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/janelle-baeskens/8130",
+      "tfrrsId": "6592715"
+    },
+    {
+      "id": "8162",
+      "name": "Kaylie Barker",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Clear Creek Amana",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kaylie-barker/8162",
+      "tfrrsId": "7370462"
+    },
+    {
+      "id": "8157",
+      "name": "Ashley  Bloomquist",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Fairfield, Iowa",
+      "highSchool": "Fairfield",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ashley-bloomquist/8157",
+      "tfrrsId": "7540843"
+    },
+    {
+      "id": "8131",
+      "name": "Trinity Borland",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Bettendorf, Iowa",
+      "highSchool": "Bettendorf",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/trinity-borland/8131",
+      "tfrrsId": "7042949"
+    },
+    {
+      "id": "8169",
+      "name": "Victoria  Breitbach",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "North Buena Vista, Iowa",
+      "highSchool": "Clayton Ridge",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/victoria-breitbach/8169",
+      "tfrrsId": "7540844"
+    },
+    {
+      "id": "8154",
+      "name": "Addy Carlson",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Saint Ansgar, Iowa",
+      "highSchool": "Saint Ansgar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/addy-carlson/8154",
+      "tfrrsId": "7540845"
+    },
+    {
+      "id": "8135",
+      "name": "Cassidy Christopher",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/cassidy-christopher/8135",
+      "tfrrsId": "6592717"
+    },
+    {
+      "id": "8136",
+      "name": "Carina Collet",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/carina-collet/8136",
+      "tfrrsId": "6592718"
+    },
+    {
+      "id": "8137",
+      "name": "Clare Davison",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Carson City, Nev.",
+      "highSchool": "Sierra Lutheran",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/clare-davison/8137",
+      "tfrrsId": "6592719"
+    },
+    {
+      "id": "8168",
+      "name": "Taylor Davison",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Carson City, Nev.",
+      "highSchool": "Sierra Lutheran",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/taylor-davison/8168",
+      "tfrrsId": "7370466"
+    },
+    {
+      "id": "8153",
+      "name": "Clare Dunne",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Coralville, Iowa",
+      "highSchool": "Regina",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/clare-dunne/8153",
+      "tfrrsId": "7042954"
+    },
+    {
+      "id": "8138",
+      "name": "Gabi Erdelac-Newman",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Buckeye, Ariz.",
+      "highSchool": "Wickenburg",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/gabi-erdelac-newman/8138",
+      "tfrrsId": "7042955"
+    },
+    {
+      "id": "8158",
+      "name": "Aubrie Fisher",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Ackley, Iowa",
+      "highSchool": "AGWSR",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/aubrie-fisher/8158",
+      "tfrrsId": "7540848"
+    },
+    {
+      "id": "8140",
+      "name": "Natalie Fober",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Denver, Iowa",
+      "highSchool": "Denver",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/natalie-fober/8140",
+      "tfrrsId": "6139117"
+    },
+    {
+      "id": "8141",
+      "name": "Jacque Garza",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Grayslake, Ill.",
+      "highSchool": "Grayslake North",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jacque-garza/8141",
+      "tfrrsId": "6592724"
+    },
+    {
+      "id": "8159",
+      "name": "Carlene Hamilton",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Mesa, Ariz.",
+      "highSchool": "Skyline",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/carlene-hamilton/8159",
+      "tfrrsId": "7540849"
+    },
+    {
+      "id": "8383",
+      "name": "Hidaly Hernandez",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Phoenix, Arz.",
+      "highSchool": "Metro Tech",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/hidaly-hernandez/8383",
+      "tfrrsId": "7540850"
+    },
+    {
+      "id": "8143",
+      "name": "Anna Hertz",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/anna-hertz/8143",
+      "tfrrsId": "7042976"
+    },
+    {
+      "id": "8144",
+      "name": "Kylie Kelchen",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cascade, Iowa",
+      "highSchool": "Cascade",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kylie-kelchen/8144",
+      "tfrrsId": "6139134"
+    },
+    {
+      "id": "8155",
+      "name": "AJ Kendrick",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Linn-Mar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/aj-kendrick/8155",
+      "tfrrsId": "7535281"
+    },
+    {
+      "id": "8156",
+      "name": "Allegra  Knudson",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Manly, Iowa",
+      "highSchool": "Central Springs",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allegra-knudson/8156",
+      "tfrrsId": "7540851"
+    },
+    {
+      "id": "8145",
+      "name": "Riley Mayer",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Fort Dodge, Iowa",
+      "highSchool": "Saint Edmond",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/riley-mayer/8145",
+      "tfrrsId": "7042980"
+    },
+    {
+      "id": "8147",
+      "name": "Moriah Morter",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Muscatine, Iowa",
+      "highSchool": "Muscatine",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/moriah-morter/8147",
+      "tfrrsId": "7042982"
+    },
+    {
+      "id": "8148",
+      "name": "Alissa Neubauer",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Swisher, Iowa",
+      "highSchool": "Cedar Rapids Prairie",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/alissa-neubauer/8148",
+      "tfrrsId": "6915225"
+    },
+    {
+      "id": "8160",
+      "name": "Charlie Otto",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Hinsdale, Ill.",
+      "highSchool": "Hinsdale Central",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/charlie-otto/8160",
+      "tfrrsId": "7730230"
+    },
+    {
+      "id": "8164",
+      "name": "Natalie  Paulson",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/natalie-paulson/8164",
+      "tfrrsId": "7540852"
+    },
+    {
+      "id": "8161",
+      "name": "Jane Pinkowski",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "La Crosse, Wis.",
+      "highSchool": "Central",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jane-pinkowski/8161",
+      "tfrrsId": "7730233"
+    },
+    {
+      "id": "8165",
+      "name": "Nichole Segay",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Phoenix, Ariz.",
+      "highSchool": "Camelback",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/nichole-segay/8165",
+      "tfrrsId": "7370477"
+    },
+    {
+      "id": "8166",
+      "name": "Olivia  Szymke",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Manchester, Iowa",
+      "highSchool": "West Delaware",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/olivia-szymke/8166",
+      "tfrrsId": "7370478"
+    },
+    {
+      "id": "8163",
+      "name": "Molly Vittetoe",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "West Liberty, Iowa",
+      "highSchool": "Regina Jr Sr",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/molly-vittetoe/8163",
+      "tfrrsId": "7370479"
+    }
+  ]
+}
+```
+
+### `src/data/distance_roster_20.json`
+
+```json
+{
+  "generatedAt": "2026-09-13T02:47:07.608Z",
+  "season": 2020,
+  "sources": [
+    "https://go-knights.net/sports/mens-cross-country/roster/2020",
+    "https://go-knights.net/sports/womens-cross-country/roster/2020"
+  ],
+  "athletes": [
+    {
+      "id": "8876",
+      "name": "Ali Ali",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "Iowa City West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ali-ali/8876",
+      "tfrrsId": "6592806"
+    },
+    {
+      "id": "8905",
+      "name": "Ian Barry",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Fennimore, Wis.",
+      "highSchool": "Fennimore",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ian-barry/8905",
+      "tfrrsId": "7730278"
+    },
+    {
+      "id": "8878",
+      "name": "Christopher Collet",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/christopher-collet/8878",
+      "tfrrsId": "7370510"
+    },
+    {
+      "id": "8879",
+      "name": "Liam Conroy",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Mount Vernon, Iowa",
+      "highSchool": "Mount Vernon",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/liam-conroy/8879",
+      "tfrrsId": "6592811"
+    },
+    {
+      "id": "8906",
+      "name": "Carter Cruise",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Scotch Grove, Iowa",
+      "highSchool": "Monticello",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carter-cruise/8906",
+      "tfrrsId": "7730328"
+    },
+    {
+      "id": "8880",
+      "name": "Ryan Dalton",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Clinton, Iowa",
+      "highSchool": "South Brunswick",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ryan-dalton/8880",
+      "tfrrsId": "6592812"
+    },
+    {
+      "id": "8919",
+      "name": "Isaac Davis",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Waterloo, Iowa",
+      "highSchool": "Waterloo West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/isaac-davis/8919",
+      "tfrrsId": "7551012"
+    },
+    {
+      "id": "8881",
+      "name": "Collin Day",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "West Des Moines, Iowa",
+      "highSchool": "West Des Moines Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/collin-day/8881",
+      "tfrrsId": "6592813"
+    },
+    {
+      "id": "8882",
+      "name": "Matt Egts",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Bloomington, Ill.",
+      "highSchool": "Normal Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/matt-egts/8882",
+      "tfrrsId": "6592814"
+    },
+    {
+      "id": "8883",
+      "name": "Andrew Ellison",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline Senior",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-ellison/8883",
+      "tfrrsId": "7043035"
+    },
+    {
+      "id": "8884",
+      "name": "Joe Freiburger",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Holy Cross, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/joe-freiburger/8884",
+      "tfrrsId": "6592815"
+    },
+    {
+      "id": "8907",
+      "name": "Jacob  Green",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Kennedy",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-green/8907",
+      "tfrrsId": "7730339"
+    },
+    {
+      "id": "9006",
+      "name": "Tryton Harper",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Linn-Mar",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/tryton-harper/9006",
+      "tfrrsId": "7730343"
+    },
+    {
+      "id": "8885",
+      "name": "Matt Heinzman",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Royal Oak, Mich.",
+      "highSchool": "Bishop Foley Catholic",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/matt-heinzman/8885",
+      "tfrrsId": "6592819"
+    },
+    {
+      "id": "8886",
+      "name": "Nick Henry",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Cheney, Wash.",
+      "highSchool": "Medical Lake",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nick-henry/8886",
+      "tfrrsId": "7370512"
+    },
+    {
+      "id": "9001",
+      "name": "Drew Hoffman",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Manitowoc, Wis.",
+      "highSchool": "Manitowoc Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/drew-hoffman/9001",
+      "tfrrsId": "6592820"
+    },
+    {
+      "id": "8909",
+      "name": "Aiden Housman",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Wapello, Iowa",
+      "highSchool": "Wapello",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aiden-housman/8909",
+      "tfrrsId": "7730348"
+    },
+    {
+      "id": "8888",
+      "name": "Alec Ille",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Blooming Prairie, Minn.",
+      "highSchool": "Blooming Prairie",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alec-ille/8888",
+      "tfrrsId": "7043039"
+    },
+    {
+      "id": "8910",
+      "name": "Jacob  Keay",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Treynor, Iowa",
+      "highSchool": "Treynor Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-keay/8910",
+      "tfrrsId": "7730350"
+    },
+    {
+      "id": "8889",
+      "name": "Greyson Kincaid",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Senior",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/greyson-kincaid/8889",
+      "tfrrsId": "7043058"
+    },
+    {
+      "id": "8911",
+      "name": "Connor Lancial",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Council Bluffs, Iowa",
+      "highSchool": "Lewis Central",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/connor-lancial/8911",
+      "tfrrsId": "7730351"
+    },
+    {
+      "id": "8891",
+      "name": "Frosty Lorimer",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Springville, Iowa",
+      "highSchool": "Springville",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/frosty-lorimer/8891",
+      "tfrrsId": "6592823"
+    },
+    {
+      "id": "8892",
+      "name": "Sam Madson",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Omaha, Neb.",
+      "highSchool": "Westside High",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-madson/8892",
+      "tfrrsId": "6592826"
+    },
+    {
+      "id": "8893",
+      "name": "Dalton Martin",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Rock Island, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/dalton-martin/8893",
+      "tfrrsId": "7043060"
+    },
+    {
+      "id": "9005",
+      "name": "Curren Matthias",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Denver, Iowa",
+      "highSchool": "Denver",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/curren-matthias/9005",
+      "tfrrsId": "6592827"
+    },
+    {
+      "id": "8912",
+      "name": "Jack Meyers",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Bettendorf, Iowa",
+      "highSchool": "Pleasant Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jack-meyers/8912",
+      "tfrrsId": "7730353"
+    },
+    {
+      "id": "8913",
+      "name": "Ryan  Neubauer",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Swisher, Iowa",
+      "highSchool": "Praire",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ryan-neubauer/8913",
+      "tfrrsId": "7730357"
+    },
+    {
+      "id": "8914",
+      "name": "Benjamin Rhodes",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Silvis, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/benjamin-rhodes/8914",
+      "tfrrsId": "7699569"
+    },
+    {
+      "id": "8897",
+      "name": "Brice Rhodes",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Herbert Hoover",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brice-rhodes/8897",
+      "tfrrsId": "7370517"
+    },
+    {
+      "id": "8915",
+      "name": "Gavin Roy",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Eldora, Iowa",
+      "highSchool": "South Hardin",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/gavin-roy/8915",
+      "tfrrsId": "7730364"
+    },
+    {
+      "id": "8916",
+      "name": "Carson Rygh",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Lake Mills, Iowa",
+      "highSchool": "Lake Mills Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carson-rygh/8916",
+      "tfrrsId": "7730365"
+    },
+    {
+      "id": "8898",
+      "name": "Wyatt  Schmidt",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Preston, Iowa",
+      "highSchool": "Northeast",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/wyatt-schmidt/8898",
+      "tfrrsId": "8659713"
+    },
+    {
+      "id": "8899",
+      "name": "Michael  Schmitz",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/michael-schmitz/8899",
+      "tfrrsId": "7370519"
+    },
+    {
+      "id": "9007",
+      "name": "Sam Schmitz",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-schmitz/9007",
+      "tfrrsId": "7730366"
+    },
+    {
+      "id": "9004",
+      "name": "Matthew Schneider",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "Iowa City West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/matthew-schneider/9004",
+      "tfrrsId": "6426439"
+    },
+    {
+      "id": "8900",
+      "name": "Morgan Shirley-Fairbairn",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Bismarck, N.D.",
+      "highSchool": "Bismarck",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/morgan-shirley-fairbairn/8900",
+      "tfrrsId": "7043077"
+    },
+    {
+      "id": "8901",
+      "name": "Jacob VanderWilt",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Eldora, Iowa",
+      "highSchool": "South Hardin",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-vanderwilt/8901",
+      "tfrrsId": "7370522"
+    },
+    {
+      "id": "8902",
+      "name": "Spencer Warehime",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Gowrie, Iowa",
+      "highSchool": "Southeast Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/spencer-warehime/8902",
+      "tfrrsId": "6592835"
+    },
+    {
+      "id": "8917",
+      "name": "Logan Wisocki-Johnson",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "East Moline, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/logan-wisocki-johnson/8917",
+      "tfrrsId": "7730371"
+    },
+    {
+      "id": "8918",
+      "name": "Tim Wolf",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/tim-wolf/8918",
+      "tfrrsId": "7699574"
+    },
+    {
+      "id": "8903",
+      "name": "Noah Worthington",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/noah-worthington/8903",
+      "tfrrsId": "6592836"
+    },
+    {
+      "id": "8904",
+      "name": "Jordan Yessak",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Vinton, Iowa",
+      "highSchool": "Dunkerton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jordan-yessak/8904",
+      "tfrrsId": "6592838"
+    },
+    {
+      "id": "8920",
+      "name": "Brandi Antonio",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Deerfield Beach, Fla.",
+      "highSchool": "Pope John Paul II",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/brandi-antonio/8920",
+      "tfrrsId": "7042947"
+    },
+    {
+      "id": "8921",
+      "name": "Janelle Baeskens",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Upland, Calif.",
+      "highSchool": "Claremont",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/janelle-baeskens/8921",
+      "tfrrsId": "6592715"
+    },
+    {
+      "id": "8923",
+      "name": "Ashley  Bloomquist",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Fairfield, Iowa",
+      "highSchool": "Fairfield",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ashley-bloomquist/8923",
+      "tfrrsId": "7540843"
+    },
+    {
+      "id": "8924",
+      "name": "Trinity Borland",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Bettendorf, Iowa",
+      "highSchool": "Bettendorf",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/trinity-borland/8924",
+      "tfrrsId": "7042949"
+    },
+    {
+      "id": "8925",
+      "name": "Victoria  Breitbach",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "North Buena Vista, Iowa",
+      "highSchool": "Clayton Ridge",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/victoria-breitbach/8925",
+      "tfrrsId": "7540844"
+    },
+    {
+      "id": "8950",
+      "name": "Lexi Brown",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lexi-brown/8950",
+      "tfrrsId": "7699550"
+    },
+    {
+      "id": "8926",
+      "name": "Addy Carlson",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Saint Ansgar, Iowa",
+      "highSchool": "Saint Ansgar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/addy-carlson/8926",
+      "tfrrsId": "7540845"
+    },
+    {
+      "id": "9021",
+      "name": "Cassidy Christopher",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/cassidy-christopher/9021",
+      "tfrrsId": "6592717"
+    },
+    {
+      "id": "8928",
+      "name": "Carina Collet",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/carina-collet/8928",
+      "tfrrsId": "6592718"
+    },
+    {
+      "id": "8952",
+      "name": "Miricle Corbo",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Saint Ansgar, Iowa",
+      "highSchool": "Saint Ansgar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/miricle-corbo/8952",
+      "tfrrsId": "7730217"
+    },
+    {
+      "id": "8929",
+      "name": "Clare Davison",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Carson City, Nev.",
+      "highSchool": "Sierra Lutheran",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/clare-davison/8929",
+      "tfrrsId": "6592719"
+    },
+    {
+      "id": "8931",
+      "name": "Clare Dunne",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Coralville, Iowa",
+      "highSchool": "Regina",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/clare-dunne/8931",
+      "tfrrsId": "7042954"
+    },
+    {
+      "id": "8949",
+      "name": "Maeve Dunne",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Coralville, Iowa",
+      "highSchool": "Regina",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/maeve-dunne/8949",
+      "tfrrsId": "7699552"
+    },
+    {
+      "id": "8953",
+      "name": "Katelyn Eilders",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Robins, Iowa",
+      "highSchool": "Linn Mar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/katelyn-eilders/8953",
+      "tfrrsId": "7730219"
+    },
+    {
+      "id": "8932",
+      "name": "Gabi Erdelac-Newman",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Buckeye, Ariz.",
+      "highSchool": "Wickenburg",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/gabi-erdelac-newman/8932",
+      "tfrrsId": "7042955"
+    },
+    {
+      "id": "8933",
+      "name": "Aubrie Fisher",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Ackley, Iowa",
+      "highSchool": "AGWSR",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/aubrie-fisher/8933",
+      "tfrrsId": "7540848"
+    },
+    {
+      "id": "8934",
+      "name": "Jacque Garza",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Grayslake, Ill.",
+      "highSchool": "Grayslake North",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jacque-garza/8934",
+      "tfrrsId": "6592724"
+    },
+    {
+      "id": "8954",
+      "name": "Olivia Hamblin",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "John F. Kennedy",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/olivia-hamblin/8954",
+      "tfrrsId": "7699554"
+    },
+    {
+      "id": "8935",
+      "name": "Carlene Hamilton",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Mesa, Ariz.",
+      "highSchool": "Skyline",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/carlene-hamilton/8935",
+      "tfrrsId": "7540849"
+    },
+    {
+      "id": "8936",
+      "name": "Hidaly Hernandez",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Phoenix, Arz.",
+      "highSchool": "Metro Tech",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/hidaly-hernandez/8936",
+      "tfrrsId": "7540850"
+    },
+    {
+      "id": "8937",
+      "name": "Anna Hertz",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/anna-hertz/8937",
+      "tfrrsId": "7042976"
+    },
+    {
+      "id": "8955",
+      "name": "Shaelyn Hostager",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Hempstead",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/shaelyn-hostager/8955",
+      "tfrrsId": "7730222"
+    },
+    {
+      "id": "8938",
+      "name": "AJ Kendrick",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Linn-Mar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/aj-kendrick/8938",
+      "tfrrsId": "7535281"
+    },
+    {
+      "id": "8939",
+      "name": "Allegra  Knudson",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Manly, Iowa",
+      "highSchool": "Central Springs",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allegra-knudson/8939",
+      "tfrrsId": "7540851"
+    },
+    {
+      "id": "8956",
+      "name": "Jenna Morey",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Spencer, Iowa",
+      "highSchool": "Spencer",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jenna-morey/8956",
+      "tfrrsId": "7730228"
+    },
+    {
+      "id": "8941",
+      "name": "Moriah Morter",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Muscatine, Iowa",
+      "highSchool": "Muscatine",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/moriah-morter/8941",
+      "tfrrsId": "7042982"
+    },
+    {
+      "id": "8942",
+      "name": "Alissa Neubauer",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Swisher, Iowa",
+      "highSchool": "Cedar Rapids Prairie",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/alissa-neubauer/8942",
+      "tfrrsId": "6915225"
+    },
+    {
+      "id": "8943",
+      "name": "Charlie Otto",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Hinsdale, Ill.",
+      "highSchool": "Hinsdale Central",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/charlie-otto/8943",
+      "tfrrsId": "7730230"
+    },
+    {
+      "id": "8957",
+      "name": "Ryleigh Parrack",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Papillion, Neb.",
+      "highSchool": "Papillion-La Vista South",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ryleigh-parrack/8957",
+      "tfrrsId": "7730231"
+    },
+    {
+      "id": "8944",
+      "name": "Natalie  Paulson",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/natalie-paulson/8944",
+      "tfrrsId": "7540852"
+    },
+    {
+      "id": "8958",
+      "name": "Erin Phelan",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Waukesha, Wis.",
+      "highSchool": "Waukesha West",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/erin-phelan/8958",
+      "tfrrsId": "7740369"
+    },
+    {
+      "id": "8945",
+      "name": "Jane Pinkowski",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "La Crosse, Wis.",
+      "highSchool": "Central",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jane-pinkowski/8945",
+      "tfrrsId": "7730233"
+    }
+  ]
+}
+```
+
+### `src/data/distance_roster_21.json`
+
+```json
+{
+  "generatedAt": "2026-09-13T02:47:09.464Z",
+  "season": 2021,
+  "sources": [
+    "https://go-knights.net/sports/mens-cross-country/roster/2021",
+    "https://go-knights.net/sports/womens-cross-country/roster/2021"
+  ],
+  "athletes": [
+    {
+      "id": "10860",
+      "name": "Ali Ali",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "Iowa City West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ali-ali/10860",
+      "tfrrsId": "6592806"
+    },
+    {
+      "id": "10900",
+      "name": "Josh Arias",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Indio, Calif.",
+      "highSchool": "Shadow Hills",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/josh-arias/10900",
+      "tfrrsId": "7918357"
+    },
+    {
+      "id": "10861",
+      "name": "Ian Barry",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Fennimore, Wis.",
+      "highSchool": "Fennimore",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ian-barry/10861",
+      "tfrrsId": "7730278"
+    },
+    {
+      "id": "10899",
+      "name": "Luke Benson",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Sioux City, Iowa",
+      "highSchool": "Sioux City North",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/luke-benson/10899",
+      "tfrrsId": "7918377"
+    },
+    {
+      "id": "10896",
+      "name": "Callum Brittain",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "White River Junction, Ver.",
+      "highSchool": "Hartford",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/callum-brittain/10896",
+      "tfrrsId": "7043032"
+    },
+    {
+      "id": "10901",
+      "name": "Carson Collet",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carson-collet/10901",
+      "tfrrsId": "7918359"
+    },
+    {
+      "id": "10862",
+      "name": "Christopher Collet",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/christopher-collet/10862",
+      "tfrrsId": "7370510"
+    },
+    {
+      "id": "10863",
+      "name": "Liam Conroy",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Mount Vernon, Iowa",
+      "highSchool": "Mount Vernon",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/liam-conroy/10863",
+      "tfrrsId": "6592811"
+    },
+    {
+      "id": "10902",
+      "name": "Bert Cortez",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Lone Tree, Iowa",
+      "highSchool": "Lone Tree",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/bert-cortez/10902",
+      "tfrrsId": "7918360"
+    },
+    {
+      "id": "10864",
+      "name": "Carter Cruise",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Scotch Grove, Iowa",
+      "highSchool": "Monticello",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carter-cruise/10864",
+      "tfrrsId": "7730328"
+    },
+    {
+      "id": "10865",
+      "name": "Isaac Davis",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Waterloo, Iowa",
+      "highSchool": "Waterloo West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/isaac-davis/10865",
+      "tfrrsId": "7551012"
+    },
+    {
+      "id": "10866",
+      "name": "Collin Day",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "West Des Moines, Iowa",
+      "highSchool": "West Des Moines Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/collin-day/10866",
+      "tfrrsId": "6592813"
+    },
+    {
+      "id": "10867",
+      "name": "Andrew Ellison",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline Senior",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-ellison/10867",
+      "tfrrsId": "7043035"
+    },
+    {
+      "id": "10868",
+      "name": "Joe Freiburger",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Holy Cross, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/joe-freiburger/10868",
+      "tfrrsId": "6592815"
+    },
+    {
+      "id": "10903",
+      "name": "Michael Goodenbour",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/michael-goodenbour/10903",
+      "tfrrsId": "7918361"
+    },
+    {
+      "id": "10869",
+      "name": "Jacob  Green",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Kennedy",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-green/10869",
+      "tfrrsId": "7730339"
+    },
+    {
+      "id": "10905",
+      "name": "Colin Greenwell",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Sioux City, Iowa",
+      "highSchool": "Sioux City North",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/colin-greenwell/10905",
+      "tfrrsId": "7918365"
+    },
+    {
+      "id": "10870",
+      "name": "Tryton Harper",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Linn-Mar",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/tryton-harper/10870",
+      "tfrrsId": "7730343"
+    },
+    {
+      "id": "10906",
+      "name": "Joe Hasken",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Miles, Iowa",
+      "highSchool": "Northeast",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/joe-hasken/10906",
+      "tfrrsId": "8017690"
+    },
+    {
+      "id": "10871",
+      "name": "Matt Heinzman",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Royal Oak, Mich.",
+      "highSchool": "Bishop Foley Catholic",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/matt-heinzman/10871",
+      "tfrrsId": "6592819"
+    },
+    {
+      "id": "10872",
+      "name": "Nick Henry",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Cheney, Wash.",
+      "highSchool": "Medical Lake",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nick-henry/10872",
+      "tfrrsId": "7370512"
+    },
+    {
+      "id": "10873",
+      "name": "Drew Hoffman",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Manitowoc, Wis.",
+      "highSchool": "Manitowoc Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/drew-hoffman/10873",
+      "tfrrsId": "6592820"
+    },
+    {
+      "id": "10907",
+      "name": "Paul Hoopes",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Letts, Iowa",
+      "highSchool": "Louisa Muscatine",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/paul-hoopes/10907",
+      "tfrrsId": "7918366"
+    },
+    {
+      "id": "10874",
+      "name": "Aiden Housman",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Wapello, Iowa",
+      "highSchool": "Wapello",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aiden-housman/10874",
+      "tfrrsId": "7730348"
+    },
+    {
+      "id": "10908",
+      "name": "Jon Hutton",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jon-hutton/10908",
+      "tfrrsId": "7918367"
+    },
+    {
+      "id": "10875",
+      "name": "Alec Ille",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Blooming Prairie, Minn.",
+      "highSchool": "Blooming Prairie",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alec-ille/10875",
+      "tfrrsId": "7043039"
+    },
+    {
+      "id": "10876",
+      "name": "Jacob  Keay",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Treynor, Iowa",
+      "highSchool": "Treynor Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-keay/10876",
+      "tfrrsId": "7730350"
+    },
+    {
+      "id": "10877",
+      "name": "Greyson Kincaid",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Senior",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/greyson-kincaid/10877",
+      "tfrrsId": "7043058"
+    },
+    {
+      "id": "10914",
+      "name": "Jack Kinzer",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jack-kinzer/10914",
+      "tfrrsId": "7918369"
+    },
+    {
+      "id": "10915",
+      "name": "Nathaniel Knutson",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "New Lenox, Ill.",
+      "highSchool": "Lincoln-Way West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathaniel-knutson/10915",
+      "tfrrsId": "7918371"
+    },
+    {
+      "id": "10878",
+      "name": "Connor Lancial",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Council Bluffs, Iowa",
+      "highSchool": "Lewis Central",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/connor-lancial/10878",
+      "tfrrsId": "7730351"
+    },
+    {
+      "id": "10879",
+      "name": "Frosty Lorimer",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Springville, Iowa",
+      "highSchool": "Springville",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/frosty-lorimer/10879",
+      "tfrrsId": "6592823"
+    },
+    {
+      "id": "10880",
+      "name": "Sam Madson",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Omaha, Neb.",
+      "highSchool": "Westside High",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-madson/10880",
+      "tfrrsId": "6592826"
+    },
+    {
+      "id": "10881",
+      "name": "Dalton Martin",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Rock Island, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/dalton-martin/10881",
+      "tfrrsId": "7043060"
+    },
+    {
+      "id": "10916",
+      "name": "Colin Meisenburg",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Orion, Ill.",
+      "highSchool": "Orion",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/colin-meisenburg/10916"
+    },
+    {
+      "id": "10917",
+      "name": "Arthur Meyers",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Redlands, Calif.",
+      "highSchool": "Redlands East Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/arthur-meyers/10917",
+      "tfrrsId": "7918373"
+    },
+    {
+      "id": "10882",
+      "name": "Jack Meyers",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Bettendorf, Iowa",
+      "highSchool": "Pleasant Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jack-meyers/10882",
+      "tfrrsId": "7730353"
+    },
+    {
+      "id": "10897",
+      "name": "Jay Mixdorf",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jay-mixdorf/10897",
+      "tfrrsId": "7043061"
+    },
+    {
+      "id": "10883",
+      "name": "Ryan  Neubauer",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Swisher, Iowa",
+      "highSchool": "Praire",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ryan-neubauer/10883",
+      "tfrrsId": "7730357"
+    },
+    {
+      "id": "10918",
+      "name": "Clay Pehl",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Madrid",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/clay-pehl/10918",
+      "tfrrsId": "7918374"
+    },
+    {
+      "id": "10898",
+      "name": "Sam Pinkowski",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "La Crosse, Wis.",
+      "highSchool": "La Crosse Central",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-pinkowski/10898",
+      "tfrrsId": "6592831"
+    },
+    {
+      "id": "10919",
+      "name": "Andrew Poock",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-poock/10919",
+      "tfrrsId": "7918375"
+    },
+    {
+      "id": "10884",
+      "name": "Brice Rhodes",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Herbert Hoover",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brice-rhodes/10884",
+      "tfrrsId": "7370517"
+    },
+    {
+      "id": "10885",
+      "name": "Gavin Roy",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Eldora, Iowa",
+      "highSchool": "South Hardin",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/gavin-roy/10885",
+      "tfrrsId": "7730364"
+    },
+    {
+      "id": "10886",
+      "name": "Carson Rygh",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Lake Mills, Iowa",
+      "highSchool": "Lake Mills Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carson-rygh/10886",
+      "tfrrsId": "7730365"
+    },
+    {
+      "id": "10887",
+      "name": "Wyatt  Schmidt",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Preston, Iowa",
+      "highSchool": "Northeast",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/wyatt-schmidt/10887",
+      "tfrrsId": "8659713"
+    },
+    {
+      "id": "10888",
+      "name": "Michael  Schmitz",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/michael-schmitz/10888",
+      "tfrrsId": "7370519"
+    },
+    {
+      "id": "10889",
+      "name": "Sam Schmitz",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-schmitz/10889",
+      "tfrrsId": "7730366"
+    },
+    {
+      "id": "10890",
+      "name": "Morgan Shirley-Fairbairn",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Bismarck, N.D.",
+      "highSchool": "Bismarck",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/morgan-shirley-fairbairn/10890",
+      "tfrrsId": "7043077"
+    },
+    {
+      "id": "10920",
+      "name": "Griffin Steiniger",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "St. Paul, Minn.",
+      "highSchool": "Irondale",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/griffin-steiniger/10920",
+      "tfrrsId": "7918376"
+    },
+    {
+      "id": "10891",
+      "name": "Jacob VanderWilt",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Eldora, Iowa",
+      "highSchool": "South Hardin",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-vanderwilt/10891",
+      "tfrrsId": "7370522"
+    },
+    {
+      "id": "10892",
+      "name": "Logan Wisocki-Johnson",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "East Moline, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/logan-wisocki-johnson/10892",
+      "tfrrsId": "7730371"
+    },
+    {
+      "id": "10894",
+      "name": "Noah Worthington",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/noah-worthington/10894",
+      "tfrrsId": "6592836"
+    },
+    {
+      "id": "10895",
+      "name": "Jordan Yessak",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Vinton, Iowa",
+      "highSchool": "Dunkerton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jordan-yessak/10895",
+      "tfrrsId": "6592838"
+    },
+    {
+      "id": "10829",
+      "name": "Brandi Antonio",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Deerfield Beach, Fla.",
+      "highSchool": "Pope John Paul II",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/brandi-antonio/10829",
+      "tfrrsId": "7042947"
+    },
+    {
+      "id": "10851",
+      "name": "Liz Ashing",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Grinnell, Iowa",
+      "highSchool": "Grinnell Community",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/liz-ashing/10851",
+      "tfrrsId": "7918378"
+    },
+    {
+      "id": "10853",
+      "name": "Rylie Bainbridge",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cherokee, Iowa",
+      "highSchool": "Washington",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/rylie-bainbridge/10853",
+      "tfrrsId": "7918379"
+    },
+    {
+      "id": "10830",
+      "name": "Ashley  Bloomquist",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Fairfield, Iowa",
+      "highSchool": "Fairfield",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ashley-bloomquist/10830",
+      "tfrrsId": "7540843"
+    },
+    {
+      "id": "10831",
+      "name": "Trinity Borland",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Bettendorf, Iowa",
+      "highSchool": "Bettendorf",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/trinity-borland/10831",
+      "tfrrsId": "7042949"
+    },
+    {
+      "id": "10832",
+      "name": "Victoria  Breitbach",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "North Buena Vista, Iowa",
+      "highSchool": "Clayton Ridge",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/victoria-breitbach/10832",
+      "tfrrsId": "7540844"
+    },
+    {
+      "id": "10854",
+      "name": "Sophia Broers",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Fontanelle, Iowa",
+      "highSchool": "Nodaway Valley",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/sophia-broers/10854",
+      "tfrrsId": "7918380"
+    },
+    {
+      "id": "10833",
+      "name": "Lexi Brown",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lexi-brown/10833",
+      "tfrrsId": "7699550"
+    },
+    {
+      "id": "10834",
+      "name": "Addy Carlson",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Saint Ansgar, Iowa",
+      "highSchool": "Saint Ansgar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/addy-carlson/10834",
+      "tfrrsId": "7540845"
+    },
+    {
+      "id": "10855",
+      "name": "Alyssa Chyma",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Tama, Iowa",
+      "highSchool": "South Tama County",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/alyssa-chyma/10855",
+      "tfrrsId": "7918381"
+    },
+    {
+      "id": "10835",
+      "name": "Carina Collet",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/carina-collet/10835",
+      "tfrrsId": "6592718"
+    },
+    {
+      "id": "10836",
+      "name": "Miricle Corbo",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Saint Ansgar, Iowa",
+      "highSchool": "Saint Ansgar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/miricle-corbo/10836",
+      "tfrrsId": "7730217"
+    },
+    {
+      "id": "10837",
+      "name": "Katelyn Eilders",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Robins, Iowa",
+      "highSchool": "Linn Mar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/katelyn-eilders/10837",
+      "tfrrsId": "7730219"
+    },
+    {
+      "id": "10838",
+      "name": "Aubrie Fisher",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Ackley, Iowa",
+      "highSchool": "AGWSR",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/aubrie-fisher/10838",
+      "tfrrsId": "7540848"
+    },
+    {
+      "id": "10839",
+      "name": "Carlene Hamilton",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Mesa, Ariz.",
+      "highSchool": "Skyline",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/carlene-hamilton/10839",
+      "tfrrsId": "7540849"
+    },
+    {
+      "id": "10840",
+      "name": "Anna Hertz",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/anna-hertz/10840",
+      "tfrrsId": "7042976"
+    },
+    {
+      "id": "10841",
+      "name": "Shaelyn Hostager",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Hempstead",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/shaelyn-hostager/10841",
+      "tfrrsId": "7730222"
+    },
+    {
+      "id": "10842",
+      "name": "Allegra  Knudson",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Manly, Iowa",
+      "highSchool": "Central Springs",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allegra-knudson/10842",
+      "tfrrsId": "7540851"
+    },
+    {
+      "id": "10852",
+      "name": "Riley Mayer",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Fort Dodge, Iowa",
+      "highSchool": "Saint Edmond",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/riley-mayer/10852",
+      "tfrrsId": "7042980"
+    },
+    {
+      "id": "10857",
+      "name": "Ellie Meyer",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Iowa Falls, Iowa",
+      "highSchool": "Iowa Falls-Alden",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ellie-meyer/10857",
+      "tfrrsId": "7918382"
+    },
+    {
+      "id": "10843",
+      "name": "Jenna Morey",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Spencer, Iowa",
+      "highSchool": "Spencer",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jenna-morey/10843",
+      "tfrrsId": "7730228"
+    },
+    {
+      "id": "10844",
+      "name": "Moriah Morter",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Muscatine, Iowa",
+      "highSchool": "Muscatine",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/moriah-morter/10844",
+      "tfrrsId": "7042982"
+    },
+    {
+      "id": "10845",
+      "name": "Alissa Neubauer",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Swisher, Iowa",
+      "highSchool": "Cedar Rapids Prairie",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/alissa-neubauer/10845",
+      "tfrrsId": "6915225"
+    },
+    {
+      "id": "10846",
+      "name": "Charlie Otto",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Hinsdale, Ill.",
+      "highSchool": "Hinsdale Central",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/charlie-otto/10846",
+      "tfrrsId": "7730230"
+    },
+    {
+      "id": "10847",
+      "name": "Ryleigh Parrack",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Papillion, Neb.",
+      "highSchool": "Papillion-La Vista South",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ryleigh-parrack/10847",
+      "tfrrsId": "7730231"
+    },
+    {
+      "id": "10848",
+      "name": "Natalie  Paulson",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/natalie-paulson/10848",
+      "tfrrsId": "7540852"
+    },
+    {
+      "id": "10849",
+      "name": "Erin Phelan",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Waukesha, Wis.",
+      "highSchool": "Waukesha West",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/erin-phelan/10849",
+      "tfrrsId": "7740369"
+    },
+    {
+      "id": "10850",
+      "name": "Jane Pinkowski",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "La Crosse, Wis.",
+      "highSchool": "Central",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jane-pinkowski/10850",
+      "tfrrsId": "7730233"
+    },
+    {
+      "id": "10858",
+      "name": "Emily Richter",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Hempstead",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/emily-richter/10858",
+      "tfrrsId": "7918383"
+    },
+    {
+      "id": "10859",
+      "name": "Brielle Ruch",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Urbandale",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/brielle-ruch/10859",
+      "tfrrsId": "7918387"
+    }
+  ]
+}
+```
+
+### `src/data/distance_roster_22.json`
+
+```json
+{
+  "generatedAt": "2026-09-13T02:47:11.210Z",
+  "season": 2022,
+  "sources": [
+    "https://go-knights.net/sports/mens-cross-country/roster/2022",
+    "https://go-knights.net/sports/womens-cross-country/roster/2022"
+  ],
+  "athletes": [
+    {
+      "id": "11594",
+      "name": "Josh Arias",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Indio, Calif.",
+      "highSchool": "Shadow Hills",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/josh-arias/11594",
+      "tfrrsId": "7918357"
+    },
+    {
+      "id": "11634",
+      "name": "Seth Bailey",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/seth-bailey/11634",
+      "tfrrsId": "8352840"
+    },
+    {
+      "id": "11595",
+      "name": "Ian Barry",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Fennimore, Wis.",
+      "highSchool": "Fennimore",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ian-barry/11595",
+      "tfrrsId": "7730278"
+    },
+    {
+      "id": "11596",
+      "name": "Luke Benson",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Sioux City, Iowa",
+      "highSchool": "Sioux City North",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/luke-benson/11596",
+      "tfrrsId": "7918377"
+    },
+    {
+      "id": "11597",
+      "name": "Callum Brittain",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "White River Junction, Ver.",
+      "highSchool": "Hartford",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/callum-brittain/11597",
+      "tfrrsId": "7043032"
+    },
+    {
+      "id": "11599",
+      "name": "Christopher Collet",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/christopher-collet/11599",
+      "tfrrsId": "7370510"
+    },
+    {
+      "id": "11600",
+      "name": "Bert Cortez",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Lone Tree, Iowa",
+      "highSchool": "Lone Tree",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/bert-cortez/11600",
+      "tfrrsId": "7918360"
+    },
+    {
+      "id": "11601",
+      "name": "Carter Cruise",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Scotch Grove, Iowa",
+      "highSchool": "Monticello",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carter-cruise/11601",
+      "tfrrsId": "7730328"
+    },
+    {
+      "id": "11602",
+      "name": "Andrew Ellison",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline Senior",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-ellison/11602",
+      "tfrrsId": "7043035"
+    },
+    {
+      "id": "11635",
+      "name": "Shane Erb",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/shane-erb/11635",
+      "tfrrsId": "8352846"
+    },
+    {
+      "id": "11603",
+      "name": "Michael Goodenbour",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/michael-goodenbour/11603",
+      "tfrrsId": "7918361"
+    },
+    {
+      "id": "11604",
+      "name": "Jacob  Green",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Kennedy",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-green/11604",
+      "tfrrsId": "7730339"
+    },
+    {
+      "id": "11605",
+      "name": "Colin Greenwell",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Sioux City, Iowa",
+      "highSchool": "Sioux City North",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/colin-greenwell/11605",
+      "tfrrsId": "7918365"
+    },
+    {
+      "id": "11607",
+      "name": "Joe Hasken",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Miles, Iowa",
+      "highSchool": "Northeast",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/joe-hasken/11607",
+      "tfrrsId": "8017690"
+    },
+    {
+      "id": "11608",
+      "name": "Nick Henry",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cheney, Wash.",
+      "highSchool": "Medical Lake",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nick-henry/11608",
+      "tfrrsId": "7370512"
+    },
+    {
+      "id": "11609",
+      "name": "Paul Hoopes",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Letts, Iowa",
+      "highSchool": "Louisa Muscatine",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/paul-hoopes/11609",
+      "tfrrsId": "7918366"
+    },
+    {
+      "id": "11610",
+      "name": "Aiden Housman",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Wapello, Iowa",
+      "highSchool": "Wapello",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aiden-housman/11610",
+      "tfrrsId": "7730348"
+    },
+    {
+      "id": "11611",
+      "name": "Jon Hutton",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jon-hutton/11611",
+      "tfrrsId": "7918367"
+    },
+    {
+      "id": "11612",
+      "name": "Alec Ille",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Blooming Prairie, Minn.",
+      "highSchool": "Blooming Prairie",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alec-ille/11612",
+      "tfrrsId": "7043039"
+    },
+    {
+      "id": "11613",
+      "name": "Jacob  Keay",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Treynor, Iowa",
+      "highSchool": "Treynor Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-keay/11613",
+      "tfrrsId": "7730350"
+    },
+    {
+      "id": "11614",
+      "name": "Jack Kinzer",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jack-kinzer/11614",
+      "tfrrsId": "7918369"
+    },
+    {
+      "id": "11615",
+      "name": "Nathaniel Knutson",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "New Lenox, Ill.",
+      "highSchool": "Lincoln-Way West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathaniel-knutson/11615",
+      "tfrrsId": "7918371"
+    },
+    {
+      "id": "11616",
+      "name": "Connor Lancial",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Council Bluffs, Iowa",
+      "highSchool": "Lewis Central",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/connor-lancial/11616",
+      "tfrrsId": "7730351"
+    },
+    {
+      "id": "11637",
+      "name": "Eli Larson",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Walker, Iowa",
+      "highSchool": "Center Point-Urbana",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/eli-larson/11637",
+      "tfrrsId": "8352862"
+    },
+    {
+      "id": "11617",
+      "name": "Dalton Martin",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Rock Island, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/dalton-martin/11617",
+      "tfrrsId": "7043060"
+    },
+    {
+      "id": "11618",
+      "name": "Arthur Meyers",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Redlands, Calif.",
+      "highSchool": "Redlands East Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/arthur-meyers/11618",
+      "tfrrsId": "7918373"
+    },
+    {
+      "id": "11619",
+      "name": "Jack Meyers",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Bettendorf, Iowa",
+      "highSchool": "Pleasant Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jack-meyers/11619",
+      "tfrrsId": "7730353"
+    },
+    {
+      "id": "12005",
+      "name": "Roberto Munoz",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "East Moline, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/roberto-munoz/12005"
+    },
+    {
+      "id": "11620",
+      "name": "Ryan  Neubauer",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Swisher, Iowa",
+      "highSchool": "Praire",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ryan-neubauer/11620",
+      "tfrrsId": "7730357"
+    },
+    {
+      "id": "11638",
+      "name": "Cameron Noreen",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Lincoln, Calif.",
+      "highSchool": "Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/cameron-noreen/11638",
+      "tfrrsId": "8271797"
+    },
+    {
+      "id": "11621",
+      "name": "Clay Pehl",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Madrid",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/clay-pehl/11621",
+      "tfrrsId": "7918374"
+    },
+    {
+      "id": "11622",
+      "name": "Andrew Poock",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-poock/11622",
+      "tfrrsId": "7918375"
+    },
+    {
+      "id": "11639",
+      "name": "Owen Pries",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/owen-pries/11639",
+      "tfrrsId": "8352883"
+    },
+    {
+      "id": "11998",
+      "name": "Brendan Rader",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Kennedy",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brendan-rader/11998",
+      "tfrrsId": "8352884"
+    },
+    {
+      "id": "11623",
+      "name": "Brice Rhodes",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Herbert Hoover",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brice-rhodes/11623",
+      "tfrrsId": "7370517"
+    },
+    {
+      "id": "11624",
+      "name": "Gavin Roy",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Eldora, Iowa",
+      "highSchool": "South Hardin",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/gavin-roy/11624",
+      "tfrrsId": "7730364"
+    },
+    {
+      "id": "11625",
+      "name": "Carson Rygh",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Lake Mills, Iowa",
+      "highSchool": "Lake Mills Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carson-rygh/11625",
+      "tfrrsId": "7730365"
+    },
+    {
+      "id": "11640",
+      "name": "Conner Sattler",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Clinton, Iowa",
+      "highSchool": "Clinton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/conner-sattler/11640",
+      "tfrrsId": "8352888"
+    },
+    {
+      "id": "11641",
+      "name": "Sam Schaefer",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "City High",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-schaefer/11641",
+      "tfrrsId": "8271801"
+    },
+    {
+      "id": "11642",
+      "name": "Tyler Schermerhorn",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny Cenntenial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/tyler-schermerhorn/11642",
+      "tfrrsId": "8352891"
+    },
+    {
+      "id": "11626",
+      "name": "Wyatt  Schmidt",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Preston, Iowa",
+      "highSchool": "Northeast",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/wyatt-schmidt/11626",
+      "tfrrsId": "8659713"
+    },
+    {
+      "id": "11627",
+      "name": "Michael  Schmitz",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/michael-schmitz/11627",
+      "tfrrsId": "7370519"
+    },
+    {
+      "id": "11628",
+      "name": "Sam Schmitz",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-schmitz/11628",
+      "tfrrsId": "7730366"
+    },
+    {
+      "id": "11629",
+      "name": "Morgan Shirley-Fairbairn",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Bismarck, N.D.",
+      "highSchool": "Bismarck",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/morgan-shirley-fairbairn/11629",
+      "tfrrsId": "7043077"
+    },
+    {
+      "id": "11643",
+      "name": "Lance Sobaski",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Brighton, Iowa",
+      "highSchool": "Washington",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/lance-sobaski/11643",
+      "tfrrsId": "8352892"
+    },
+    {
+      "id": "11631",
+      "name": "Jacob VanderWilt",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Eldora, Iowa",
+      "highSchool": "South Hardin",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-vanderwilt/11631",
+      "tfrrsId": "7370522"
+    },
+    {
+      "id": "11632",
+      "name": "Logan Wisocki-Johnson",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "East Moline, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/logan-wisocki-johnson/11632",
+      "tfrrsId": "7730371"
+    },
+    {
+      "id": "11645",
+      "name": "Rylie Bainbridge",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Cherokee, Iowa",
+      "highSchool": "Washington",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/rylie-bainbridge/11645",
+      "tfrrsId": "7918379"
+    },
+    {
+      "id": "11646",
+      "name": "Ashley  Bloomquist",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Fairfield, Iowa",
+      "highSchool": "Fairfield",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ashley-bloomquist/11646",
+      "tfrrsId": "7540843"
+    },
+    {
+      "id": "11664",
+      "name": "Lilly Boge",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Farley, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lilly-boge/11664",
+      "tfrrsId": "8272157"
+    },
+    {
+      "id": "11648",
+      "name": "Lexi Brown",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lexi-brown/11648",
+      "tfrrsId": "7699550"
+    },
+    {
+      "id": "11649",
+      "name": "Addy Carlson",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Saint Ansgar, Iowa",
+      "highSchool": "Saint Ansgar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/addy-carlson/11649",
+      "tfrrsId": "7540845"
+    },
+    {
+      "id": "11650",
+      "name": "Alyssa Chyma",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Tama, Iowa",
+      "highSchool": "South Tama County",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/alyssa-chyma/11650",
+      "tfrrsId": "7918381"
+    },
+    {
+      "id": "11651",
+      "name": "Aubrie Fisher",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Ackley, Iowa",
+      "highSchool": "AGWSR",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/aubrie-fisher/11651",
+      "tfrrsId": "7540848"
+    },
+    {
+      "id": "11665",
+      "name": "Kelly Giardina",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Rockford, Ill.",
+      "highSchool": "Rockford Christian",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kelly-giardina/11665",
+      "tfrrsId": "8352850"
+    },
+    {
+      "id": "11652",
+      "name": "Carlene Hamilton",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Mesa, Ariz.",
+      "highSchool": "Skyline",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/carlene-hamilton/11652",
+      "tfrrsId": "7540849"
+    },
+    {
+      "id": "11653",
+      "name": "Shaelyn Hostager",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Hempstead",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/shaelyn-hostager/11653",
+      "tfrrsId": "7730222"
+    },
+    {
+      "id": "11654",
+      "name": "Allegra  Knudson",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Manly, Iowa",
+      "highSchool": "Central Springs",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allegra-knudson/11654",
+      "tfrrsId": "7540851"
+    },
+    {
+      "id": "11668",
+      "name": "Allie Kounkel",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Clear Creek Amana",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allie-kounkel/11668",
+      "tfrrsId": "8272159"
+    },
+    {
+      "id": "11666",
+      "name": "Karle Kramer",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Monticello, Iowa",
+      "highSchool": "Monticello",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/karle-kramer/11666",
+      "tfrrsId": "8352860"
+    },
+    {
+      "id": "11655",
+      "name": "Riley Mayer",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Fort Dodge, Iowa",
+      "highSchool": "Saint Edmond",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/riley-mayer/11655",
+      "tfrrsId": "7042980"
+    },
+    {
+      "id": "11656",
+      "name": "Ellie Meyer",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Iowa Falls, Iowa",
+      "highSchool": "Iowa Falls-Alden",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ellie-meyer/11656",
+      "tfrrsId": "7918382"
+    },
+    {
+      "id": "11669",
+      "name": "Haley Meyer",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "New Albin, Iowa",
+      "highSchool": "Kee",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/haley-meyer/11669",
+      "tfrrsId": "8352865"
+    },
+    {
+      "id": "11657",
+      "name": "Jenna Morey",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Spencer, Iowa",
+      "highSchool": "Spencer",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jenna-morey/11657",
+      "tfrrsId": "7730228"
+    },
+    {
+      "id": "11658",
+      "name": "Ryleigh Parrack",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Papillion, Neb.",
+      "highSchool": "Papillion-La Vista South",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ryleigh-parrack/11658",
+      "tfrrsId": "7730231"
+    },
+    {
+      "id": "11659",
+      "name": "Natalie  Paulson",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/natalie-paulson/11659",
+      "tfrrsId": "7540852"
+    },
+    {
+      "id": "11670",
+      "name": "Lily Peterson",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Hawley, Minn.",
+      "highSchool": "Hawley",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lily-peterson/11670",
+      "tfrrsId": "8352880"
+    },
+    {
+      "id": "11660",
+      "name": "Erin Phelan",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Waukesha, Wis.",
+      "highSchool": "Waukesha West",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/erin-phelan/11660",
+      "tfrrsId": "7740369"
+    },
+    {
+      "id": "11661",
+      "name": "Jane Pinkowski",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "La Crosse, Wis.",
+      "highSchool": "Central",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jane-pinkowski/11661",
+      "tfrrsId": "7730233"
+    },
+    {
+      "id": "11671",
+      "name": "Madison Prier",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/madison-prier/11671",
+      "tfrrsId": "8352882"
+    },
+    {
+      "id": "11662",
+      "name": "Emily Richter",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Hempstead",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/emily-richter/11662",
+      "tfrrsId": "7918383"
+    },
+    {
+      "id": "11663",
+      "name": "Brielle Ruch",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Urbandale",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/brielle-ruch/11663",
+      "tfrrsId": "7918387"
+    },
+    {
+      "id": "11667",
+      "name": "Allie Spredemann",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Sun Prairie, Wis.",
+      "highSchool": "Sun Prairie",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allie-spredemann/11667",
+      "tfrrsId": "8352893"
+    }
+  ]
+}
+```
+
+### `src/data/distance_roster_23.json`
+
+```json
+{
+  "generatedAt": "2026-09-13T02:47:12.945Z",
+  "season": 2023,
+  "sources": [
+    "https://go-knights.net/sports/mens-cross-country/roster/2023",
+    "https://go-knights.net/sports/womens-cross-country/roster/2023"
+  ],
+  "athletes": [
+    {
+      "id": "12896",
+      "name": "Seth Bailey",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/seth-bailey/12896",
+      "tfrrsId": "8352840"
+    },
+    {
+      "id": "12933",
+      "name": "Cooper Bankston",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Baton Rouge, La.",
+      "highSchool": "St. Michael",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/cooper-bankston/12933",
+      "tfrrsId": "8585408"
+    },
+    {
+      "id": "12897",
+      "name": "Ian Barry",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Fennimore, Wis.",
+      "highSchool": "Fennimore",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ian-barry/12897",
+      "tfrrsId": "7730278"
+    },
+    {
+      "id": "12934",
+      "name": "Braden Burger",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Shakopee, Minn.",
+      "highSchool": "Shakopee",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/braden-burger/12934",
+      "tfrrsId": "8585418"
+    },
+    {
+      "id": "12898",
+      "name": "Carson Collet",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carson-collet/12898",
+      "tfrrsId": "7918359"
+    },
+    {
+      "id": "12899",
+      "name": "Christopher Collet",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/christopher-collet/12899",
+      "tfrrsId": "7370510"
+    },
+    {
+      "id": "12900",
+      "name": "Bert Cortez",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Lone Tree, Iowa",
+      "highSchool": "Lone Tree",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/bert-cortez/12900",
+      "tfrrsId": "7918360"
+    },
+    {
+      "id": "12935",
+      "name": "Derek Coulter",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Oquawka, Ill.",
+      "highSchool": "Mercer County",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/derek-coulter/12935",
+      "tfrrsId": "8585423"
+    },
+    {
+      "id": "12901",
+      "name": "Carter Cruise",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Scotch Grove, Iowa",
+      "highSchool": "Monticello",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carter-cruise/12901",
+      "tfrrsId": "7730328"
+    },
+    {
+      "id": "12936",
+      "name": "Hutton Edney",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Huntsville, Texas",
+      "highSchool": "New Waverly",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/hutton-edney/12936",
+      "tfrrsId": "8585412"
+    },
+    {
+      "id": "12902",
+      "name": "Shane Erb",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/shane-erb/12902",
+      "tfrrsId": "8352846"
+    },
+    {
+      "id": "12937",
+      "name": "Chris Fenstermaker",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Pacific Grove, Calif.",
+      "highSchool": "Pacific Grove",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/chris-fenstermaker/12937",
+      "tfrrsId": "8585422"
+    },
+    {
+      "id": "12938",
+      "name": "Dawson Fricke",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Blair, Neb.",
+      "highSchool": "Blair",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/dawson-fricke/12938",
+      "tfrrsId": "8629072"
+    },
+    {
+      "id": "12903",
+      "name": "Michael Goodenbour",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/michael-goodenbour/12903",
+      "tfrrsId": "7918361"
+    },
+    {
+      "id": "12904",
+      "name": "Jacob  Green",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Kennedy",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-green/12904",
+      "tfrrsId": "7730339"
+    },
+    {
+      "id": "12905",
+      "name": "Colin Greenwell",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Sioux City, Iowa",
+      "highSchool": "Sioux City North",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/colin-greenwell/12905",
+      "tfrrsId": "7918365"
+    },
+    {
+      "id": "12939",
+      "name": "Isaiah Hammerand",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Epworth, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/isaiah-hammerand/12939",
+      "tfrrsId": "8585435"
+    },
+    {
+      "id": "12907",
+      "name": "Nick Henry",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cheney, Wash.",
+      "highSchool": "Medical Lake",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nick-henry/12907",
+      "tfrrsId": "7370512"
+    },
+    {
+      "id": "12908",
+      "name": "Paul Hoopes",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Letts, Iowa",
+      "highSchool": "Louisa Muscatine",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/paul-hoopes/12908",
+      "tfrrsId": "7918366"
+    },
+    {
+      "id": "12940",
+      "name": "Alex Horstman",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alex-horstman/12940",
+      "tfrrsId": "8585415"
+    },
+    {
+      "id": "12909",
+      "name": "Aiden Housman",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Wapello, Iowa",
+      "highSchool": "Wapello",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aiden-housman/12909",
+      "tfrrsId": "7730348"
+    },
+    {
+      "id": "12941",
+      "name": "Garrison Hubka",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Spring Valley, Minn.",
+      "highSchool": "Kingsland",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/garrison-hubka/12941",
+      "tfrrsId": "8585420"
+    },
+    {
+      "id": "12932",
+      "name": "Ander Julian",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ander-julian/12932",
+      "tfrrsId": "8585414"
+    },
+    {
+      "id": "12911",
+      "name": "Jacob  Keay",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Treynor, Iowa",
+      "highSchool": "Treynor Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-keay/12911",
+      "tfrrsId": "7730350"
+    },
+    {
+      "id": "12942",
+      "name": "Camden Kilker",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Davenport, Iowa",
+      "highSchool": "Davenport West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/camden-kilker/12942",
+      "tfrrsId": "8585410"
+    },
+    {
+      "id": "12912",
+      "name": "Jack Kinzer",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jack-kinzer/12912",
+      "tfrrsId": "7918369"
+    },
+    {
+      "id": "12943",
+      "name": "Nathan Kinzer",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathan-kinzer/12943",
+      "tfrrsId": "8585417"
+    },
+    {
+      "id": "12913",
+      "name": "Nathaniel Knutson",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "New Lenox, Ill.",
+      "highSchool": "Lincoln-Way West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathaniel-knutson/12913",
+      "tfrrsId": "7918371"
+    },
+    {
+      "id": "12914",
+      "name": "Connor Lancial",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Council Bluffs, Iowa",
+      "highSchool": "Lewis Central",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/connor-lancial/12914",
+      "tfrrsId": "7730351"
+    },
+    {
+      "id": "12915",
+      "name": "Eli Larson",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Walker, Iowa",
+      "highSchool": "Center Point-Urbana",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/eli-larson/12915",
+      "tfrrsId": "8352862"
+    },
+    {
+      "id": "12944",
+      "name": "Aaron Lursen",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Fort Dodge, Iowa",
+      "highSchool": "St. Edmond Catholic",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aaron-lursen/12944",
+      "tfrrsId": "8585409"
+    },
+    {
+      "id": "12945",
+      "name": "Rylan Martin",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/rylan-martin/12945",
+      "tfrrsId": "8585419"
+    },
+    {
+      "id": "12946",
+      "name": "Jonathan Meyer",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Tama, Iowa",
+      "highSchool": "South Tama",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jonathan-meyer/12946",
+      "tfrrsId": "8585436"
+    },
+    {
+      "id": "12916",
+      "name": "Arthur Meyers",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Redlands, Calif.",
+      "highSchool": "Redlands East Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/arthur-meyers/12916",
+      "tfrrsId": "7918373"
+    },
+    {
+      "id": "12917",
+      "name": "Jack Meyers",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Bettendorf, Iowa",
+      "highSchool": "Pleasant Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jack-meyers/12917",
+      "tfrrsId": "7730353"
+    },
+    {
+      "id": "12918",
+      "name": "Ryan  Neubauer",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Swisher, Iowa",
+      "highSchool": "Praire",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ryan-neubauer/12918",
+      "tfrrsId": "7730357"
+    },
+    {
+      "id": "12919",
+      "name": "Cameron Noreen",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Lincoln, Calif.",
+      "highSchool": "Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/cameron-noreen/12919",
+      "tfrrsId": "8271797"
+    },
+    {
+      "id": "12920",
+      "name": "Clay Pehl",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Madrid",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/clay-pehl/12920",
+      "tfrrsId": "7918374"
+    },
+    {
+      "id": "12921",
+      "name": "Andrew Poock",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-poock/12921",
+      "tfrrsId": "7918375"
+    },
+    {
+      "id": "12922",
+      "name": "Owen Pries",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/owen-pries/12922",
+      "tfrrsId": "8352883"
+    },
+    {
+      "id": "12923",
+      "name": "Brendan Rader",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Kennedy",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brendan-rader/12923",
+      "tfrrsId": "8352884"
+    },
+    {
+      "id": "12947",
+      "name": "Jakob Regennitter",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jakob-regennitter/12947",
+      "tfrrsId": "8585421"
+    },
+    {
+      "id": "12924",
+      "name": "Gavin Roy",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Eldora, Iowa",
+      "highSchool": "South Hardin",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/gavin-roy/12924",
+      "tfrrsId": "7730364"
+    },
+    {
+      "id": "12925",
+      "name": "Carson Rygh",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Lake Mills, Iowa",
+      "highSchool": "Lake Mills Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carson-rygh/12925",
+      "tfrrsId": "7730365"
+    },
+    {
+      "id": "12926",
+      "name": "Conner Sattler",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Clinton, Iowa",
+      "highSchool": "Clinton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/conner-sattler/12926",
+      "tfrrsId": "8352888"
+    },
+    {
+      "id": "12927",
+      "name": "Tyler Schermerhorn",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny Cenntenial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/tyler-schermerhorn/12927",
+      "tfrrsId": "8352891"
+    },
+    {
+      "id": "12928",
+      "name": "Sam Schmitz",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-schmitz/12928",
+      "tfrrsId": "7730366"
+    },
+    {
+      "id": "12929",
+      "name": "Lance Sobaski",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Brighton, Iowa",
+      "highSchool": "Washington",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/lance-sobaski/12929",
+      "tfrrsId": "8352892"
+    },
+    {
+      "id": "12948",
+      "name": "Caleb Stiles",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Juneau, Alaska",
+      "highSchool": "Thunder Mountain",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/caleb-stiles/12948",
+      "tfrrsId": "8585411"
+    },
+    {
+      "id": "12949",
+      "name": "Zion Taylor",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Aurora, Colo.",
+      "highSchool": "Regis Jesuit",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/zion-taylor/12949",
+      "tfrrsId": "8585416"
+    },
+    {
+      "id": "12930",
+      "name": "Jacob VanderWilt",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Eldora, Iowa",
+      "highSchool": "South Hardin",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-vanderwilt/12930",
+      "tfrrsId": "7370522"
+    },
+    {
+      "id": "12892",
+      "name": "Jade Anderson",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Des Moines Lincoln",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jade-anderson/12892",
+      "tfrrsId": "8700372"
+    },
+    {
+      "id": "12872",
+      "name": "Rylie Bainbridge",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Cherokee, Iowa",
+      "highSchool": "Washington",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/rylie-bainbridge/12872",
+      "tfrrsId": "7918379"
+    },
+    {
+      "id": "12873",
+      "name": "Ashley  Bloomquist",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Fairfield, Iowa",
+      "highSchool": "Fairfield",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ashley-bloomquist/12873",
+      "tfrrsId": "7540843"
+    },
+    {
+      "id": "12874",
+      "name": "Lilly Boge",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Farley, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lilly-boge/12874",
+      "tfrrsId": "8272157"
+    },
+    {
+      "id": "12875",
+      "name": "Lexi Brown",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lexi-brown/12875",
+      "tfrrsId": "7699550"
+    },
+    {
+      "id": "12876",
+      "name": "Addy Carlson",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Saint Ansgar, Iowa",
+      "highSchool": "Saint Ansgar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/addy-carlson/12876",
+      "tfrrsId": "7540845"
+    },
+    {
+      "id": "12893",
+      "name": "Morgan Engel",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Syosset, N.Y.",
+      "highSchool": "Syosset",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/morgan-engel/12893",
+      "tfrrsId": "8700379"
+    },
+    {
+      "id": "12877",
+      "name": "Aubrie Fisher",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Ackley, Iowa",
+      "highSchool": "AGWSR",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/aubrie-fisher/12877",
+      "tfrrsId": "7540848"
+    },
+    {
+      "id": "12878",
+      "name": "Kelly Giardina",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Rockford, Ill.",
+      "highSchool": "Rockford Christian",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kelly-giardina/12878",
+      "tfrrsId": "8352850"
+    },
+    {
+      "id": "12879",
+      "name": "Shaelyn Hostager",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Hempstead",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/shaelyn-hostager/12879",
+      "tfrrsId": "7730222"
+    },
+    {
+      "id": "12894",
+      "name": "Ella Johnson",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Prescott, Wis.",
+      "highSchool": "Prescott",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ella-johnson/12894",
+      "tfrrsId": "8700382"
+    },
+    {
+      "id": "12880",
+      "name": "Allie Kounkel",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Clear Creek Amana",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allie-kounkel/12880",
+      "tfrrsId": "8272159"
+    },
+    {
+      "id": "12881",
+      "name": "Karle Kramer",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Monticello, Iowa",
+      "highSchool": "Monticello",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/karle-kramer/12881",
+      "tfrrsId": "8352860"
+    },
+    {
+      "id": "12882",
+      "name": "Ellie Meyer",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Iowa Falls, Iowa",
+      "highSchool": "Iowa Falls-Alden",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ellie-meyer/12882",
+      "tfrrsId": "7918382"
+    },
+    {
+      "id": "12883",
+      "name": "Haley Meyer",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "New Albin, Iowa",
+      "highSchool": "Kee",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/haley-meyer/12883",
+      "tfrrsId": "8352865"
+    },
+    {
+      "id": "12884",
+      "name": "Jenna Morey",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Spencer, Iowa",
+      "highSchool": "Spencer",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jenna-morey/12884",
+      "tfrrsId": "7730228"
+    },
+    {
+      "id": "12885",
+      "name": "Ryleigh Parrack",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Papillion, Neb.",
+      "highSchool": "Papillion-La Vista South",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ryleigh-parrack/12885",
+      "tfrrsId": "7730231"
+    },
+    {
+      "id": "12886",
+      "name": "Lily Peterson",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Hawley, Minn.",
+      "highSchool": "Hawley",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lily-peterson/12886",
+      "tfrrsId": "8352880"
+    },
+    {
+      "id": "12887",
+      "name": "Erin Phelan",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Waukesha, Wis.",
+      "highSchool": "Waukesha West",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/erin-phelan/12887",
+      "tfrrsId": "7740369"
+    },
+    {
+      "id": "12888",
+      "name": "Madison Prier",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/madison-prier/12888",
+      "tfrrsId": "8352882"
+    },
+    {
+      "id": "12889",
+      "name": "Emily Richter",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Hempstead",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/emily-richter/12889",
+      "tfrrsId": "7918383"
+    },
+    {
+      "id": "12891",
+      "name": "Allie Spredemann",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Sun Prairie, Wis.",
+      "highSchool": "Sun Prairie",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allie-spredemann/12891",
+      "tfrrsId": "8352893"
+    },
+    {
+      "id": "12895",
+      "name": "Cali Trygstad",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Clive, Iowa",
+      "highSchool": "West Des Moines Valley",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/cali-trygstad/12895",
+      "tfrrsId": "8700393"
+    }
+  ]
+}
+```
+
+### `src/data/distance_roster_24.json`
+
+```json
+{
+  "generatedAt": "2026-09-13T02:47:14.704Z",
+  "season": 2024,
+  "sources": [
+    "https://go-knights.net/sports/mens-cross-country/roster/2024",
+    "https://go-knights.net/sports/womens-cross-country/roster/2024"
+  ],
+  "athletes": [
+    {
+      "id": "14949",
+      "name": "Ahmed Aldamak",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ahmed-aldamak/14949",
+      "tfrrsId": "8896801"
+    },
+    {
+      "id": "14950",
+      "name": "AJ Angus",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aj-angus/14950",
+      "tfrrsId": "8896799"
+    },
+    {
+      "id": "14906",
+      "name": "Seth Bailey",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/seth-bailey/14906",
+      "tfrrsId": "8352840"
+    },
+    {
+      "id": "14907",
+      "name": "Cooper Bankston",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Baton Rouge, La.",
+      "highSchool": "St. Michael",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/cooper-bankston/14907",
+      "tfrrsId": "8585408"
+    },
+    {
+      "id": "14951",
+      "name": "Ayden Buchanan",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Santa Clarita, Calif.",
+      "highSchool": "Valencia",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ayden-buchanan/14951",
+      "tfrrsId": "8896802"
+    },
+    {
+      "id": "14908",
+      "name": "Braden Burger",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Shakopee, Minn.",
+      "highSchool": "Shakopee",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/braden-burger/14908",
+      "tfrrsId": "8585418"
+    },
+    {
+      "id": "14952",
+      "name": "Marcus Camacho",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Xavier",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/marcus-camacho/14952",
+      "tfrrsId": "8896789"
+    },
+    {
+      "id": "14953",
+      "name": "Cooper Cook",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/cooper-cook/14953",
+      "tfrrsId": "8896794"
+    },
+    {
+      "id": "14909",
+      "name": "Bert Cortez",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Lone Tree, Iowa",
+      "highSchool": "Lone Tree",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/bert-cortez/14909",
+      "tfrrsId": "7918360"
+    },
+    {
+      "id": "14910",
+      "name": "Derek Coulter",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Oquawka, Ill.",
+      "highSchool": "Mercer County",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/derek-coulter/14910",
+      "tfrrsId": "8585423"
+    },
+    {
+      "id": "14911",
+      "name": "Carter Cruise",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Scotch Grove, Iowa",
+      "highSchool": "Monticello",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carter-cruise/14911",
+      "tfrrsId": "7730328"
+    },
+    {
+      "id": "14954",
+      "name": "Aidan Decker",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aidan-decker/14954",
+      "tfrrsId": "8896803"
+    },
+    {
+      "id": "14912",
+      "name": "Hutton Edney",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Huntsville, Texas",
+      "highSchool": "New Waverly",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/hutton-edney/14912",
+      "tfrrsId": "8585412"
+    },
+    {
+      "id": "14913",
+      "name": "Shane Erb",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/shane-erb/14913",
+      "tfrrsId": "8352846"
+    },
+    {
+      "id": "14914",
+      "name": "Chris Fenstermaker",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Pacific Grove, Calif.",
+      "highSchool": "Pacific Grove",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/chris-fenstermaker/14914",
+      "tfrrsId": "8585422"
+    },
+    {
+      "id": "14915",
+      "name": "Dawson Fricke",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Blair, Neb.",
+      "highSchool": "Blair",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/dawson-fricke/14915",
+      "tfrrsId": "8629072"
+    },
+    {
+      "id": "14916",
+      "name": "Michael Goodenbour",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/michael-goodenbour/14916",
+      "tfrrsId": "7918361"
+    },
+    {
+      "id": "14917",
+      "name": "Jacob  Green",
+      "team": "mens-cross-country",
+      "year": "5th",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Kennedy",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-green/14917",
+      "tfrrsId": "7730339"
+    },
+    {
+      "id": "14918",
+      "name": "Colin Greenwell",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Sioux City, Iowa",
+      "highSchool": "Sioux City North",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/colin-greenwell/14918",
+      "tfrrsId": "7918365"
+    },
+    {
+      "id": "14919",
+      "name": "Isaiah Hammerand",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Epworth, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/isaiah-hammerand/14919",
+      "tfrrsId": "8585435"
+    },
+    {
+      "id": "14955",
+      "name": "Keagan Hennessey",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Orchard, Iowa",
+      "highSchool": "Osage",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/keagan-hennessey/14955",
+      "tfrrsId": "8896805"
+    },
+    {
+      "id": "14920",
+      "name": "Paul Hoopes",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Letts, Iowa",
+      "highSchool": "Louisa Muscatine",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/paul-hoopes/14920",
+      "tfrrsId": "7918366"
+    },
+    {
+      "id": "14921",
+      "name": "Alex Horstman",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alex-horstman/14921",
+      "tfrrsId": "8585415"
+    },
+    {
+      "id": "14922",
+      "name": "Aiden Housman",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Wapello, Iowa",
+      "highSchool": "Wapello",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aiden-housman/14922",
+      "tfrrsId": "7730348"
+    },
+    {
+      "id": "14923",
+      "name": "Garrison Hubka",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Spring Valley, Minn.",
+      "highSchool": "Kingsland",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/garrison-hubka/14923",
+      "tfrrsId": "8585420"
+    },
+    {
+      "id": "14956",
+      "name": "Wes Hulseberg",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Williamsburg, Iowa",
+      "highSchool": "Williamsburg",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/wes-hulseberg/14956",
+      "tfrrsId": "8896796"
+    },
+    {
+      "id": "14957",
+      "name": "Justus Hundley",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Vacaville, Calif.",
+      "highSchool": "Vacaville",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/justus-hundley/14957",
+      "tfrrsId": "8896797"
+    },
+    {
+      "id": "14924",
+      "name": "Ander Julian",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ander-julian/14924",
+      "tfrrsId": "8585414"
+    },
+    {
+      "id": "14925",
+      "name": "Camden Kilker",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Davenport, Iowa",
+      "highSchool": "Davenport West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/camden-kilker/14925",
+      "tfrrsId": "8585410"
+    },
+    {
+      "id": "14926",
+      "name": "Jack Kinzer",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jack-kinzer/14926",
+      "tfrrsId": "7918369"
+    },
+    {
+      "id": "14927",
+      "name": "Nathan Kinzer",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathan-kinzer/14927",
+      "tfrrsId": "8585417"
+    },
+    {
+      "id": "14958",
+      "name": "Grant Koehnen",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Sherburn, Minn.",
+      "highSchool": "Martin County",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/grant-koehnen/14958",
+      "tfrrsId": "8896806"
+    },
+    {
+      "id": "15407",
+      "name": "Caden Kueker",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Waverly, Iowa",
+      "highSchool": "Waverly-Shell Rock",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/caden-kueker/15407",
+      "tfrrsId": "8896804"
+    },
+    {
+      "id": "15405",
+      "name": "Riley Kuhn",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Linn Mar",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/riley-kuhn/15405",
+      "tfrrsId": "9445711"
+    },
+    {
+      "id": "14928",
+      "name": "Connor Lancial",
+      "team": "mens-cross-country",
+      "year": "5th",
+      "hometown": "Council Bluffs, Iowa",
+      "highSchool": "Lewis Central",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/connor-lancial/14928",
+      "tfrrsId": "7730351"
+    },
+    {
+      "id": "14929",
+      "name": "Eli Larson",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Walker, Iowa",
+      "highSchool": "Center Point-Urbana",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/eli-larson/14929",
+      "tfrrsId": "8352862"
+    },
+    {
+      "id": "14959",
+      "name": "Ethan Loutzenheiser",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Madrid, Iowa",
+      "highSchool": "Madrid",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ethan-loutzenheiser/14959",
+      "tfrrsId": "8896807"
+    },
+    {
+      "id": "14930",
+      "name": "Aaron Lursen",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Fort Dodge, Iowa",
+      "highSchool": "St. Edmond Catholic",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aaron-lursen/14930",
+      "tfrrsId": "8585409"
+    },
+    {
+      "id": "14960",
+      "name": "Kaden Lynch",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "",
+      "highSchool": "",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/kaden-lynch/14960",
+      "tfrrsId": "8896791"
+    },
+    {
+      "id": "14931",
+      "name": "Rylan Martin",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/rylan-martin/14931",
+      "tfrrsId": "8585419"
+    },
+    {
+      "id": "14932",
+      "name": "Jonathan Meyer",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Tama, Iowa",
+      "highSchool": "South Tama",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jonathan-meyer/14932",
+      "tfrrsId": "8585436"
+    },
+    {
+      "id": "14933",
+      "name": "Arthur Meyers",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Redlands, Calif.",
+      "highSchool": "Redlands East Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/arthur-meyers/14933",
+      "tfrrsId": "7918373"
+    },
+    {
+      "id": "14961",
+      "name": "Nathan Moore",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Wylie, Tex.",
+      "highSchool": "Wylie",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathan-moore/14961",
+      "tfrrsId": "8896790"
+    },
+    {
+      "id": "14962",
+      "name": "Drew Moser",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Clinton, Ill.",
+      "highSchool": "Clinton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/drew-moser/14962",
+      "tfrrsId": "8896795"
+    },
+    {
+      "id": "14935",
+      "name": "Ryan  Neubauer",
+      "team": "mens-cross-country",
+      "year": "5th",
+      "hometown": "Swisher, Iowa",
+      "highSchool": "Praire",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ryan-neubauer/14935",
+      "tfrrsId": "7730357"
+    },
+    {
+      "id": "14963",
+      "name": "Ben Neville",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Urbandale, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ben-neville/14963",
+      "tfrrsId": "8896800"
+    },
+    {
+      "id": "14936",
+      "name": "Cameron Noreen",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Lincoln, Calif.",
+      "highSchool": "Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/cameron-noreen/14936",
+      "tfrrsId": "8271797"
+    },
+    {
+      "id": "15406",
+      "name": "Brendan Owens",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny Centennial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brendan-owens/15406",
+      "tfrrsId": "8896793"
+    },
+    {
+      "id": "14937",
+      "name": "Clay Pehl",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Madrid",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/clay-pehl/14937",
+      "tfrrsId": "7918374"
+    },
+    {
+      "id": "14938",
+      "name": "Andrew Poock",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-poock/14938",
+      "tfrrsId": "7918375"
+    },
+    {
+      "id": "14964",
+      "name": "Alex Pries",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alex-pries/14964",
+      "tfrrsId": "8896792"
+    },
+    {
+      "id": "14939",
+      "name": "Owen Pries",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/owen-pries/14939",
+      "tfrrsId": "8352883"
+    },
+    {
+      "id": "14940",
+      "name": "Brendan Rader",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Kennedy",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brendan-rader/14940",
+      "tfrrsId": "8352884"
+    },
+    {
+      "id": "14941",
+      "name": "Jakob Regennitter",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jakob-regennitter/14941",
+      "tfrrsId": "8585421"
+    },
+    {
+      "id": "14942",
+      "name": "Gavin Roy",
+      "team": "mens-cross-country",
+      "year": "5th",
+      "hometown": "Eldora, Iowa",
+      "highSchool": "South Hardin",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/gavin-roy/14942",
+      "tfrrsId": "7730364"
+    },
+    {
+      "id": "14943",
+      "name": "Conner Sattler",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Clinton, Iowa",
+      "highSchool": "Clinton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/conner-sattler/14943",
+      "tfrrsId": "8352888"
+    },
+    {
+      "id": "14944",
+      "name": "Tyler Schermerhorn",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny Cenntenial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/tyler-schermerhorn/14944",
+      "tfrrsId": "8352891"
+    },
+    {
+      "id": "15416",
+      "name": "Sawyer Schmidt",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Preston, Iowa",
+      "highSchool": "Northeast",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sawyer-schmidt/15416",
+      "tfrrsId": "8896826"
+    },
+    {
+      "id": "14945",
+      "name": "Sam Schmitz",
+      "team": "mens-cross-country",
+      "year": "5th",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-schmitz/14945",
+      "tfrrsId": "7730366"
+    },
+    {
+      "id": "14965",
+      "name": "Andrew Smith",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Glenwood, Iowa",
+      "highSchool": "Glenwood",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-smith/14965",
+      "tfrrsId": "8896788"
+    },
+    {
+      "id": "14946",
+      "name": "Lance Sobaski",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Brighton, Iowa",
+      "highSchool": "Washington",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/lance-sobaski/14946",
+      "tfrrsId": "8352892"
+    },
+    {
+      "id": "14947",
+      "name": "Caleb Stiles",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Juneau, Alaska",
+      "highSchool": "Thunder Mountain",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/caleb-stiles/14947",
+      "tfrrsId": "8585411"
+    },
+    {
+      "id": "14948",
+      "name": "Zion Taylor",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Aurora, Colo.",
+      "highSchool": "Regis Jesuit",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/zion-taylor/14948",
+      "tfrrsId": "8585416"
+    },
+    {
+      "id": "14966",
+      "name": "Clay Warson",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Madrid, Iowa",
+      "highSchool": "Madrid",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/clay-warson/14966",
+      "tfrrsId": "8896798"
+    },
+    {
+      "id": "14967",
+      "name": "Solomon Zaugg",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Mediapolis, Iowa",
+      "highSchool": "Mediapolis",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/solomon-zaugg/14967",
+      "tfrrsId": "8896808"
+    },
+    {
+      "id": "14874",
+      "name": "Jade Anderson",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Des Moines Lincoln",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jade-anderson/14874",
+      "tfrrsId": "8700372"
+    },
+    {
+      "id": "14889",
+      "name": "Abbey Angus",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/abbey-angus/14889",
+      "tfrrsId": "8896839"
+    },
+    {
+      "id": "14890",
+      "name": "Cori Atten",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cuba City, Wis.",
+      "highSchool": "Cuba City",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/cori-atten/14890",
+      "tfrrsId": "8896836"
+    },
+    {
+      "id": "14875",
+      "name": "Rylie Bainbridge",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cherokee, Iowa",
+      "highSchool": "Washington",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/rylie-bainbridge/14875",
+      "tfrrsId": "7918379"
+    },
+    {
+      "id": "14891",
+      "name": "Sydney Bochmann",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Waverly, Iowa",
+      "highSchool": "Waverly-Shell Rock",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/sydney-bochmann/14891",
+      "tfrrsId": "8896838"
+    },
+    {
+      "id": "14876",
+      "name": "Lilly Boge",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Farley, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lilly-boge/14876",
+      "tfrrsId": "8272157"
+    },
+    {
+      "id": "14892",
+      "name": "Nadia Bowden",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "New Lenox, Ill.",
+      "highSchool": "Lincoln Way Central",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/nadia-bowden/14892",
+      "tfrrsId": "8896829"
+    },
+    {
+      "id": "14893",
+      "name": "Tatum Buenning",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Evergreen, Colo.",
+      "highSchool": "Evergreen",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/tatum-buenning/14893",
+      "tfrrsId": "8896843"
+    },
+    {
+      "id": "14896",
+      "name": "Maria Colette Choi Lei",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "",
+      "highSchool": "",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/maria-colette-choi-lei/14896",
+      "tfrrsId": "9017626"
+    },
+    {
+      "id": "14877",
+      "name": "Morgan Engel",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Syosset, N.Y.",
+      "highSchool": "Syosset",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/morgan-engel/14877",
+      "tfrrsId": "8700379"
+    },
+    {
+      "id": "14878",
+      "name": "Kelly Giardina",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Rockford, Ill.",
+      "highSchool": "Rockford Christian",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kelly-giardina/14878",
+      "tfrrsId": "8352850"
+    },
+    {
+      "id": "14894",
+      "name": "Makenna Hetrick",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Washington",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/makenna-hetrick/14894",
+      "tfrrsId": "8896830"
+    },
+    {
+      "id": "14895",
+      "name": "Sunny Horner",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "New Waverly, Texas",
+      "highSchool": "New Waverly",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/sunny-horner/14895",
+      "tfrrsId": "8896842"
+    },
+    {
+      "id": "14879",
+      "name": "Ella Johnson",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Prescott, Wis.",
+      "highSchool": "Prescott",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ella-johnson/14879",
+      "tfrrsId": "8700382"
+    },
+    {
+      "id": "14880",
+      "name": "Allie Kounkel",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Clear Creek Amana",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allie-kounkel/14880",
+      "tfrrsId": "8272159"
+    },
+    {
+      "id": "14881",
+      "name": "Karle Kramer",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Monticello, Iowa",
+      "highSchool": "Monticello",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/karle-kramer/14881",
+      "tfrrsId": "8352860"
+    },
+    {
+      "id": "14897",
+      "name": "Lydia Maas",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Hampton, Iowa",
+      "highSchool": "Hampton-Dumont",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lydia-maas/14897",
+      "tfrrsId": "8896833"
+    },
+    {
+      "id": "14899",
+      "name": "Maddie Merna",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Apex, N.C.",
+      "highSchool": "Middle Creek",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/maddie-merna/14899",
+      "tfrrsId": "8896841"
+    },
+    {
+      "id": "14882",
+      "name": "Ellie Meyer",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Iowa Falls, Iowa",
+      "highSchool": "Iowa Falls-Alden",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ellie-meyer/14882",
+      "tfrrsId": "7918382"
+    },
+    {
+      "id": "14883",
+      "name": "Haley Meyer",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "New Albin, Iowa",
+      "highSchool": "Kee",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/haley-meyer/14883",
+      "tfrrsId": "8352865"
+    },
+    {
+      "id": "14900",
+      "name": "Audra Mulholland",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Mason City, Iowa",
+      "highSchool": "Mason City",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/audra-mulholland/14900",
+      "tfrrsId": "8896831"
+    },
+    {
+      "id": "14884",
+      "name": "Ryleigh Parrack",
+      "team": "womens-cross-country",
+      "year": "5th",
+      "hometown": "Papillion, Neb.",
+      "highSchool": "Papillion-La Vista South",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ryleigh-parrack/14884",
+      "tfrrsId": "7730231"
+    },
+    {
+      "id": "14902",
+      "name": "Zaya Peirce",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Lewistown, Ill.",
+      "highSchool": "Lewistown",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/zaya-peirce/14902",
+      "tfrrsId": "8896844"
+    },
+    {
+      "id": "14885",
+      "name": "Lily Peterson",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Hawley, Minn.",
+      "highSchool": "Hawley",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lily-peterson/14885",
+      "tfrrsId": "8352880"
+    },
+    {
+      "id": "14901",
+      "name": "Megan Pickar",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "New Hampton, Iowa",
+      "highSchool": "New Hampton",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/megan-pickar/14901",
+      "tfrrsId": "8896840"
+    },
+    {
+      "id": "15417",
+      "name": "Anna Quillin",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Solon, Iowa",
+      "highSchool": "Solon",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/anna-quillin/15417",
+      "tfrrsId": "8904663"
+    },
+    {
+      "id": "15418",
+      "name": "Hannah Ramsey",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/hannah-ramsey/15418",
+      "tfrrsId": "8700388"
+    },
+    {
+      "id": "14886",
+      "name": "Emily Richter",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Hempstead",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/emily-richter/14886",
+      "tfrrsId": "7918383"
+    },
+    {
+      "id": "14903",
+      "name": "Kamryn Sherwood",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Danville, Iowa",
+      "highSchool": "Danville",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kamryn-sherwood/14903",
+      "tfrrsId": "8896835"
+    },
+    {
+      "id": "14887",
+      "name": "Allie Spredemann",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Sun Prairie, Wis.",
+      "highSchool": "Sun Prairie",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allie-spredemann/14887",
+      "tfrrsId": "8352893"
+    },
+    {
+      "id": "14888",
+      "name": "Cali Trygstad",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Clive, Iowa",
+      "highSchool": "West Des Moines Valley",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/cali-trygstad/14888",
+      "tfrrsId": "8700393"
+    },
+    {
+      "id": "14904",
+      "name": "Ava Vance",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Huxley, Iowa",
+      "highSchool": "Ballard",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ava-vance/14904",
+      "tfrrsId": "8896837"
+    },
+    {
+      "id": "14905",
+      "name": "Grace Vortherms",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Austin, Minn.",
+      "highSchool": "Austin",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/grace-vortherms/14905",
+      "tfrrsId": "8896832"
+    }
+  ]
+}
+```
+
+### `src/data/distance_roster_25.json`
+
+```json
+{
+  "generatedAt": "2026-09-13T02:47:16.463Z",
+  "season": 2025,
+  "sources": [
+    "https://go-knights.net/sports/mens-cross-country/roster/2025",
+    "https://go-knights.net/sports/womens-cross-country/roster/2025"
+  ],
+  "athletes": [
+    {
+      "id": "15983",
+      "name": "Nathan Ahern",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cresco, Iowa",
+      "highSchool": "Crestwood",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathan-ahern/15983",
+      "tfrrsId": "9200680"
+    },
+    {
+      "id": "15937",
+      "name": "Ahmed Aldamak",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ahmed-aldamak/15937",
+      "tfrrsId": "8896801"
+    },
+    {
+      "id": "15938",
+      "name": "AJ Angus",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aj-angus/15938",
+      "tfrrsId": "8896799"
+    },
+    {
+      "id": "15939",
+      "name": "Seth Bailey",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/seth-bailey/15939",
+      "tfrrsId": "8352840"
+    },
+    {
+      "id": "15940",
+      "name": "Cooper Bankston",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Baton Rouge, La.",
+      "highSchool": "St. Michael",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/cooper-bankston/15940",
+      "tfrrsId": "8585408"
+    },
+    {
+      "id": "15984",
+      "name": "Ethan Boston",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Linn-Mar",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ethan-boston/15984",
+      "tfrrsId": "9200679"
+    },
+    {
+      "id": "15941",
+      "name": "Ayden Buchanan",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Santa Clarita, Calif.",
+      "highSchool": "Valencia",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ayden-buchanan/15941",
+      "tfrrsId": "8896802"
+    },
+    {
+      "id": "15942",
+      "name": "Braden Burger",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Shakopee, Minn.",
+      "highSchool": "Shakopee",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/braden-burger/15942",
+      "tfrrsId": "8585418"
+    },
+    {
+      "id": "15995",
+      "name": "Brody Burr",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "West Des Moines, Iowa",
+      "highSchool": "Dowling Catholic",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brody-burr/15995",
+      "tfrrsId": "9200673"
+    },
+    {
+      "id": "15943",
+      "name": "Marcus Camacho",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Xavier",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/marcus-camacho/15943",
+      "tfrrsId": "8896789"
+    },
+    {
+      "id": "15944",
+      "name": "Cooper Cook",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/cooper-cook/15944",
+      "tfrrsId": "8896794"
+    },
+    {
+      "id": "15998",
+      "name": "Evan Cook",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Decatur, Ill.",
+      "highSchool": "Saint Teresa",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/evan-cook/15998",
+      "tfrrsId": "9200669"
+    },
+    {
+      "id": "15945",
+      "name": "Derek Coulter",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Oquawka, Ill.",
+      "highSchool": "Mercer County",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/derek-coulter/15945",
+      "tfrrsId": "8585423"
+    },
+    {
+      "id": "15985",
+      "name": "Mason Coulter",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Oquawka, Ill.",
+      "highSchool": "Mercer County",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/mason-coulter/15985",
+      "tfrrsId": "9200666"
+    },
+    {
+      "id": "15946",
+      "name": "Aidan Decker",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aidan-decker/15946",
+      "tfrrsId": "8896803"
+    },
+    {
+      "id": "15947",
+      "name": "Hutton Edney",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Huntsville, Texas",
+      "highSchool": "New Waverly",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/hutton-edney/15947",
+      "tfrrsId": "8585412"
+    },
+    {
+      "id": "15948",
+      "name": "Chris Fenstermaker",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Pacific Grove, Calif.",
+      "highSchool": "Pacific Grove",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/chris-fenstermaker/15948",
+      "tfrrsId": "8585422"
+    },
+    {
+      "id": "15949",
+      "name": "Dawson Fricke",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Blair, Neb.",
+      "highSchool": "Blair",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/dawson-fricke/15949",
+      "tfrrsId": "8629072"
+    },
+    {
+      "id": "15986",
+      "name": "Gavin Grunhovd",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Buffalo Center, Iowa",
+      "highSchool": "North Iowa",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/gavin-grunhovd/15986",
+      "tfrrsId": "9200675"
+    },
+    {
+      "id": "15987",
+      "name": "Luke  Hagenberg",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Clive, Iowa",
+      "highSchool": "Des Moines Christian",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/luke-hagenberg/15987",
+      "tfrrsId": "9200674"
+    },
+    {
+      "id": "15951",
+      "name": "Isaiah Hammerand",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Epworth, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/isaiah-hammerand/15951",
+      "tfrrsId": "8585435"
+    },
+    {
+      "id": "15988",
+      "name": "Ryan Heden",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Bettendorf, Iowa",
+      "highSchool": "Bettendorf",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ryan-heden/15988",
+      "tfrrsId": "9200665"
+    },
+    {
+      "id": "15996",
+      "name": "Gage Heyne",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "North English, Iowa",
+      "highSchool": "English Valleys",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/gage-heyne/15996",
+      "tfrrsId": "9200670"
+    },
+    {
+      "id": "15952",
+      "name": "Alex Horstman",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alex-horstman/15952",
+      "tfrrsId": "8585415"
+    },
+    {
+      "id": "15953",
+      "name": "Garrison Hubka",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Spring Valley, Minn.",
+      "highSchool": "Kingsland",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/garrison-hubka/15953",
+      "tfrrsId": "8585420"
+    },
+    {
+      "id": "15954",
+      "name": "Wes Hulseberg",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Williamsburg, Iowa",
+      "highSchool": "Williamsburg",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/wes-hulseberg/15954",
+      "tfrrsId": "8896796"
+    },
+    {
+      "id": "15955",
+      "name": "Ander Julian",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ander-julian/15955",
+      "tfrrsId": "8585414"
+    },
+    {
+      "id": "15956",
+      "name": "Camden Kilker",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Davenport, Iowa",
+      "highSchool": "Davenport West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/camden-kilker/15956",
+      "tfrrsId": "8585410"
+    },
+    {
+      "id": "15957",
+      "name": "Jack Kinzer",
+      "team": "mens-cross-country",
+      "year": "5th",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jack-kinzer/15957",
+      "tfrrsId": "7918369"
+    },
+    {
+      "id": "15958",
+      "name": "Nathan Kinzer",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathan-kinzer/15958",
+      "tfrrsId": "8585417"
+    },
+    {
+      "id": "15960",
+      "name": "Caden Kueker",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Waverly, Iowa",
+      "highSchool": "Waverly-Shell Rock",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/caden-kueker/15960",
+      "tfrrsId": "8896804"
+    },
+    {
+      "id": "15961",
+      "name": "Eli Larson",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Walker, Iowa",
+      "highSchool": "Center Point-Urbana",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/eli-larson/15961",
+      "tfrrsId": "8352862"
+    },
+    {
+      "id": "15962",
+      "name": "Aaron Lursen",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Fort Dodge, Iowa",
+      "highSchool": "St. Edmond Catholic",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aaron-lursen/15962",
+      "tfrrsId": "8585409"
+    },
+    {
+      "id": "15989",
+      "name": "Connor Martin",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/connor-martin/15989",
+      "tfrrsId": "9200678"
+    },
+    {
+      "id": "15963",
+      "name": "Rylan Martin",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/rylan-martin/15963",
+      "tfrrsId": "8585419"
+    },
+    {
+      "id": "15999",
+      "name": "Jonathan Meyer",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Tama, Iowa",
+      "highSchool": "South Tama",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jonathan-meyer/15999",
+      "tfrrsId": "8585436"
+    },
+    {
+      "id": "15965",
+      "name": "Nathan Moore",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Wylie, Tex.",
+      "highSchool": "Wylie",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathan-moore/15965",
+      "tfrrsId": "8896790"
+    },
+    {
+      "id": "15966",
+      "name": "Drew Moser",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Clinton, Ill.",
+      "highSchool": "Clinton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/drew-moser/15966",
+      "tfrrsId": "8896795"
+    },
+    {
+      "id": "15997",
+      "name": "Carter Mulford",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Prairie",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carter-mulford/15997",
+      "tfrrsId": "9200677"
+    },
+    {
+      "id": "15967",
+      "name": "Ben Neville",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Urbandale, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ben-neville/15967",
+      "tfrrsId": "8896800"
+    },
+    {
+      "id": "15968",
+      "name": "Cameron Noreen",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Lincoln, Calif.",
+      "highSchool": "Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/cameron-noreen/15968",
+      "tfrrsId": "8271797"
+    },
+    {
+      "id": "15990",
+      "name": "Caleb Olson",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "DeWitt, Iowa",
+      "highSchool": "Central DeWitt",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/caleb-olson/15990",
+      "tfrrsId": "9200668"
+    },
+    {
+      "id": "15969",
+      "name": "Brendan Owens",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny Centennial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brendan-owens/15969",
+      "tfrrsId": "8896793"
+    },
+    {
+      "id": "15991",
+      "name": "Henry Peterson",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Dunkerton, Iowa",
+      "highSchool": "Dunkerton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/henry-peterson/15991",
+      "tfrrsId": "9200671"
+    },
+    {
+      "id": "15971",
+      "name": "Alex Pries",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alex-pries/15971",
+      "tfrrsId": "8896792"
+    },
+    {
+      "id": "15972",
+      "name": "Owen Pries",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/owen-pries/15972",
+      "tfrrsId": "8352883"
+    },
+    {
+      "id": "15973",
+      "name": "Brendan Rader",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Kennedy",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brendan-rader/15973",
+      "tfrrsId": "8352884"
+    },
+    {
+      "id": "15974",
+      "name": "Jakob Regennitter",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jakob-regennitter/15974",
+      "tfrrsId": "8585421"
+    },
+    {
+      "id": "15975",
+      "name": "Conner Sattler",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Clinton, Iowa",
+      "highSchool": "Clinton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/conner-sattler/15975",
+      "tfrrsId": "8352888"
+    },
+    {
+      "id": "15992",
+      "name": "AJ Schermerhorn",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny Centennial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aj-schermerhorn/15992",
+      "tfrrsId": "9200676"
+    },
+    {
+      "id": "15976",
+      "name": "Tyler Schermerhorn",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny Cenntenial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/tyler-schermerhorn/15976",
+      "tfrrsId": "8352891"
+    },
+    {
+      "id": "15977",
+      "name": "Sawyer Schmidt",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Preston, Iowa",
+      "highSchool": "Northeast",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sawyer-schmidt/15977",
+      "tfrrsId": "8896826"
+    },
+    {
+      "id": "15978",
+      "name": "Andrew Smith",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Glenwood, Iowa",
+      "highSchool": "Glenwood",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-smith/15978",
+      "tfrrsId": "8896788"
+    },
+    {
+      "id": "15979",
+      "name": "Lance Sobaski",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Brighton, Iowa",
+      "highSchool": "Washington",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/lance-sobaski/15979",
+      "tfrrsId": "8352892"
+    },
+    {
+      "id": "15993",
+      "name": "Austin  Soldwisch",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Waverly, Iowa",
+      "highSchool": "Waverly-Shell Rock",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/austin-soldwisch/15993",
+      "tfrrsId": "9200672"
+    },
+    {
+      "id": "15980",
+      "name": "Zion Taylor",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Aurora, Colo.",
+      "highSchool": "Regis Jesuit",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/zion-taylor/15980",
+      "tfrrsId": "8585416"
+    },
+    {
+      "id": "15981",
+      "name": "Clay Warson",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Madrid, Iowa",
+      "highSchool": "Madrid",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/clay-warson/15981",
+      "tfrrsId": "8896798"
+    },
+    {
+      "id": "15994",
+      "name": "Nolan Wieneke",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Juneau, Wis.",
+      "highSchool": "Dodgeland",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nolan-wieneke/15994",
+      "tfrrsId": "9200667"
+    },
+    {
+      "id": "15982",
+      "name": "Solomon Zaugg",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Mediapolis, Iowa",
+      "highSchool": "Mediapolis",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/solomon-zaugg/15982",
+      "tfrrsId": "8896808"
+    },
+    {
+      "id": "15902",
+      "name": "Jade Anderson",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Des Moines Lincoln",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jade-anderson/15902",
+      "tfrrsId": "8700372"
+    },
+    {
+      "id": "15903",
+      "name": "Abbey Angus",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/abbey-angus/15903",
+      "tfrrsId": "8896839"
+    },
+    {
+      "id": "15904",
+      "name": "Sydney Bochmann",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Waverly, Iowa",
+      "highSchool": "Waverly-Shell Rock",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/sydney-bochmann/15904",
+      "tfrrsId": "8896838"
+    },
+    {
+      "id": "15926",
+      "name": "Jillian Borgelt",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Waunakee, Wis.",
+      "highSchool": "Waunakee",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jillian-borgelt/15926",
+      "tfrrsId": "9200728"
+    },
+    {
+      "id": "15905",
+      "name": "Nadia Bowden",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "New Lenox, Ill.",
+      "highSchool": "Lincoln Way Central",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/nadia-bowden/15905",
+      "tfrrsId": "8896829"
+    },
+    {
+      "id": "15927",
+      "name": "Lily  Cooper",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Denver, Iowa",
+      "highSchool": "Denver",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lily-cooper/15927",
+      "tfrrsId": "9200730"
+    },
+    {
+      "id": "15906",
+      "name": "Morgan Engel",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Syosset, N.Y.",
+      "highSchool": "Syosset",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/morgan-engel/15906",
+      "tfrrsId": "8700379"
+    },
+    {
+      "id": "15907",
+      "name": "Kelly Giardina",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Rockford, Ill.",
+      "highSchool": "Rockford Christian",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kelly-giardina/15907",
+      "tfrrsId": "8352850"
+    },
+    {
+      "id": "15928",
+      "name": "Janae Hansen",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Mason City, Iowa",
+      "highSchool": "Mason City",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/janae-hansen/15928",
+      "tfrrsId": "9200727"
+    },
+    {
+      "id": "15908",
+      "name": "Makenna Hetrick",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Washington",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/makenna-hetrick/15908",
+      "tfrrsId": "8896830"
+    },
+    {
+      "id": "15909",
+      "name": "Sunny Horner",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "New Waverly, Texas",
+      "highSchool": "New Waverly",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/sunny-horner/15909",
+      "tfrrsId": "8896842"
+    },
+    {
+      "id": "15929",
+      "name": "Claire Hoyer",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Senior",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/claire-hoyer/15929",
+      "tfrrsId": "9200724"
+    },
+    {
+      "id": "15910",
+      "name": "Ella Johnson",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Prescott, Wis.",
+      "highSchool": "Prescott",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ella-johnson/15910",
+      "tfrrsId": "8700382"
+    },
+    {
+      "id": "15930",
+      "name": "Emrie Johnson",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Mount Vernon, Iowa",
+      "highSchool": "Mount Vernon",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/emrie-johnson/15930",
+      "tfrrsId": "9200726"
+    },
+    {
+      "id": "15911",
+      "name": "Allie Kounkel",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Clear Creek Amana",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allie-kounkel/15911",
+      "tfrrsId": "8272159"
+    },
+    {
+      "id": "15912",
+      "name": "Karle Kramer",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Monticello, Iowa",
+      "highSchool": "Monticello",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/karle-kramer/15912",
+      "tfrrsId": "8352860"
+    },
+    {
+      "id": "15913",
+      "name": "Lydia Maas",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Hampton, Iowa",
+      "highSchool": "Hampton-Dumont",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lydia-maas/15913",
+      "tfrrsId": "8896833"
+    },
+    {
+      "id": "15931",
+      "name": "Leah McDonald",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Wellington, Colo.",
+      "highSchool": "Poudre",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/leah-mcdonald/15931",
+      "tfrrsId": "9200729"
+    },
+    {
+      "id": "15914",
+      "name": "Maddie Merna",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Apex, N.C.",
+      "highSchool": "Middle Creek",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/maddie-merna/15914",
+      "tfrrsId": "8896841"
+    },
+    {
+      "id": "15915",
+      "name": "Haley Meyer",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "New Albin, Iowa",
+      "highSchool": "Kee",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/haley-meyer/15915",
+      "tfrrsId": "8352865"
+    },
+    {
+      "id": "15932",
+      "name": "Peyton Morey",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Spencer, Iowa",
+      "highSchool": "Spencer",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/peyton-morey/15932",
+      "tfrrsId": "9200732"
+    },
+    {
+      "id": "15916",
+      "name": "Zaya Peirce",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Lewistown, Ill.",
+      "highSchool": "Lewistown",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/zaya-peirce/15916",
+      "tfrrsId": "8896844"
+    },
+    {
+      "id": "15917",
+      "name": "Lily Peterson",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Hawley, Minn.",
+      "highSchool": "Hawley",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lily-peterson/15917",
+      "tfrrsId": "8352880"
+    },
+    {
+      "id": "15933",
+      "name": "Marissa Pewe",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/marissa-pewe/15933",
+      "tfrrsId": "9200731"
+    },
+    {
+      "id": "15918",
+      "name": "Megan Pickar",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "New Hampton, Iowa",
+      "highSchool": "New Hampton",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/megan-pickar/15918",
+      "tfrrsId": "8896840"
+    },
+    {
+      "id": "15919",
+      "name": "Anna Quillin",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Solon, Iowa",
+      "highSchool": "Solon",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/anna-quillin/15919",
+      "tfrrsId": "8904663"
+    },
+    {
+      "id": "15920",
+      "name": "Hannah Ramsey",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/hannah-ramsey/15920",
+      "tfrrsId": "8700388"
+    },
+    {
+      "id": "15921",
+      "name": "Kamryn Sherwood",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Danville, Iowa",
+      "highSchool": "Danville",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kamryn-sherwood/15921",
+      "tfrrsId": "8896835"
+    },
+    {
+      "id": "15922",
+      "name": "Allie Spredemann",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Sun Prairie, Wis.",
+      "highSchool": "Sun Prairie",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allie-spredemann/15922",
+      "tfrrsId": "8352893"
+    },
+    {
+      "id": "15923",
+      "name": "Cali Trygstad",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Clive, Iowa",
+      "highSchool": "West Des Moines Valley",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/cali-trygstad/15923",
+      "tfrrsId": "8700393"
+    },
+    {
+      "id": "15934",
+      "name": "Lailah Utnage",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Italy, Texas",
+      "highSchool": "Alvarado",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lailah-utnage/15934",
+      "tfrrsId": "9200733"
+    },
+    {
+      "id": "15924",
+      "name": "Ava Vance",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Huxley, Iowa",
+      "highSchool": "Ballard",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ava-vance/15924",
+      "tfrrsId": "8896837"
+    },
+    {
+      "id": "15935",
+      "name": "Ava Vanderheyden",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Nevada, Iowa",
+      "highSchool": "Nevada",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ava-vanderheyden/15935",
+      "tfrrsId": "9200722"
+    },
+    {
+      "id": "15925",
+      "name": "Grace Vortherms",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Austin, Minn.",
+      "highSchool": "Austin",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/grace-vortherms/15925",
+      "tfrrsId": "8896832"
+    },
+    {
+      "id": "15936",
+      "name": "Bethany Warren",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Forest City, Iowa",
+      "highSchool": "Forest City",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/bethany-warren/15936",
+      "tfrrsId": "9200723"
+    }
+  ]
+}
 ```
 
 ### `src/data/distance_roster_26.json`
@@ -1872,7 +9527,8 @@ export function useUser() {
       "year": "So.",
       "hometown": "Denver, Iowa",
       "highSchool": "Denver",
-      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lily-cooper/16843"
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lily-cooper/16843",
+      "tfrrsId": "9200730"
     },
     {
       "id": "17005",
@@ -5370,3054 +13026,2869 @@ export function useUser() {
     {
       "name": "Emily Rogers",
       "team": "womens-cross-country",
-      "hometown": "Cedar Falls",
-      "highSchool": "",
-      "seasons": [
-        {
-          "season": 2011,
-          "classYear": "So.",
-          "id": "955",
-          "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/emily-rogers/955"
-        }
-      ]
-    },
-    {
-      "name": "Emma Sinnwell",
-      "team": "womens-cross-country",
-      "hometown": "Nashua, Iowa",
-      "highSchool": "Nashua-Plainfield",
-      "seasons": [
-        {
-          "season": 2018,
-          "classYear": "Fr.",
-          "id": "7342",
-          "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/emma-sinnwell/7342"
-        }
-      ]
-    },
-    {
-      "name": "Emrie Johnson",
-      "team": "womens-cross-country",
-      "hometown": "Mount Vernon, Iowa",
-      "highSchool": "Mount Vernon",
-      "seasons": [
-        {
-          "season": 2025,
-          "classYear": "Fr.",
-          "id": "15930",
-          "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/emrie-johnson/15930"
-        }
-      ]
-    },
-    {
-      "name": "Erik Jolivette",
-      "team": "mens-cross-country",
-      "hometown": "Garner, Iowa",
-      "highSchool": "Garner-Hayfield",
-      "seasons": [
-        {
-          "season": 2010,
-          "classYear": "So.",
-          "id": "160",
-          "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/erik-jolivette/160"
-        },
-        {
-          "season": 2011,
-          "classYear": "Jr.",
-          "id": "912",
-          "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/erik-jolivette/912"
-        },
-        {
-          "season": 2012,
-          "classYear": "Sr.",
-          "id": "1933",
-          "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/erik-jolivette/1933"
-        }
-      ]
-    },
-    {
-      "name": "Erin Phelan",
-      "team": "womens-cross-country",
-      "hometown": "Waukesha, Wis.",
-      "highSchool": "Waukesha West",
-      "seasons": [
-        {
-          "season": 2020,
-          "classYear": "Fr.",
-          "id": "8958",
-          "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/erin-phelan/8958"
-        },
-        {
-          "season": 2021,
-          "classYear": "So.",
-          "id": "10849",
-          "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/erin-phelan/10849"
-        },
-        {
-          "season": 2022,
-          "classYear": "Jr.",
-          "id": "11660",
-          "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/erin-phelan/11660"
-        },
-        {
-          "season": 2023,
-          "classYear": "Sr.",
-          "id": "12887",
-          "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/erin-phelan/12887"
-        }
-      ]
-    },
-    {
-      "name": "Erin Sawyers",
-      "team": "womens-cross-country",
-      "hometown": "Winterset, Iowa",
-      "highSchool": "Winterset",
-      "seasons": [
-        {
-          "season": 2011,
-          "classYear": "Fr.",
-          "id": "956",
-          "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/erin-sawyers/956"
-        }
-      ]
-    },
-    {
-      
+      "hometown":
 
-... [truncated, file is 243748 bytes, showing first 100000] ...
+... [truncated, file is 251933 bytes, showing first 100000] ...
 ```
 
 ### `src/data/tfrrs_stats.json`
 
 ```json
 {
-  "15902": {
-    "name": "Jade Anderson",
-    "tfrrsId": "8700372",
-    "fetchedAt": "2026-09-12T22:30:29.538Z",
+  "4989878": {
+    "name": "Gabrielle Marchino",
+    "tfrrsId": "4989878",
+    "fetchedAt": "2026-09-13T03:08:10.907Z",
     "bests": [
       {
-        "event": "400",
-        "time": "1:05.73",
-        "resultUrl": "https://www.tfrrs.org/results/82469/5029117/Wartburg_Indoor_Select_Meet/Womens-400-Meters"
+        "event": "4K (XC)",
+        "time": "16:42.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
       },
       {
-        "event": "600",
-        "time": "1:46.27",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746791/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-600-Meters"
+        "event": "5K (XC)",
+        "time": "20:19.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
       },
+      {
+        "event": "6K (XC)",
+        "time": "24:07.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13353/Iowa_Conference_Championships?meet_hnd=13353"
+      }
+    ]
+  },
+  "4989898": {
+    "name": "Mitch Black",
+    "tfrrsId": "4989898",
+    "fetchedAt": "2026-09-13T03:07:34.128Z",
+    "bests": [
+      {
+        "event": "5K (XC)",
+        "time": "17:25.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11992/Crown_College_Invite?meet_hnd=11992"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "21:44.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "26:10.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13353/Iowa_Conference_Championships?meet_hnd=13353"
+      }
+    ]
+  },
+  "5146929": {
+    "name": "Ben Coleman",
+    "tfrrsId": "5146929",
+    "fetchedAt": "2026-09-13T03:07:35.789Z",
+    "bests": [
       {
         "event": "800",
-        "time": "2:26.13",
-        "resultUrl": "https://www.tfrrs.org/results/89161/5435686/Wartburg_Qualifier/Womens-800-Meters"
+        "time": "2:32.95",
+        "resultUrl": "https://www.tfrrs.org/results/45220/2756885/Wartburg_Outdoor_Select/Mens-800-Meters"
       },
       {
         "event": "1000",
-        "time": "3:12.85",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760499/Cyclone_Open/Womens-1000-Meters"
+        "time": "3:10.94",
+        "resultUrl": "https://www.tfrrs.org/results/38087/2332621/Wartburg_Indoor_Select/Mens-1000-Meters"
       },
       {
         "event": "1500",
-        "time": "5:07.41",
-        "resultUrl": "https://www.tfrrs.org/results/90375/5510698/Wartburg_Outdoor_Select/Womens-1500-Meters"
+        "time": "4:40.75",
+        "resultUrl": "https://www.tfrrs.org/results/46497/2857705/Wartburg_Luther_Dual/Mens-1500-Meters"
       },
       {
         "event": "MILE",
-        "time": "5:34.01",
-        "resultUrl": "https://www.tfrrs.org/results/87922/5372934/Wartburg_Indoor_Select_Meet/Womens-Mile"
+        "time": "5:10.55",
+        "resultUrl": "https://www.tfrrs.org/results/43648/2668645/Wartburg_Indoor_Invite/Mens-Mile"
       },
       {
-        "event": "PV",
-        "time": "2.75m",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810476/Liz_Wuertz_Indoor_Meet/Womens-Pole-Vault"
+        "event": "3000",
+        "time": "10:45.21",
+        "resultUrl": "https://www.tfrrs.org/results/52031/3283243/2018_Jack_Jennett_Open_/Mens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "17:54.38",
+        "resultUrl": "https://www.tfrrs.org/results/55829/3398121/Cornell_Invitational/Mens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "37:25.47",
+        "resultUrl": "https://www.tfrrs.org/results/56531/3456279/Phil_Esten_Challenge_at_UW-La_Crosse/Mens-10000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "21:18.8",
+        "resultUrl": "https://www.tfrrs.org/results/xc/10176/Augusburg_Alumni_meet?meet_hnd=10176"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "24:37.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
+      },
+      {
+        "event": "6.437K (XC)",
+        "time": "27:21.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "30:36.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11194/Iowa_Conference_Championships?meet_hnd=11194"
+      }
+    ]
+  },
+  "5146940": {
+    "name": "Eli Kaczinski",
+    "tfrrsId": "5146940",
+    "fetchedAt": "2026-09-13T03:07:43.725Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:04.99",
+        "resultUrl": "https://www.tfrrs.org/results/43286/2648743/Wartburg_Indoor_Select/Mens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:01.23",
+        "resultUrl": "https://www.tfrrs.org/results/46082/2823139/Phil_Esten_Challenge/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:22.16",
+        "resultUrl": "https://www.tfrrs.org/results/52030/3266448/2018_Mark_Messersmith_Invitational_/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:39.39",
+        "resultUrl": "https://www.tfrrs.org/results/53399/3259079/Chelsey_M_Henkenius_Open/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:22.42",
+        "resultUrl": "https://www.tfrrs.org/results/51750/3172360/Luther_vs_Wartburg_Dual/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "14:42.97",
+        "resultUrl": "https://www.tfrrs.org/results/51900/3195060/UW_La_Crosse_Final_Qualifier/Mens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "30:30.83",
+        "resultUrl": "https://www.tfrrs.org/results/51339/3138926/Phil_Esten_Challenge/Mens-10000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "16:14.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11992/Crown_College_Invite?meet_hnd=11992"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "20:04.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "24:55.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13424/NCAA_Division_III_Cross_Country_Championships?meet_hnd=13424"
+      }
+    ]
+  },
+  "5146950": {
+    "name": "Aaron O'Leary",
+    "tfrrsId": "5146950",
+    "fetchedAt": "2026-09-13T03:07:47.966Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:01.54",
+        "resultUrl": "https://www.tfrrs.org/results/40930/2513231/2015_Kip_Janvrin_Open/Mens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:06.36",
+        "resultUrl": "https://www.tfrrs.org/results/41099/2530432/Luther_vs_Wartburg_Dual/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:32.73",
+        "resultUrl": "https://www.tfrrs.org/results/53729/3278526/Wartburg_Indoor_Select/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "9:05.67",
+        "resultUrl": "https://www.tfrrs.org/results/48897/2986365/Wartburg_Indoor_Invite/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:45.44",
+        "resultUrl": "https://www.tfrrs.org/results/56929/3490545/Wartburg_Luther_Dual/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "15:55.21",
+        "resultUrl": "https://www.tfrrs.org/results/47710/3119185/UW-Platteville_Invitational/Mens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "33:23.01",
+        "resultUrl": "https://www.tfrrs.org/results/50120/3052343/Augustana_College_Early_Spring_Opener/Mens-10000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "9:41.73",
+        "resultUrl": "https://www.tfrrs.org/results/57030/3505862/Iowa_Conference_Outdoor_Championships/Mens-3000-Steeplechase"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "17:00.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11992/Crown_College_Invite?meet_hnd=11992"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "26:05.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13353/Iowa_Conference_Championships?meet_hnd=13353"
+      }
+    ]
+  },
+  "5146959": {
+    "name": "Joel Toppin",
+    "tfrrsId": "5146959",
+    "fetchedAt": "2026-09-13T03:07:53.008Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:22.99",
+        "resultUrl": "https://www.tfrrs.org/results/45220/2756885/Wartburg_Outdoor_Select/Mens-800-Meters"
+      },
+      {
+        "event": "1000",
+        "time": "2:49.21",
+        "resultUrl": "https://www.tfrrs.org/results/43286/2648739/Wartburg_Indoor_Select/Mens-1000-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:12.82",
+        "resultUrl": "https://www.tfrrs.org/results/41099/2530432/Luther_vs_Wartburg_Dual/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:35.86",
+        "resultUrl": "https://www.tfrrs.org/results/37780/2342173/2015_Grinnell_Darren_Young_Indoor_Classic/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "9:23.11",
+        "resultUrl": "https://www.tfrrs.org/results/38087/2332647/Wartburg_Indoor_Select/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:46.87",
+        "resultUrl": "https://www.tfrrs.org/results/51750/3172360/Luther_vs_Wartburg_Dual/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "15:41.60",
+        "resultUrl": "https://www.tfrrs.org/results/56531/3456299/Phil_Esten_Challenge_at_UW-La_Crosse/Mens-5000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "9:44.77",
+        "resultUrl": "https://www.tfrrs.org/results/51879/3190233/Iowa_Conference_Outdoor_Championships/Mens-3000-Steeplechase"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "16:52.8",
+        "resultUrl": "https://www.tfrrs.org/results/xc/10176/Augusburg_Alumni_meet?meet_hnd=10176"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "20:51.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "25:59.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12414/56th_Les_Duke?meet_hnd=12414"
+      }
+    ]
+  },
+  "5146966": {
+    "name": "Maddie Carlsen",
+    "tfrrsId": "5146966",
+    "fetchedAt": "2026-09-13T03:07:59.058Z",
+    "bests": [
+      {
+        "event": "400",
+        "time": "1:01.78",
+        "resultUrl": "https://www.tfrrs.org/results/50831/3098413/Ashton_May_Invitational/Womens-400-Meters"
+      },
+      {
+        "event": "800",
+        "time": "2:17.85",
+        "resultUrl": "https://www.tfrrs.org/results/51901/3195149/Augustana_Midwest_Twilight_Final_Qualifier/Womens-800-Meters"
+      },
+      {
+        "event": "1000",
+        "time": "3:09.54",
+        "resultUrl": "https://www.tfrrs.org/results/53399/3259090/Chelsey_M_Henkenius_Open/Womens-1000-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:49.96",
+        "resultUrl": "https://www.tfrrs.org/results/51750/3172359/Luther_vs_Wartburg_Dual/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:15.53",
+        "resultUrl": "https://www.tfrrs.org/results/54249/3309556/Iowa_Conference_Indoor_Championships/Womens-Mile"
+      },
+      {
+        "event": "400H",
+        "time": "1:05.94",
+        "resultUrl": "https://www.tfrrs.org/results/51879/3190211/Iowa_Conference_Outdoor_Championships/Womens-400-Hurdles"
+      },
+      {
+        "event": "3000S",
+        "time": "12:01.49",
+        "resultUrl": "https://www.tfrrs.org/results/56924/3511825/Augustana_Twilight_/Womens-3000-Steeplechase"
+      },
+      {
+        "event": "4K (XC)",
+        "time": "17:22.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "21:23.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/10176/Augusburg_Alumni_meet?meet_hnd=10176"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "25:46.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/10892/2016_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=10892"
+      }
+    ]
+  },
+  "5146969": {
+    "name": "Miranda Fober",
+    "tfrrsId": "5146969",
+    "fetchedAt": "2026-09-13T03:08:03.372Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:52.10",
+        "resultUrl": "https://www.tfrrs.org/results/45220/2756900/Wartburg_Outdoor_Select/Womens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "5:32.90",
+        "resultUrl": "https://www.tfrrs.org/results/44696/2805310/UW-Platteville_Invitational/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:59.14",
+        "resultUrl": "https://www.tfrrs.org/results/43286/2648752/Wartburg_Indoor_Select/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "11:40.43",
+        "resultUrl": "https://www.tfrrs.org/results/47550/2975576/2017_Darren_Young_Classic/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "20:32.00",
+        "resultUrl": "https://www.tfrrs.org/results/50482/3074759/Wartburg_Outdoor_Select/Womens-5000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "12:27.12",
+        "resultUrl": "https://www.tfrrs.org/results/51879/3190257/Iowa_Conference_Outdoor_Championships/Womens-3000-Steeplechase"
+      },
+      {
+        "event": "4K (XC)",
+        "time": "17:23.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "21:29.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "24:43.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12414/56th_Les_Duke?meet_hnd=12414"
+      }
+    ]
+  },
+  "5146976": {
+    "name": "Maddie Kemp",
+    "tfrrsId": "5146976",
+    "fetchedAt": "2026-09-13T03:08:08.443Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:50.62",
+        "resultUrl": "https://www.tfrrs.org/results/45220/2756900/Wartburg_Outdoor_Select/Womens-800-Meters"
+      },
+      {
+        "event": "1000",
+        "time": "3:23.08",
+        "resultUrl": "https://www.tfrrs.org/results/37926/2321972/Wartburg_Triangular/Womens-1000-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "5:16.21",
+        "resultUrl": "https://www.tfrrs.org/results/50831/3098421/Ashton_May_Invitational/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:35.10",
+        "resultUrl": "https://www.tfrrs.org/results/38087/2332634/Wartburg_Indoor_Select/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "11:39.17",
+        "resultUrl": "https://www.tfrrs.org/results/51750/3172351/Luther_vs_Wartburg_Dual/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "19:55.08",
+        "resultUrl": "https://www.tfrrs.org/results/47710/3119193/UW-Platteville_Invitational/Womens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "41:58.34",
+        "resultUrl": "https://www.tfrrs.org/results/51339/3138944/Phil_Esten_Challenge/Womens-10000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "12:52.45",
+        "resultUrl": "https://www.tfrrs.org/results/40930/2513218/2015_Kip_Janvrin_Open/Womens-3000-Steeplechase"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "21:11.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/10176/Augusburg_Alumni_meet?meet_hnd=10176"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "24:50.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11120/UW-Oshkosh_Kollege_Town_Sports_Invitational?meet_hnd=11120"
+      }
+    ]
+  },
+  "5146993": {
+    "name": "Beth Mallon",
+    "tfrrsId": "5146993",
+    "fetchedAt": "2026-09-13T03:08:10.094Z",
+    "bests": [
+      {
+        "event": "1500",
+        "time": "5:05.29",
+        "resultUrl": "https://www.tfrrs.org/results/46082/2823162/Phil_Esten_Challenge/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:43.86",
+        "resultUrl": "https://www.tfrrs.org/results/53399/3259083/Chelsey_M_Henkenius_Open/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "10:38.19",
+        "resultUrl": "https://www.tfrrs.org/results/48897/2986363/Wartburg_Indoor_Invite/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "18:11.31",
+        "resultUrl": "https://www.tfrrs.org/results/56328/3510860/NCC_Gregory_Final_Qualifier/Womens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "38:43.81",
+        "resultUrl": "https://www.tfrrs.org/results/57030/3505870/Iowa_Conference_Outdoor_Championships/Womens-10000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "19:52.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "22:37.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12414/56th_Les_Duke?meet_hnd=12414"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "22:55.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13031/NCAA_Division_III_Central_Region_Cross_Country_Championships?meet_hnd=13031"
+      }
+    ]
+  },
+  "5146998": {
+    "name": "Meghan Silbernagel",
+    "tfrrsId": "5146998",
+    "fetchedAt": "2026-09-13T03:08:14.318Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:19.59",
+        "resultUrl": "https://www.tfrrs.org/results/46497/2857691/Wartburg_Luther_Dual/Womens-800-Meters"
+      },
+      {
+        "event": "1000",
+        "time": "3:09.62",
+        "resultUrl": "https://www.tfrrs.org/results/53399/3259090/Chelsey_M_Henkenius_Open/Womens-1000-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:46.79",
+        "resultUrl": "https://www.tfrrs.org/results/46318/2842333/2016_Kip_Janvrin_Open/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:11.80",
+        "resultUrl": "https://www.tfrrs.org/results/43788/2676839/Iowa_Conference_Indoor_Championships/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "10:29.64",
+        "resultUrl": "https://www.tfrrs.org/results/51750/3172351/Luther_vs_Wartburg_Dual/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "19:03.76",
+        "resultUrl": "https://www.tfrrs.org/results/49295/3008885/Wartburg_Qualifier/Womens-5000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "11:32.16",
+        "resultUrl": "https://www.tfrrs.org/results/51900/3195090/UW_La_Crosse_Final_Qualifier/Womens-3000-Steeplechase"
+      },
+      {
+        "event": "1200",
+        "time": "3:47.50",
+        "resultUrl": "https://www.tfrrs.org/results/38461/2352610/Wartburg_Indoor_Invite/Womens-1200-Meters"
+      },
+      {
+        "event": "4K (XC)",
+        "time": "16:48.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "19:54.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11992/Crown_College_Invite?meet_hnd=11992"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "22:51.8",
+        "resultUrl": "https://www.tfrrs.org/results/xc/9139/AAE_Invitational?meet_hnd=9139"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "24:00.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13031/NCAA_Division_III_Central_Region_Cross_Country_Championships?meet_hnd=13031"
+      }
+    ]
+  },
+  "5600619": {
+    "name": "Nicole Breitbach",
+    "tfrrsId": "5600619",
+    "fetchedAt": "2026-09-13T03:07:58.191Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:28.72",
+        "resultUrl": "https://www.tfrrs.org/results/48397/2953927/2017_Jack_Jennett_Open/Womens-800-Meters"
+      },
+      {
+        "event": "1000",
+        "time": "3:15.35",
+        "resultUrl": "https://www.tfrrs.org/results/48259/2946958/Chelsey_M_Henkenius_Open/Womens-1000-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:53.02",
+        "resultUrl": "https://www.tfrrs.org/results/51750/3172359/Luther_vs_Wartburg_Dual/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:17.69",
+        "resultUrl": "https://www.tfrrs.org/results/60004/3651414/Wartburg_Qualifier/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "10:38.24",
+        "resultUrl": "https://www.tfrrs.org/results/48897/2986363/Wartburg_Indoor_Invite/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "18:22.39",
+        "resultUrl": "https://www.tfrrs.org/results/49295/3008885/Wartburg_Qualifier/Womens-5000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "11:37.04",
+        "resultUrl": "https://www.tfrrs.org/results/56531/3456313/Phil_Esten_Challenge_at_UW-La_Crosse/Womens-3000-Steeplechase"
+      },
+      {
+        "event": "4K (XC)",
+        "time": "17:03.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "20:12.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "23:10.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12414/56th_Les_Duke?meet_hnd=12414"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "23:39.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13031/NCAA_Division_III_Central_Region_Cross_Country_Championships?meet_hnd=13031"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "19:06.8",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "5600620": {
+    "name": "Haley  Harms",
+    "tfrrsId": "5600620",
+    "fetchedAt": "2026-09-13T03:08:06.779Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:35.33",
+        "resultUrl": "https://www.tfrrs.org/results/48564/2965798/Wartburg_Indoor_Select/Womens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "5:13.04",
+        "resultUrl": "https://www.tfrrs.org/results/49923/3140780/Rittgers_Invitational/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:46.48",
+        "resultUrl": "https://www.tfrrs.org/results/48564/2965791/Wartburg_Indoor_Select/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "11:24.99",
+        "resultUrl": "https://www.tfrrs.org/results/47550/2975576/2017_Darren_Young_Classic/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "19:36.68",
+        "resultUrl": "https://www.tfrrs.org/results/61152/3769454/UW-Platteville_Invitational/Womens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "45:11.78",
+        "resultUrl": "https://www.tfrrs.org/results/51879/3190241/Iowa_Conference_Outdoor_Championships/Womens-10000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "11:59.03",
+        "resultUrl": "https://www.tfrrs.org/results/62304/3808786/2019_Kip_Janvrin_Open/Womens-3000-Steeplechase"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "20:40.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14228/John_Kurtt_Fall_Invitational?meet_hnd=14228"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "24:13.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12414/56th_Les_Duke?meet_hnd=12414"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "19:47.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "5600621": {
+    "name": "Shaelyn McEnany",
+    "tfrrsId": "5600621",
+    "fetchedAt": "2026-09-13T03:08:11.837Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:31.69",
+        "resultUrl": "https://www.tfrrs.org/results/43286/2648741/Wartburg_Indoor_Select/Womens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:49.59",
+        "resultUrl": "https://www.tfrrs.org/results/45597/2782787/Ashton_May_Invitational__UW-La_Crosse/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:21.64",
+        "resultUrl": "https://www.tfrrs.org/results/43286/2648752/Wartburg_Indoor_Select/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "10:40.57",
+        "resultUrl": "https://www.tfrrs.org/results/46497/2857697/Wartburg_Luther_Dual/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "18:07.87",
+        "resultUrl": "https://www.tfrrs.org/results/46318/2842327/2016_Kip_Janvrin_Open/Womens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "40:23.73",
+        "resultUrl": "https://www.tfrrs.org/results/57030/3505870/Iowa_Conference_Outdoor_Championships/Womens-10000-Meters"
+      },
+      {
+        "event": "4K (XC)",
+        "time": "16:39.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "20:06.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/10176/Augusburg_Alumni_meet?meet_hnd=10176"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "23:01.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13424/NCAA_Division_III_Cross_Country_Championships?meet_hnd=13424"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "22:55.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13031/NCAA_Division_III_Central_Region_Cross_Country_Championships?meet_hnd=13031"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "18:54.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "5600622": {
+    "name": "Alison  Rusch",
+    "tfrrsId": "5600622",
+    "fetchedAt": "2026-09-13T03:08:13.458Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:40.70",
+        "resultUrl": "https://www.tfrrs.org/results/50831/3098416/Ashton_May_Invitational/Womens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "5:19.16",
+        "resultUrl": "https://www.tfrrs.org/results/50831/3098421/Ashton_May_Invitational/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:49.16",
+        "resultUrl": "https://www.tfrrs.org/results/48897/2986355/Wartburg_Indoor_Invite/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "11:34.63",
+        "resultUrl": "https://www.tfrrs.org/results/56929/3490538/Wartburg_Luther_Dual/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "19:43.74",
+        "resultUrl": "https://www.tfrrs.org/results/56531/3456321/Phil_Esten_Challenge_at_UW-La_Crosse/Womens-5000-Meters"
+      },
+      {
+        "event": "4K (XC)",
+        "time": "18:59.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "21:36.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14228/John_Kurtt_Fall_Invitational?meet_hnd=14228"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "24:43.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12414/56th_Les_Duke?meet_hnd=12414"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "20:04.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "5600623": {
+    "name": "Ashley Stevens",
+    "tfrrsId": "5600623",
+    "fetchedAt": "2026-09-13T03:08:15.182Z",
+    "bests": [
+      {
+        "event": "400",
+        "time": "1:01.59",
+        "resultUrl": "https://www.tfrrs.org/results/56929/3490530/Wartburg_Luther_Dual/Womens-400-Meters"
+      },
+      {
+        "event": "600",
+        "time": "1:43.24",
+        "resultUrl": "https://www.tfrrs.org/results/57559/3593368/Mark_Schuck_Open_and_Multi/Womens-600-Meters"
+      },
+      {
+        "event": "800",
+        "time": "2:17.05",
+        "resultUrl": "https://www.tfrrs.org/results/62592/3840056/American_Rivers_Outdoor_Conference_Championships/Womens-800-Meters"
+      },
+      {
+        "event": "1000",
+        "time": "3:14.71",
+        "resultUrl": "https://www.tfrrs.org/results/58774/3582644/Chelsey_M_Henkenius_Open/Womens-1000-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "5:02.46",
+        "resultUrl": "https://www.tfrrs.org/results/61477/3742635/Wartburg_Outdoor_Select/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:40.40",
+        "resultUrl": "https://www.tfrrs.org/results/48259/2946942/Chelsey_M_Henkenius_Open/Womens-Mile"
+      },
+      {
+        "event": "4K (XC)",
+        "time": "17:02.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "20:35.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "23:13.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14517/NCAA_Division_III_Central_Region_Cross_Country_Championships?meet_hnd=14517"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "19:36.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "5600665": {
+    "name": "Casey Roberts",
+    "tfrrsId": "5600665",
+    "fetchedAt": "2026-09-13T03:07:49.714Z",
+    "bests": [
+      {
+        "event": "400",
+        "time": "50.19",
+        "resultUrl": "https://www.tfrrs.org/results/56929/3490523/Wartburg_Luther_Dual/Mens-400-Meters"
+      },
+      {
+        "event": "800",
+        "time": "1:51.47",
+        "resultUrl": "https://www.tfrrs.org/results/62627/3845723/NCAA_Final_Qualifier_at_UW-La_Crosse/Mens-800-Meters"
+      },
+      {
+        "event": "1000",
+        "time": "2:31.13",
+        "resultUrl": "https://www.tfrrs.org/results/58774/3582629/Chelsey_M_Henkenius_Open/Mens-1000-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "3:51.77",
+        "resultUrl": "https://www.tfrrs.org/results/56924/3511823/Augustana_Twilight_/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:10.99",
+        "resultUrl": "https://www.tfrrs.org/results/54104/3300271/Wartburg_Indoor_Invitational/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:56.56",
+        "resultUrl": "https://www.tfrrs.org/results/53399/3259079/Chelsey_M_Henkenius_Open/Mens-3000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "16:11.8",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14228/John_Kurtt_Fall_Invitational?meet_hnd=14228"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "20:53.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/7898/Linfield_Harrier_Classic?meet_hnd=7898"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "25:23.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14517/NCAA_Division_III_Central_Region_Cross_Country_Championships?meet_hnd=14517"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "25:34.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "5873589": {
+    "name": "Karl Jaeschke",
+    "tfrrsId": "5873589",
+    "fetchedAt": "2026-09-13T03:07:42.844Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:12.86",
+        "resultUrl": "https://www.tfrrs.org/results/49923/3140769/Rittgers_Invitational/Mens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:34.00",
+        "resultUrl": "https://www.tfrrs.org/results/49923/3140790/Rittgers_Invitational/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:48.55",
+        "resultUrl": "https://www.tfrrs.org/results/53399/3259086/Chelsey_M_Henkenius_Open/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "9:41.29",
+        "resultUrl": "https://www.tfrrs.org/results/53729/3278568/Wartburg_Indoor_Select/Mens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "16:45.30",
+        "resultUrl": "https://www.tfrrs.org/results/54104/3300252/Wartburg_Indoor_Invitational/Mens-5000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "11:04.89",
+        "resultUrl": "https://www.tfrrs.org/results/47710/3119203/UW-Platteville_Invitational/Mens-3000-Steeplechase"
       },
       {
         "event": "JT",
-        "time": "23.79m",
-        "resultUrl": "https://www.tfrrs.org/results/82545/5144572/Wartburg_Good_Friday_Challenge/Womens-Javelin"
-      },
-      {
-        "event": "4K (XC)",
-        "time": "17:11.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
+        "time": "45.49m",
+        "resultUrl": "https://www.tfrrs.org/results/51879/3190231/Iowa_Conference_Outdoor_Championships/Mens-Javelin"
       },
       {
         "event": "5K (XC)",
-        "time": "19:58.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/25313/Chiburg_5k?meet_hnd=25313"
+        "time": "18:09.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11992/Crown_College_Invite?meet_hnd=11992"
       },
       {
-        "event": "6K (XC)",
-        "time": "24:38.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24926/American_Rivers_Conference_Championships?meet_hnd=24926"
+        "event": "6.437K (XC)",
+        "time": "24:58.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "28:24.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13353/Iowa_Conference_Championships?meet_hnd=13353"
       }
     ]
   },
-  "15903": {
-    "name": "Abbey Angus",
-    "tfrrsId": "8896839",
-    "fetchedAt": "2026-09-12T22:30:30.371Z",
+  "5982721": {
+    "name": "Jackie Falconer",
+    "tfrrsId": "5982721",
+    "fetchedAt": "2026-09-13T03:08:02.489Z",
     "bests": [
       {
-        "event": "800",
-        "time": "2:35.85",
-        "resultUrl": "https://www.tfrrs.org/results/87923/5380346/Friday_Knight_Lights_Indoor_Meet/Womens-800-Meters"
+        "event": "5K (XC)",
+        "time": "21:54.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
       },
+      {
+        "event": "6K (XC)",
+        "time": "25:51.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13353/Iowa_Conference_Championships?meet_hnd=13353"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "21:20.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6139110": {
+    "name": "Ashlyn Bagge",
+    "tfrrsId": "6139110",
+    "fetchedAt": "2026-09-13T03:07:57.304Z",
+    "bests": [
       {
         "event": "1500",
-        "time": "5:11.41",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618750/Wartburg_May_Triangular/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:33.64",
-        "resultUrl": "https://www.tfrrs.org/results/87923/5380364/Friday_Knight_Lights_Indoor_Meet/Womens-Mile"
+        "time": "4:48.27",
+        "resultUrl": "https://www.tfrrs.org/results/55829/3398143/Cornell_Invitational/Womens-1500-Meters"
       },
       {
         "event": "3000",
-        "time": "10:36.28",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810460/Liz_Wuertz_Indoor_Meet/Womens-3000-Meters"
+        "time": "10:02.28",
+        "resultUrl": "https://www.tfrrs.org/results/54503/3323034/Wartburg_Qualifier/Womens-3000-Meters"
       },
       {
         "event": "5000",
-        "time": "18:32.17",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929085/UW-Platteville_Invitational/Womens-5000-Meters"
+        "time": "16:53.17",
+        "resultUrl": "https://www.tfrrs.org/results/56152/3421815/UW_Platteville_Invitational/Womens-5000-Meters"
       },
       {
         "event": "10,000",
-        "time": "38:13.66",
-        "resultUrl": "https://www.tfrrs.org/results/96526/5987241/American_Rivers_Conference_Championships_/Womens-10000-Meters"
-      },
-      {
-        "event": "4K (XC)",
-        "time": "15:22.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
+        "time": "35:23.23",
+        "resultUrl": "https://www.tfrrs.org/results/51339/3138944/Phil_Esten_Challenge/Womens-10000-Meters"
       },
       {
         "event": "5K (XC)",
-        "time": "19:12.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/25313/Chiburg_5k?meet_hnd=25313"
+        "time": "19:09.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11992/Crown_College_Invite?meet_hnd=11992"
       },
       {
         "event": "6K (XC)",
-        "time": "23:21.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24926/American_Rivers_Conference_Championships?meet_hnd=24926"
+        "time": "21:03.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11260/NCAA_Division_III_Cross_Country_Championships?meet_hnd=11260"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "22:16.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13031/NCAA_Division_III_Central_Region_Cross_Country_Championships?meet_hnd=13031"
       }
     ]
   },
-  "15904": {
-    "name": "Sydney Bochmann",
-    "tfrrsId": "8896838",
-    "fetchedAt": "2026-09-12T22:30:31.260Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:39.09",
-        "resultUrl": "https://www.tfrrs.org/results/87921/5353931/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "5:03.37",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618750/Wartburg_May_Triangular/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:35.53",
-        "resultUrl": "https://www.tfrrs.org/results/87921/5353942/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "10:43.28",
-        "resultUrl": "https://www.tfrrs.org/results/87922/5372910/Wartburg_Indoor_Select_Meet/Womens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "18:15.53",
-        "resultUrl": "https://www.tfrrs.org/results/90261/5544472/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "38:17.51",
-        "resultUrl": "https://www.tfrrs.org/results/91807/5568521/Phil_Esten_Challenge/Womens-10000-Meters"
-      },
-      {
-        "event": "3000S",
-        "time": "11:44.66",
-        "resultUrl": "https://www.tfrrs.org/results/90893/5656838/Midwest_Twilight_Final_Qualifier/Womens-3000-Steeplechase"
-      },
-      {
-        "event": "4K (XC)",
-        "time": "15:06.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "19:40.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "23:00.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15905": {
-    "name": "Nadia Bowden",
-    "tfrrsId": "8896829",
-    "fetchedAt": "2026-09-12T22:30:32.974Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:15.46",
-        "resultUrl": "https://www.tfrrs.org/results/91158/5645129/American_Rivers_Conference_Championships/Womens-800-Meters"
-      },
-      {
-        "event": "1000",
-        "time": "3:00.51",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746779/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-1000-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:43.36",
-        "resultUrl": "https://www.tfrrs.org/results/96526/5987247/American_Rivers_Conference_Championships_/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:07.01",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760497/Cyclone_Open/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "10:45.12",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810460/Liz_Wuertz_Indoor_Meet/Womens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "17:44.80",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929085/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "18:07.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "22:47.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15906": {
-    "name": "Morgan Engel",
-    "tfrrsId": "8700379",
-    "fetchedAt": "2026-09-12T22:30:34.654Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:43.63",
-        "resultUrl": "https://www.tfrrs.org/results/85065/5209545/UW-Platteville_Invitational/Womens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "5:21.36",
-        "resultUrl": "https://www.tfrrs.org/results/85065/5209539/UW-Platteville_Invitational/Womens-1500-Meters"
-      },
-      {
-        "event": "3000",
-        "time": "10:23.02",
-        "resultUrl": "https://www.tfrrs.org/results/93798/5819019/American_Rivers_Conference_Championships/Womens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "17:58.90",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929085/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "37:06.16",
-        "resultUrl": "https://www.tfrrs.org/results/94839/5949086/WashU_Distance_Carnival_26/Womens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "19:12.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/25313/Chiburg_5k?meet_hnd=25313"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "22:26.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26438/Paul_Short_Run_College?meet_hnd=26438"
-      }
-    ]
-  },
-  "15908": {
-    "name": "Makenna Hetrick",
-    "tfrrsId": "8896830",
-    "fetchedAt": "2026-09-12T22:30:36.353Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:43.99",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746795/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "5:25.60",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618750/Wartburg_May_Triangular/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:52.48",
-        "resultUrl": "https://www.tfrrs.org/results/87924/5405780/Liz_Wuertz_Indoor_Meet/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "11:48.04",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810460/Liz_Wuertz_Indoor_Meet/Womens-3000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "20:06.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "24:48.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24926/American_Rivers_Conference_Championships?meet_hnd=24926"
-      }
-    ]
-  },
-  "15910": {
-    "name": "Ella Johnson",
-    "tfrrsId": "8700382",
-    "fetchedAt": "2026-09-12T22:30:38.046Z",
-    "bests": [
-      {
-        "event": "600",
-        "time": "1:40.32",
-        "resultUrl": "https://www.tfrrs.org/results/82468/5018300/FRIDAY_KNIGHT_LIGHTS_INDOOR_MEET/Womens-600-Meters"
-      },
-      {
-        "event": "800",
-        "time": "2:17.29",
-        "resultUrl": "https://www.tfrrs.org/results/83705/5088473/Wartburg_Qualifier/Womens-800-Meters"
-      },
-      {
-        "event": "1000",
-        "time": "3:12.62",
-        "resultUrl": "https://www.tfrrs.org/results/87921/5353934/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-1000-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:46.56",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959858/2026_Kip_Janvrin_Open/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:12.00",
-        "resultUrl": "https://www.tfrrs.org/results/93688/5833964/Wartburg_Qualifier/Womens-Mile"
-      },
-      {
-        "event": "5000",
-        "time": "18:47.52",
-        "resultUrl": "https://www.tfrrs.org/results/90261/5544472/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "PV",
-        "time": "2.83m",
-        "resultUrl": "https://www.tfrrs.org/results/84911/5276271/American_Rivers_Conference_Championships/Womens-Pole-Vault"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "18:58.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "23:15.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15913": {
-    "name": "Lydia Maas",
-    "tfrrsId": "8896833",
-    "fetchedAt": "2026-09-12T22:30:38.907Z",
-    "bests": [
-      {
-        "event": "1500",
-        "time": "4:56.72",
-        "resultUrl": "https://www.tfrrs.org/results/90375/5510698/Wartburg_Outdoor_Select/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:14.09",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777318/Wartburg_Indoor_Select_Meet/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "10:07.83",
-        "resultUrl": "https://www.tfrrs.org/results/93688/5833968/Wartburg_Qualifier/Womens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "17:27.08",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929085/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "36:32.10",
-        "resultUrl": "https://www.tfrrs.org/results/94839/5949086/WashU_Distance_Carnival_26/Womens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "19:18.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "22:09.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15916": {
-    "name": "Zaya Peirce",
-    "tfrrsId": "8896844",
-    "fetchedAt": "2026-09-12T22:30:41.376Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:58.60",
-        "resultUrl": "https://www.tfrrs.org/results/90375/5510739/Wartburg_Outdoor_Select/Womens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "5:44.51",
-        "resultUrl": "https://www.tfrrs.org/results/90375/5510698/Wartburg_Outdoor_Select/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "6:12.48",
-        "resultUrl": "https://www.tfrrs.org/results/87923/5380364/Friday_Knight_Lights_Indoor_Meet/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "12:13.00",
-        "resultUrl": "https://www.tfrrs.org/results/87924/5405764/Liz_Wuertz_Indoor_Meet/Womens-3000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "21:30.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/25313/Chiburg_5k?meet_hnd=25313"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "26:40.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24926/American_Rivers_Conference_Championships?meet_hnd=24926"
-      }
-    ]
-  },
-  "15918": {
-    "name": "Megan Pickar",
-    "tfrrsId": "8896840",
-    "fetchedAt": "2026-09-12T22:30:43.079Z",
+  "6139117": {
+    "name": "Natalie Fober",
+    "tfrrsId": "6139117",
+    "fetchedAt": "2026-09-13T03:08:04.251Z",
     "bests": [
       {
         "event": "400",
-        "time": "1:04.87",
-        "resultUrl": "https://www.tfrrs.org/results/87923/5380347/Friday_Knight_Lights_Indoor_Meet/Womens-400-Meters"
-      },
-      {
-        "event": "600",
-        "time": "1:45.41",
-        "resultUrl": "https://www.tfrrs.org/results/87921/5353939/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-600-Meters"
+        "time": "1:01.62",
+        "resultUrl": "https://www.tfrrs.org/results/56924/3511811/Augustana_Twilight_/Womens-400-Meters"
       },
       {
         "event": "800",
-        "time": "2:23.73",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810470/Liz_Wuertz_Indoor_Meet/Womens-800-Meters"
+        "time": "2:19.52",
+        "resultUrl": "https://www.tfrrs.org/results/57030/3505838/Iowa_Conference_Outdoor_Championships/Womens-800-Meters"
       },
       {
         "event": "1000",
-        "time": "3:18.74",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746779/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-1000-Meters"
+        "time": "3:19.17",
+        "resultUrl": "https://www.tfrrs.org/results/64224/3918564/Chelsey_M_Henkenius_Indoor_Open/Womens-1000-Meters"
       },
       {
         "event": "1500",
-        "time": "5:05.78",
-        "resultUrl": "https://www.tfrrs.org/results/96444/5935754/Dutch_Weather_Saver_20/Womens-1500-Meters"
+        "time": "4:56.43",
+        "resultUrl": "https://www.tfrrs.org/results/56531/3456319/Phil_Esten_Challenge_at_UW-La_Crosse/Womens-1500-Meters"
       },
       {
         "event": "MILE",
-        "time": "5:27.94",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777318/Wartburg_Indoor_Select_Meet/Womens-Mile"
-      },
-      {
-        "event": "4K (XC)",
-        "time": "16:03.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "19:23.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "24:27.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15919": {
-    "name": "Anna Quillin",
-    "tfrrsId": "8904663",
-    "fetchedAt": "2026-09-12T22:30:43.953Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:23.22",
-        "resultUrl": "https://www.tfrrs.org/results/90711/5542205/Mustang_Distance_Carnival__Open/Womens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:49.39",
-        "resultUrl": "https://www.tfrrs.org/results/95876/5951003/Wartburg_April_Tri/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:06.17",
-        "resultUrl": "https://www.tfrrs.org/results/93688/5833964/Wartburg_Qualifier/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "10:25.06",
-        "resultUrl": "https://www.tfrrs.org/results/93798/5819019/American_Rivers_Conference_Championships/Womens-3000-Meters"
+        "time": "5:29.30",
+        "resultUrl": "https://www.tfrrs.org/results/64949/3947713/Wartburg_Friday_Night_Lights_Meet/Womens-Mile"
       },
       {
         "event": "5000",
-        "time": "18:10.70",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929085/UW-Platteville_Invitational/Womens-5000-Meters"
+        "time": "20:28.36",
+        "resultUrl": "https://www.tfrrs.org/results/51879/3190238/Iowa_Conference_Outdoor_Championships/Womens-5000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "21:53.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14228/John_Kurtt_Fall_Invitational?meet_hnd=14228"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "25:09.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/16603/Kollege_Town_Sports_Invitational?meet_hnd=16603"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "20:16.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6139134": {
+    "name": "Kylie Kelchen",
+    "tfrrsId": "6139134",
+    "fetchedAt": "2026-09-13T03:08:07.604Z",
+    "bests": [
+      {
+        "event": "1500",
+        "time": "5:23.32",
+        "resultUrl": "https://www.tfrrs.org/results/50831/3098421/Ashton_May_Invitational/Womens-1500-Meters"
+      },
+      {
+        "event": "3000",
+        "time": "11:08.00",
+        "resultUrl": "https://www.tfrrs.org/results/48897/2986363/Wartburg_Indoor_Invite/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "18:56.55",
+        "resultUrl": "https://www.tfrrs.org/results/61152/3769454/UW-Platteville_Invitational/Womens-5000-Meters"
       },
       {
         "event": "3000S",
-        "time": "11:14.17",
-        "resultUrl": "https://www.tfrrs.org/results/96180/5996305/Midwest_Twilight_Final_Qualifier/Womens-3000-Steeplechase"
-      },
-      {
-        "event": "4K (XC)",
-        "time": "15:36.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
+        "time": "12:03.81",
+        "resultUrl": "https://www.tfrrs.org/results/62592/3840104/American_Rivers_Outdoor_Conference_Championships/Womens-3000-Steeplechase"
       },
       {
         "event": "5K (XC)",
-        "time": "19:07.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
+        "time": "20:23.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
       },
       {
         "event": "6K (XC)",
-        "time": "23:24.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
+        "time": "24:17.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/16697/Saga_Cup?meet_hnd=16697"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "19:11.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
       }
     ]
   },
-  "15920": {
-    "name": "Hannah Ramsey",
-    "tfrrsId": "8700388",
-    "fetchedAt": "2026-09-12T22:30:44.869Z",
-    "bests": [
-      {
-        "event": "400",
-        "time": "58.32",
-        "resultUrl": "https://www.tfrrs.org/results/93874/5996406/UW-La_Crosse_NCAA_Outdoor_Final_Qualifier/Womens-400-Meters"
-      },
-      {
-        "event": "600",
-        "time": "1:37.96",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746791/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-600-Meters"
-      },
-      {
-        "event": "800",
-        "time": "2:14.03",
-        "resultUrl": "https://www.tfrrs.org/results/95878/5989360/Wartburg_Qualifier/Womens-800-Meters"
-      },
-      {
-        "event": "1000",
-        "time": "3:01.87",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760499/Cyclone_Open/Womens-1000-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "5:07.93",
-        "resultUrl": "https://www.tfrrs.org/results/90375/5510698/Wartburg_Outdoor_Select/Womens-1500-Meters"
-      },
-      {
-        "event": "400H",
-        "time": "1:11.05",
-        "resultUrl": "https://www.tfrrs.org/results/86096/5259277/Wartburg_May_Triangular/Womens-400-Hurdles"
-      },
-      {
-        "event": "4K (XC)",
-        "time": "16:53.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "20:16.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/25313/Chiburg_5k?meet_hnd=25313"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "24:11.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15923": {
-    "name": "Cali Trygstad",
-    "tfrrsId": "8700393",
-    "fetchedAt": "2026-09-12T22:30:45.741Z",
+  "6139135": {
+    "name": "Parry Larson",
+    "tfrrsId": "6139135",
+    "fetchedAt": "2026-09-13T03:08:09.247Z",
     "bests": [
       {
         "event": "800",
-        "time": "2:39.91",
-        "resultUrl": "https://www.tfrrs.org/results/90891/5568649/Meet_of_Champions/Womens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "5:11.10",
-        "resultUrl": "https://www.tfrrs.org/results/96444/5935754/Dutch_Weather_Saver_20/Womens-1500-Meters"
+        "time": "2:29.90",
+        "resultUrl": "https://www.tfrrs.org/results/47550/2975563/2017_Darren_Young_Classic/Womens-800-Meters"
       },
       {
         "event": "MILE",
-        "time": "5:43.85",
-        "resultUrl": "https://www.tfrrs.org/results/87923/5380364/Friday_Knight_Lights_Indoor_Meet/Womens-Mile"
+        "time": "5:43.78",
+        "resultUrl": "https://www.tfrrs.org/results/48564/2965791/Wartburg_Indoor_Select/Womens-Mile"
       },
       {
         "event": "3000",
-        "time": "10:49.78",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764255/Friday_Knight_Lights_Indoor_Meet/Womens-3000-Meters"
+        "time": "11:38.60",
+        "resultUrl": "https://www.tfrrs.org/results/48564/2965815/Wartburg_Indoor_Select/Womens-3000-Meters"
       },
       {
-        "event": "5000",
-        "time": "19:10.00",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929085/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "3000S",
-        "time": "12:26.62",
-        "resultUrl": "https://www.tfrrs.org/results/86282/5221533/Phil_Esten_Challenge/Womens-3000-Steeplechase"
+        "event": "TJ",
+        "time": "9.95m",
+        "resultUrl": "https://www.tfrrs.org/results/48897/2986377/Wartburg_Indoor_Invite/Womens-Triple-Jump"
       },
       {
         "event": "5K (XC)",
-        "time": "19:02.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
+        "time": "21:35.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/10176/Augusburg_Alumni_meet?meet_hnd=10176"
       },
       {
         "event": "6K (XC)",
-        "time": "23:32.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
+        "time": "24:50.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11194/Iowa_Conference_Championships?meet_hnd=11194"
       }
     ]
   },
-  "15924": {
-    "name": "Ava Vance",
-    "tfrrsId": "8896837",
-    "fetchedAt": "2026-09-12T22:30:47.424Z",
-    "bests": [
-      {
-        "event": "MILE",
-        "time": "5:38.97",
-        "resultUrl": "https://www.tfrrs.org/results/87922/5372934/Wartburg_Indoor_Select_Meet/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "10:33.98",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810460/Liz_Wuertz_Indoor_Meet/Womens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "18:08.20",
-        "resultUrl": "https://www.tfrrs.org/results/90261/5544472/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "38:08.33",
-        "resultUrl": "https://www.tfrrs.org/results/91807/5568521/Phil_Esten_Challenge/Womens-10000-Meters"
-      },
-      {
-        "event": "4K (XC)",
-        "time": "15:17.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "19:25.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "22:17.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15925": {
-    "name": "Grace Vortherms",
-    "tfrrsId": "8896832",
-    "fetchedAt": "2026-09-12T22:30:49.117Z",
+  "6139222": {
+    "name": "Caleb Appleton",
+    "tfrrsId": "6139222",
+    "fetchedAt": "2026-09-13T03:07:33.288Z",
     "bests": [
       {
         "event": "800",
-        "time": "2:49.98",
-        "resultUrl": "https://www.tfrrs.org/results/87923/5380346/Friday_Knight_Lights_Indoor_Meet/Womens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "5:27.78",
-        "resultUrl": "https://www.tfrrs.org/results/96444/5935754/Dutch_Weather_Saver_20/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:53.26",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777318/Wartburg_Indoor_Select_Meet/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "11:23.71",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810460/Liz_Wuertz_Indoor_Meet/Womens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "19:34.03",
-        "resultUrl": "https://www.tfrrs.org/results/90261/5544472/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "42:59.65",
-        "resultUrl": "https://www.tfrrs.org/results/95719/5886049/Wartburg_outdoor_Select_10k/Womens-10000-Meters"
-      },
-      {
-        "event": "4K (XC)",
-        "time": "16:34.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "20:20.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "24:53.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15926": {
-    "name": "Jillian Borgelt",
-    "tfrrsId": "9200728",
-    "fetchedAt": "2026-09-12T22:30:32.125Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:42.23",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746795/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-800-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:35.88",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777318/Wartburg_Indoor_Select_Meet/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "10:52.90",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810460/Liz_Wuertz_Indoor_Meet/Womens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "18:43.04",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929085/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "41:07.05",
-        "resultUrl": "https://www.tfrrs.org/results/95719/5886049/Wartburg_outdoor_Select_10k/Womens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "19:41.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "24:57.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27186/Saga_Cup?meet_hnd=27186"
-      }
-    ]
-  },
-  "15927": {
-    "name": "Lily Cooper",
-    "tfrrsId": "9200730",
-    "fetchedAt": "2026-09-12T22:30:33.816Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:30.94",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764267/Friday_Knight_Lights_Indoor_Meet/Womens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "5:05.44",
-        "resultUrl": "https://www.tfrrs.org/results/95876/5951003/Wartburg_April_Tri/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:34.81",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777318/Wartburg_Indoor_Select_Meet/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "10:52.93",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810460/Liz_Wuertz_Indoor_Meet/Womens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "18:57.41",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929085/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "4K (XC)",
-        "time": "16:23.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "19:58.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "24:48.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15928": {
-    "name": "Janae Hansen",
-    "tfrrsId": "9200727",
-    "fetchedAt": "2026-09-12T22:30:35.500Z",
-    "bests": [
-      {
-        "event": "600",
-        "time": "1:44.33",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746791/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-600-Meters"
-      },
-      {
-        "event": "800",
-        "time": "2:15.58",
-        "resultUrl": "https://www.tfrrs.org/results/96526/5987259/American_Rivers_Conference_Championships_/Womens-800-Meters"
-      },
-      {
-        "event": "1000",
-        "time": "3:12.18",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760499/Cyclone_Open/Womens-1000-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:50.40",
-        "resultUrl": "https://www.tfrrs.org/results/95876/5951003/Wartburg_April_Tri/Womens-1500-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "20:25.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26341/Trent_Smith_Invitational?meet_hnd=26341"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "24:21.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26874/Dan_Huston_Invitational?meet_hnd=26874"
-      }
-    ]
-  },
-  "15929": {
-    "name": "Claire Hoyer",
-    "tfrrsId": "9200724",
-    "fetchedAt": "2026-09-12T22:30:37.199Z",
-    "bests": [
-      {
-        "event": "1500",
-        "time": "4:53.58",
-        "resultUrl": "https://www.tfrrs.org/results/96444/5935754/Dutch_Weather_Saver_20/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:26.18",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777318/Wartburg_Indoor_Select_Meet/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "10:41.09",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764253/Friday_Knight_Lights_Indoor_Meet/Womens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "18:03.18",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959856/2026_Kip_Janvrin_Open/Womens-5000-Meters"
-      },
-      {
-        "event": "4K (XC)",
-        "time": "15:06.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "18:08.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "22:50.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15931": {
-    "name": "Leah McDonald",
-    "tfrrsId": "9200729",
-    "fetchedAt": "2026-09-12T22:30:39.735Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:35.42",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746795/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-800-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:32.88",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746777/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "10:35.20",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810460/Liz_Wuertz_Indoor_Meet/Womens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "18:28.54",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929085/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "3000S",
-        "time": "11:24.56",
-        "resultUrl": "https://www.tfrrs.org/results/96180/5996305/Midwest_Twilight_Final_Qualifier/Womens-3000-Steeplechase"
-      },
-      {
-        "event": "4K (XC)",
-        "time": "15:20.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "18:10.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "22:47.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26438/Paul_Short_Run_College?meet_hnd=26438"
-      }
-    ]
-  },
-  "15932": {
-    "name": "Peyton Morey",
-    "tfrrsId": "9200732",
-    "fetchedAt": "2026-09-12T22:30:40.559Z",
-    "bests": [
-      {
-        "event": "1500",
-        "time": "4:51.61",
-        "resultUrl": "https://www.tfrrs.org/results/95876/5951003/Wartburg_April_Tri/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:16.31",
-        "resultUrl": "https://www.tfrrs.org/results/93688/5833964/Wartburg_Qualifier/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "10:25.54",
-        "resultUrl": "https://www.tfrrs.org/results/93798/5819019/American_Rivers_Conference_Championships/Womens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "18:20.66",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929085/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "40:58.07",
-        "resultUrl": "https://www.tfrrs.org/results/95719/5886049/Wartburg_outdoor_Select_10k/Womens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "18:49.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "23:20.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15933": {
-    "name": "Marissa Pewe",
-    "tfrrsId": "9200731",
-    "fetchedAt": "2026-09-12T22:30:42.217Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:21.44",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810470/Liz_Wuertz_Indoor_Meet/Womens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:53.10",
-        "resultUrl": "https://www.tfrrs.org/results/95876/5951003/Wartburg_April_Tri/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:27.87",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760497/Cyclone_Open/Womens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "10:59.78",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746783/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "18:36.09",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929085/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "4K (XC)",
-        "time": "15:59.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "19:14.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "22:15.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15934": {
-    "name": "Lailah Utnage",
-    "tfrrsId": "9200733",
-    "fetchedAt": "2026-09-12T22:30:46.583Z",
-    "bests": [
-      {
-        "event": "4K (XC)",
-        "time": "18:40.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "20:01.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "24:45.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "15935": {
-    "name": "Ava Vanderheyden",
-    "tfrrsId": "9200722",
-    "fetchedAt": "2026-09-12T22:30:48.252Z",
-    "bests": [
-      {
-        "event": "4K (XC)",
-        "time": "18:55.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
-      }
-    ]
-  },
-  "15936": {
-    "name": "Bethany Warren",
-    "tfrrsId": "9200723",
-    "fetchedAt": "2026-09-12T22:30:49.950Z",
-    "bests": [
-      {
-        "event": "600",
-        "time": "1:40.34",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746791/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Womens-600-Meters"
-      },
-      {
-        "event": "800",
-        "time": "2:16.14",
-        "resultUrl": "https://www.tfrrs.org/results/95878/5989360/Wartburg_Qualifier/Womens-800-Meters"
-      },
-      {
-        "event": "1000",
-        "time": "3:00.23",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760499/Cyclone_Open/Womens-1000-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:49.90",
-        "resultUrl": "https://www.tfrrs.org/results/95876/5951003/Wartburg_April_Tri/Womens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "5:10.50",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810456/Liz_Wuertz_Indoor_Meet/Womens-Mile"
-      },
-      {
-        "event": "5000",
-        "time": "18:46.88",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929085/UW-Platteville_Invitational/Womens-5000-Meters"
-      },
-      {
-        "event": "400H",
-        "time": "1:06.53",
-        "resultUrl": "https://www.tfrrs.org/results/95878/5989356/Wartburg_Qualifier/Womens-400-Hurdles"
-      },
-      {
-        "event": "3000S",
-        "time": "11:27.81",
-        "resultUrl": "https://www.tfrrs.org/results/96526/5987251/American_Rivers_Conference_Championships_/Womens-3000-Steeplechase"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "18:49.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "23:02.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16878": {
-    "name": "Hutton Edney",
-    "tfrrsId": "8585412",
-    "fetchedAt": "2026-09-12T22:29:52.734Z",
-    "bests": [
-      {
-        "event": "400",
-        "time": "49.69",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618722/Wartburg_May_Triangular/Mens-400-Meters"
-      },
-      {
-        "event": "800",
-        "time": "1:50.60",
-        "resultUrl": "https://www.tfrrs.org/results/96180/5996336/Midwest_Twilight_Final_Qualifier/Mens-800-Meters"
-      },
-      {
-        "event": "1000",
-        "time": "2:28.37",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760500/Cyclone_Open/Mens-1000-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:02.99",
-        "resultUrl": "https://www.tfrrs.org/results/86096/5259288/Wartburg_May_Triangular/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:15.89",
-        "resultUrl": "https://www.tfrrs.org/results/82470/5062034/Liz_Wuertz_Indoor_Meet/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:46.87",
-        "resultUrl": "https://www.tfrrs.org/results/82471/5008744/Jack_Jennett_Invitational/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "14:58.43",
-        "resultUrl": "https://www.tfrrs.org/results/87691/5321250/Frigid_Bee_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "3000S",
-        "time": "9:41.09",
-        "resultUrl": "https://www.tfrrs.org/results/86282/5221528/Phil_Esten_Challenge/Mens-3000-Steeplechase"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:15.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/25313/Chiburg_5k?meet_hnd=25313"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "18:54.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "25:19.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24926/American_Rivers_Conference_Championships?meet_hnd=24926"
-      }
-    ]
-  },
-  "16881": {
-    "name": "Luke Hagenberg",
-    "tfrrsId": "9200674",
-    "fetchedAt": "2026-09-12T22:29:56.980Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:02.01",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777331/Wartburg_Indoor_Select_Meet/Mens-800-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:23.54",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760498/Cyclone_Open/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:59.10",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746784/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "16:07.32",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "3000S",
-        "time": "9:50.00",
-        "resultUrl": "https://www.tfrrs.org/results/96444/5935757/Dutch_Weather_Saver_20/Mens-3000-Steeplechase"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:56.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "20:11.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "26:06.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16883": {
-    "name": "Ryan Heden",
-    "tfrrsId": "9200665",
-    "fetchedAt": "2026-09-12T22:29:58.967Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "1:57.47",
-        "resultUrl": "https://www.tfrrs.org/results/95876/5951013/Wartburg_April_Tri/Mens-800-Meters"
-      },
-      {
-        "event": "1000",
-        "time": "2:37.56",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760500/Cyclone_Open/Mens-1000-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "3:59.33",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959857/2026_Kip_Janvrin_Open/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:22.40",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810457/Liz_Wuertz_Indoor_Meet/Mens-Mile"
-      },
-      {
-        "event": "5000",
-        "time": "15:35.71",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:47.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:44.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "26:06.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16885": {
-    "name": "Alex Horstman",
-    "tfrrsId": "8585415",
-    "fetchedAt": "2026-09-12T22:30:00.651Z",
-    "bests": [
-      {
-        "event": "1000",
-        "time": "2:44.26",
-        "resultUrl": "https://www.tfrrs.org/results/82468/5018285/FRIDAY_KNIGHT_LIGHTS_INDOOR_MEET/Mens-1000-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:31.16",
-        "resultUrl": "https://www.tfrrs.org/results/82468/5018280/FRIDAY_KNIGHT_LIGHTS_INDOOR_MEET/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:45.03",
-        "resultUrl": "https://www.tfrrs.org/results/82470/5062033/Liz_Wuertz_Indoor_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "3200",
-        "time": "9:37.09",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618724/Wartburg_May_Triangular/Mens-3200-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "15:00.87",
-        "resultUrl": "https://www.tfrrs.org/results/90261/5544471/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "30:36.91",
-        "resultUrl": "https://www.tfrrs.org/results/86282/5221522/Phil_Esten_Challenge/Mens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:20.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "24:54.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16891": {
-    "name": "Caden Kueker",
-    "tfrrsId": "8896804",
-    "fetchedAt": "2026-09-12T22:30:04.947Z",
-    "bests": [
-      {
-        "event": "1500",
-        "time": "4:34.58",
-        "resultUrl": "https://www.tfrrs.org/results/90375/5510725/Wartburg_Outdoor_Select/Mens-1500-Meters"
-      },
-      {
-        "event": "3000",
-        "time": "9:15.66",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764258/Friday_Knight_Lights_Indoor_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "3200",
-        "time": "10:00.21",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618724/Wartburg_May_Triangular/Mens-3200-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "15:32.87",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959861/2026_Kip_Janvrin_Open/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "32:34.63",
-        "resultUrl": "https://www.tfrrs.org/results/95878/5989344/Wartburg_Qualifier/Mens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:41.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:40.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "25:45.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16895": {
-    "name": "Jonathan Meyer",
-    "tfrrsId": "8585436",
-    "fetchedAt": "2026-09-12T22:30:12.516Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:21.90",
-        "resultUrl": "https://www.tfrrs.org/results/82470/5062045/Liz_Wuertz_Indoor_Meet/Mens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:46.57",
-        "resultUrl": "https://www.tfrrs.org/results/95358/5924251/Mustang_Distance_Carnival__Open/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:56.73",
-        "resultUrl": "https://www.tfrrs.org/results/82470/5062034/Liz_Wuertz_Indoor_Meet/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "10:02.62",
-        "resultUrl": "https://www.tfrrs.org/results/87922/5372911/Wartburg_Indoor_Select_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "3200",
-        "time": "11:01.84",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618724/Wartburg_May_Triangular/Mens-3200-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "17:23.31",
-        "resultUrl": "https://www.tfrrs.org/results/85000/5169252/Wartburg_Outdoor_Select/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "38:32.83",
-        "resultUrl": "https://www.tfrrs.org/results/90891/5568630/Meet_of_Champions/Mens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "17:10.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "22:12.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "28:52.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16899": {
-    "name": "Ben Neville",
-    "tfrrsId": "8896800",
-    "fetchedAt": "2026-09-12T22:30:15.987Z",
-    "bests": [
-      {
-        "event": "MILE",
-        "time": "4:33.17",
-        "resultUrl": "https://www.tfrrs.org/results/87922/5372912/Wartburg_Indoor_Select_Meet/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:35.86",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810461/Liz_Wuertz_Indoor_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "3200",
-        "time": "9:24.23",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618724/Wartburg_May_Triangular/Mens-3200-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "14:52.07",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "31:28.88",
-        "resultUrl": "https://www.tfrrs.org/results/93872/5938573/UW-La_Crosse_Phil_Esten_Challenge/Mens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:17.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "26:02.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26874/Dan_Huston_Invitational?meet_hnd=26874"
-      }
-    ]
-  },
-  "16903": {
-    "name": "Alex Pries",
-    "tfrrsId": "8896792",
-    "fetchedAt": "2026-09-12T22:30:19.378Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:14.82",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810471/Liz_Wuertz_Indoor_Meet/Mens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:31.47",
-        "resultUrl": "https://www.tfrrs.org/results/95358/5924251/Mustang_Distance_Carnival__Open/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:46.08",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810457/Liz_Wuertz_Indoor_Meet/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "9:42.05",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777323/Wartburg_Indoor_Select_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "16:49.35",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959861/2026_Kip_Janvrin_Open/Mens-5000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "17:28.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/28456/John_Kurtt_Invitational?meet_hnd=28456"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "29:09.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24926/American_Rivers_Conference_Championships?meet_hnd=24926"
-      }
-    ]
-  },
-  "16906": {
-    "name": "Sawyer Schmidt",
-    "tfrrsId": "8896826",
-    "fetchedAt": "2026-09-12T22:30:23.632Z",
-    "bests": [
-      {
-        "event": "600",
-        "time": "1:30.60",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746792/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-600-Meters"
-      },
-      {
-        "event": "800",
-        "time": "2:02.81",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810471/Liz_Wuertz_Indoor_Meet/Mens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:32.17",
-        "resultUrl": "https://www.tfrrs.org/results/90375/5510725/Wartburg_Outdoor_Select/Mens-1500-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "17:57.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/25313/Chiburg_5k?meet_hnd=25313"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "22:12.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "30:36.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24926/American_Rivers_Conference_Championships?meet_hnd=24926"
-      }
-    ]
-  },
-  "16908": {
-    "name": "Austin Soldwisch",
-    "tfrrsId": "9200672",
-    "fetchedAt": "2026-09-12T22:30:25.292Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:08.55",
-        "resultUrl": "https://www.tfrrs.org/results/96444/5935751/Dutch_Weather_Saver_20/Mens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:17.40",
-        "resultUrl": "https://www.tfrrs.org/results/96444/5935752/Dutch_Weather_Saver_20/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:35.45",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777319/Wartburg_Indoor_Select_Meet/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "9:05.61",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764258/Friday_Knight_Lights_Indoor_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "15:59.18",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959861/2026_Kip_Janvrin_Open/Mens-5000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:40.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:27.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "25:35.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16912": {
-    "name": "Nathan Ahern",
-    "tfrrsId": "9200680",
-    "fetchedAt": "2026-09-12T22:29:39.994Z",
-    "bests": [
-      {
-        "event": "600",
-        "time": "1:23.07",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746792/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-600-Meters"
-      },
-      {
-        "event": "800",
-        "time": "1:49.96",
-        "resultUrl": "https://www.tfrrs.org/results/96718/6003472/NCAA_Division_III_Outdoor_Track__Field_Championships/Mens-800-Meters"
-      },
-      {
-        "event": "1000",
-        "time": "2:28.62",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760500/Cyclone_Open/Mens-1000-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "3:49.67",
-        "resultUrl": "https://www.tfrrs.org/results/96526/5987248/American_Rivers_Conference_Championships_/Mens-1500-Meters"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "21:17.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "27:46.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16913": {
-    "name": "Ahmed Aldamak",
-    "tfrrsId": "8896801",
-    "fetchedAt": "2026-09-12T22:29:40.835Z",
-    "bests": [
-      {
-        "event": "1500",
-        "time": "3:49.88",
-        "resultUrl": "https://www.tfrrs.org/results/96180/5996332/Midwest_Twilight_Final_Qualifier/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:14.29",
-        "resultUrl": "https://www.tfrrs.org/results/93798/5819016/American_Rivers_Conference_Championships/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:28.39",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746784/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "14:31.92",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959861/2026_Kip_Janvrin_Open/Mens-5000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:21.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/25313/Chiburg_5k?meet_hnd=25313"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:21.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "24:51.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16914": {
-    "name": "AJ Angus",
-    "tfrrsId": "8896799",
-    "fetchedAt": "2026-09-12T22:29:41.682Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "1:55.17",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959855/2026_Kip_Janvrin_Open/Mens-800-Meters"
-      },
-      {
-        "event": "1000",
-        "time": "2:36.94",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746780/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-1000-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:04.47",
-        "resultUrl": "https://www.tfrrs.org/results/95878/5989350/Wartburg_Qualifier/Mens-1500-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:57.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "20:04.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "26:28.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16915": {
-    "name": "Cooper Bankston",
-    "tfrrsId": "8585408",
-    "fetchedAt": "2026-09-12T22:29:42.554Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:10.11",
-        "resultUrl": "https://www.tfrrs.org/results/82468/5018302/FRIDAY_KNIGHT_LIGHTS_INDOOR_MEET/Mens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:20.85",
-        "resultUrl": "https://www.tfrrs.org/results/90375/5510725/Wartburg_Outdoor_Select/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:38.77",
-        "resultUrl": "https://www.tfrrs.org/results/82468/5018280/FRIDAY_KNIGHT_LIGHTS_INDOOR_MEET/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:58.82",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810461/Liz_Wuertz_Indoor_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "3200",
-        "time": "9:50.53",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618724/Wartburg_May_Triangular/Mens-3200-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "15:36.12",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "34:36.57",
-        "resultUrl": "https://www.tfrrs.org/results/95719/5886050/Wartburg_outdoor_Select_10k/Mens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:45.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:59.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "26:11.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16928": {
-    "name": "Isaiah Hammerand",
-    "tfrrsId": "8585435",
-    "fetchedAt": "2026-09-12T22:29:58.135Z",
-    "bests": [
-      {
-        "event": "1500",
-        "time": "4:04.31",
-        "resultUrl": "https://www.tfrrs.org/results/85000/5169239/Wartburg_Outdoor_Select/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:22.47",
-        "resultUrl": "https://www.tfrrs.org/results/82470/5062034/Liz_Wuertz_Indoor_Meet/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:10.18",
-        "resultUrl": "https://www.tfrrs.org/results/93798/5819020/American_Rivers_Conference_Championships/Mens-3000-Meters"
-      },
-      {
-        "event": "3200",
-        "time": "9:19.84",
-        "resultUrl": "https://www.tfrrs.org/results/86096/5259294/Wartburg_May_Triangular/Mens-3200-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "13:59.93",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "29:20.48",
-        "resultUrl": "https://www.tfrrs.org/results/94839/5949087/WashU_Distance_Carnival_26/Mens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "16:01.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/22093/John_Kurtt_Invitational?meet_hnd=22093"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "18:12.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "23:44.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16932": {
-    "name": "Garrison Hubka",
-    "tfrrsId": "8585420",
-    "fetchedAt": "2026-09-12T22:30:01.500Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:00.07",
-        "resultUrl": "https://www.tfrrs.org/results/86282/5221526/Phil_Esten_Challenge/Mens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:02.74",
-        "resultUrl": "https://www.tfrrs.org/results/95876/5951004/Wartburg_April_Tri/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:21.07",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760498/Cyclone_Open/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:35.25",
-        "resultUrl": "https://www.tfrrs.org/results/93688/5833969/Wartburg_Qualifier/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "14:46.88",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "3000S",
-        "time": "9:13.81",
-        "resultUrl": "https://www.tfrrs.org/results/96180/5996306/Midwest_Twilight_Final_Qualifier/Mens-3000-Steeplechase"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:39.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:26.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "26:14.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16936": {
-    "name": "Nathan Kinzer",
-    "tfrrsId": "8585417",
-    "fetchedAt": "2026-09-12T22:30:04.068Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "1:57.46",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764268/Friday_Knight_Lights_Indoor_Meet/Mens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "3:49.71",
-        "resultUrl": "https://www.tfrrs.org/results/91158/5645118/American_Rivers_Conference_Championships/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:09.93",
-        "resultUrl": "https://www.tfrrs.org/results/94169/5791160/BU_David_Hemery_Valentine_Invitational_Collegiate/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:28.21",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746784/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "14:52.68",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "14:44.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:05.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "25:00.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16939": {
-    "name": "Connor Martin",
-    "tfrrsId": "9200678",
-    "fetchedAt": "2026-09-12T22:30:09.119Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "1:58.92",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810471/Liz_Wuertz_Indoor_Meet/Mens-800-Meters"
-      },
-      {
-        "event": "1000",
-        "time": "2:35.59",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760500/Cyclone_Open/Mens-1000-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "3:53.32",
-        "resultUrl": "https://www.tfrrs.org/results/95878/5989350/Wartburg_Qualifier/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:18.43",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810457/Liz_Wuertz_Indoor_Meet/Mens-Mile"
-      },
-      {
-        "event": "5000",
-        "time": "15:14.57",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:46.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:09.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "26:21.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16943": {
-    "name": "Drew Moser",
-    "tfrrsId": "8896795",
-    "fetchedAt": "2026-09-12T22:30:14.250Z",
-    "bests": [
-      {
-        "event": "1500",
-        "time": "4:05.39",
-        "resultUrl": "https://www.tfrrs.org/results/92079/5596523/2025_Kip_Janvrin_Open/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:29.33",
-        "resultUrl": "https://www.tfrrs.org/results/87922/5372912/Wartburg_Indoor_Select_Meet/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:53.63",
-        "resultUrl": "https://www.tfrrs.org/results/87924/5405766/Liz_Wuertz_Indoor_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "15:08.72",
-        "resultUrl": "https://www.tfrrs.org/results/93047/5712015/Frigid_Bee_Opener/Mens-5000-Meters"
-      },
-      {
-        "event": "3000S",
-        "time": "10:03.92",
-        "resultUrl": "https://www.tfrrs.org/results/90375/5510747/Wartburg_Outdoor_Select/Mens-3000-Steeplechase"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "14:57.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:03.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "25:05.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16947": {
-    "name": "Brendan Owens",
-    "tfrrsId": "8896793",
-    "fetchedAt": "2026-09-12T22:30:18.521Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:02.86",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777331/Wartburg_Indoor_Select_Meet/Mens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:07.92",
-        "resultUrl": "https://www.tfrrs.org/results/95876/5951004/Wartburg_April_Tri/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:21.92",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810457/Liz_Wuertz_Indoor_Meet/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:55.49",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764256/Friday_Knight_Lights_Indoor_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "15:37.52",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "3000S",
-        "time": "9:50.81",
-        "resultUrl": "https://www.tfrrs.org/results/95878/5989353/Wartburg_Qualifier/Mens-3000-Steeplechase"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:59.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "20:07.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "26:30.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16951": {
-    "name": "AJ Schermerhorn",
-    "tfrrsId": "9200676",
-    "fetchedAt": "2026-09-12T22:30:22.758Z",
-    "bests": [
-      {
-        "event": "MILE",
-        "time": "4:21.62",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777319/Wartburg_Indoor_Select_Meet/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:33.65",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764254/Friday_Knight_Lights_Indoor_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "14:43.57",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "30:26.93",
-        "resultUrl": "https://www.tfrrs.org/results/95878/5989344/Wartburg_Qualifier/Mens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "14:57.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:40.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "25:18.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16956": {
-    "name": "Nolan Wieneke",
-    "tfrrsId": "9200667",
-    "fetchedAt": "2026-09-12T22:30:27.818Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:00.47",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810471/Liz_Wuertz_Indoor_Meet/Mens-800-Meters"
+        "time": "1:56.44",
+        "resultUrl": "https://www.tfrrs.org/results/54503/3322860/Wartburg_Qualifier/Mens-800-Meters"
       },
       {
         "event": "1000",
         "time": "2:36.30",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760500/Cyclone_Open/Mens-1000-Meters"
+        "resultUrl": "https://www.tfrrs.org/results/53729/3278570/Wartburg_Indoor_Select/Mens-1000-Meters"
       },
       {
         "event": "1500",
-        "time": "4:06.05",
-        "resultUrl": "https://www.tfrrs.org/results/96444/5935752/Dutch_Weather_Saver_20/Mens-1500-Meters"
+        "time": "3:56.97",
+        "resultUrl": "https://www.tfrrs.org/results/57030/3505864/Iowa_Conference_Outdoor_Championships/Mens-1500-Meters"
       },
       {
         "event": "MILE",
-        "time": "4:31.82",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777319/Wartburg_Indoor_Select_Meet/Mens-Mile"
-      },
-      {
-        "event": "5000",
-        "time": "15:56.07",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959861/2026_Kip_Janvrin_Open/Mens-5000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "16:00.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "20:16.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "26:49.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16962": {
-    "name": "Ethan Boston",
-    "tfrrsId": "9200679",
-    "fetchedAt": "2026-09-12T22:29:44.205Z",
-    "bests": [
-      {
-        "event": "MILE",
-        "time": "4:31.91",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777319/Wartburg_Indoor_Select_Meet/Mens-Mile"
+        "time": "4:16.76",
+        "resultUrl": "https://www.tfrrs.org/results/65189/4001360/Wartburg_Qualifier/Mens-Mile"
       },
       {
         "event": "3000",
-        "time": "8:46.82",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764256/Friday_Knight_Lights_Indoor_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "14:54.21",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "3000S",
-        "time": "9:19.76",
-        "resultUrl": "https://www.tfrrs.org/results/96180/5996306/Midwest_Twilight_Final_Qualifier/Mens-3000-Steeplechase"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:04.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:22.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "25:27.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16963": {
-    "name": "Ayden Buchanan",
-    "tfrrsId": "8896802",
-    "fetchedAt": "2026-09-12T22:29:45.036Z",
-    "bests": [
-      {
-        "event": "1500",
-        "time": "4:05.86",
-        "resultUrl": "https://www.tfrrs.org/results/92079/5596523/2025_Kip_Janvrin_Open/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:20.38",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760498/Cyclone_Open/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:34.83",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764254/Friday_Knight_Lights_Indoor_Meet/Mens-3000-Meters"
+        "time": "8:23.99",
+        "resultUrl": "https://www.tfrrs.org/results/59897/3664538/NCAA_Division_III_Indoor_Track__Field_Championships/Mens-3000-Meters"
       },
       {
         "event": "3200",
-        "time": "9:26.71",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618724/Wartburg_May_Triangular/Mens-3200-Meters"
+        "time": "9:16.07",
+        "resultUrl": "https://www.tfrrs.org/results/56929/3490545/Wartburg_Luther_Dual/Mens-3200-Meters"
       },
       {
         "event": "5000",
-        "time": "14:20.37",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
+        "time": "14:33.02",
+        "resultUrl": "https://www.tfrrs.org/results/62580/3844785/NCC_Gregory_Final_Qualifier/Mens-5000-Meters"
       },
       {
-        "event": "10,000",
-        "time": "30:15.48",
-        "resultUrl": "https://www.tfrrs.org/results/96526/5987242/American_Rivers_Conference_Championships_/Mens-10000-Meters"
+        "event": "3000S",
+        "time": "10:10.44",
+        "resultUrl": "https://www.tfrrs.org/results/50120/3052344/Augustana_College_Early_Spring_Opener/Mens-3000-Steeplechase"
       },
       {
         "event": "5K (XC)",
-        "time": "15:31.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/25313/Chiburg_5k?meet_hnd=25313"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "18:52.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
+        "time": "16:16.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14228/John_Kurtt_Fall_Invitational?meet_hnd=14228"
       },
       {
         "event": "8K (XC)",
-        "time": "24:35.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26620/Redbird_Invitational?meet_hnd=26620"
+        "time": "25:12.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15028/NCAA_Division_III_Cross_Country_Championships?meet_hnd=15028"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "25:49.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15222/Bradley_Intercollegiate?meet_hnd=15222"
       }
     ]
   },
-  "16964": {
-    "name": "Marcus Camacho",
-    "tfrrsId": "8896789",
-    "fetchedAt": "2026-09-12T22:29:45.866Z",
+  "6139227": {
+    "name": "Jon Fuentes",
+    "tfrrsId": "6139227",
+    "fetchedAt": "2026-09-13T03:07:40.198Z",
     "bests": [
       {
-        "event": "600",
-        "time": "1:27.46",
-        "resultUrl": "https://www.tfrrs.org/results/87921/5353929/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-600-Meters"
-      },
-      {
         "event": "800",
-        "time": "1:54.97",
-        "resultUrl": "https://www.tfrrs.org/results/93047/5712018/Frigid_Bee_Opener/Mens-800-Meters"
+        "time": "2:00.00",
+        "resultUrl": "https://www.tfrrs.org/results/62627/3845723/NCAA_Final_Qualifier_at_UW-La_Crosse/Mens-800-Meters"
       },
       {
         "event": "1000",
-        "time": "2:36.01",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746780/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-1000-Meters"
+        "time": "2:49.85",
+        "resultUrl": "https://www.tfrrs.org/results/53399/3259091/Chelsey_M_Henkenius_Open/Mens-1000-Meters"
       },
       {
         "event": "1500",
-        "time": "4:10.95",
-        "resultUrl": "https://www.tfrrs.org/results/90891/5568682/Meet_of_Champions/Mens-1500-Meters"
+        "time": "4:22.34",
+        "resultUrl": "https://www.tfrrs.org/results/61152/3769449/UW-Platteville_Invitational/Mens-1500-Meters"
       },
-      {
-        "event": "5K (XC)",
-        "time": "16:06.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "21:25.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "28:12.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16965": {
-    "name": "Cooper Cook",
-    "tfrrsId": "8896794",
-    "fetchedAt": "2026-09-12T22:29:47.565Z",
-    "bests": [
       {
         "event": "MILE",
-        "time": "4:31.98",
-        "resultUrl": "https://www.tfrrs.org/results/87923/5380352/Friday_Knight_Lights_Indoor_Meet/Mens-Mile"
+        "time": "4:52.89",
+        "resultUrl": "https://www.tfrrs.org/results/58612/3590132/Jack_Jennett_Open/Mens-Mile"
       },
       {
         "event": "3000",
-        "time": "8:41.97",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764256/Friday_Knight_Lights_Indoor_Meet/Mens-3000-Meters"
+        "time": "9:54.70",
+        "resultUrl": "https://www.tfrrs.org/results/59146/3601970/Wartburg_Indoor_Select/Mens-3000-Meters"
       },
       {
         "event": "3200",
-        "time": "9:27.57",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618724/Wartburg_May_Triangular/Mens-3200-Meters"
+        "time": "10:53.10",
+        "resultUrl": "https://www.tfrrs.org/results/51750/3172360/Luther_vs_Wartburg_Dual/Mens-3200-Meters"
       },
       {
         "event": "5000",
-        "time": "14:52.09",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "31:31.67",
-        "resultUrl": "https://www.tfrrs.org/results/93872/5938573/UW-La_Crosse_Phil_Esten_Challenge/Mens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:01.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:03.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "24:41.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16966": {
-    "name": "Evan Cook",
-    "tfrrsId": "9200669",
-    "fetchedAt": "2026-09-12T22:29:48.398Z",
-    "bests": [
-      {
-        "event": "MILE",
-        "time": "4:23.63",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777319/Wartburg_Indoor_Select_Meet/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:48.18",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764256/Friday_Knight_Lights_Indoor_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "14:55.06",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "31:31.10",
-        "resultUrl": "https://www.tfrrs.org/results/93872/5938573/UW-La_Crosse_Phil_Esten_Challenge/Mens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:17.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:23.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "25:50.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16967": {
-    "name": "Derek Coulter",
-    "tfrrsId": "8585423",
-    "fetchedAt": "2026-09-12T22:29:49.261Z",
-    "bests": [
-      {
-        "event": "MILE",
-        "time": "4:24.83",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777319/Wartburg_Indoor_Select_Meet/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:49.21",
-        "resultUrl": "https://www.tfrrs.org/results/87922/5372911/Wartburg_Indoor_Select_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "3200",
-        "time": "9:35.83",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618724/Wartburg_May_Triangular/Mens-3200-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "14:58.20",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "31:25.76",
-        "resultUrl": "https://www.tfrrs.org/results/93872/5938573/UW-La_Crosse_Phil_Esten_Challenge/Mens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:00.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:07.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "25:03.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16968": {
-    "name": "Mason Coulter",
-    "tfrrsId": "9200666",
-    "fetchedAt": "2026-09-12T22:29:50.118Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "2:00.70",
-        "resultUrl": "https://www.tfrrs.org/results/96444/5935751/Dutch_Weather_Saver_20/Mens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:22.95",
-        "resultUrl": "https://www.tfrrs.org/results/95358/5924251/Mustang_Distance_Carnival__Open/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:40.51",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760498/Cyclone_Open/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "9:28.06",
-        "resultUrl": "https://www.tfrrs.org/results/93687/5810461/Liz_Wuertz_Indoor_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "16:40.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "22:31.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "29:04.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16969": {
-    "name": "Aidan Decker",
-    "tfrrsId": "8896803",
-    "fetchedAt": "2026-09-12T22:29:51.002Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "1:56.77",
-        "resultUrl": "https://www.tfrrs.org/results/87924/5405778/Liz_Wuertz_Indoor_Meet/Mens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "3:52.99",
-        "resultUrl": "https://www.tfrrs.org/results/95878/5989350/Wartburg_Qualifier/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:10.79",
-        "resultUrl": "https://www.tfrrs.org/results/89161/5435677/Wartburg_Qualifier/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "8:29.28",
-        "resultUrl": "https://www.tfrrs.org/results/87922/5372911/Wartburg_Indoor_Select_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "14:53.53",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "3000S",
-        "time": "9:04.13",
-        "resultUrl": "https://www.tfrrs.org/results/96180/5996306/Midwest_Twilight_Final_Qualifier/Mens-3000-Steeplechase"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:22.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/25313/Chiburg_5k?meet_hnd=25313"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:06.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "25:22.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26620/Redbird_Invitational?meet_hnd=26620"
-      }
-    ]
-  },
-  "16972": {
-    "name": "Dawson Fricke",
-    "tfrrsId": "8629072",
-    "fetchedAt": "2026-09-12T22:29:55.298Z",
-    "bests": [
-      {
-        "event": "1500",
-        "time": "4:12.25",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618723/Wartburg_May_Triangular/Mens-1500-Meters"
-      },
-      {
-        "event": "3000",
-        "time": "8:52.09",
-        "resultUrl": "https://www.tfrrs.org/results/83705/5088463/Wartburg_Qualifier/Mens-3000-Meters"
-      },
-      {
-        "event": "3200",
-        "time": "9:33.77",
-        "resultUrl": "https://www.tfrrs.org/results/86096/5259294/Wartburg_May_Triangular/Mens-3200-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "14:53.58",
-        "resultUrl": "https://www.tfrrs.org/results/90261/5544471/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "31:08.02",
-        "resultUrl": "https://www.tfrrs.org/results/86282/5221522/Phil_Esten_Challenge/Mens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:04.0",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:06.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "25:12.7",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24926/American_Rivers_Conference_Championships?meet_hnd=24926"
-      }
-    ]
-  },
-  "16976": {
-    "name": "Gage Heyne",
-    "tfrrsId": "9200670",
-    "fetchedAt": "2026-09-12T22:29:59.822Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "1:54.86",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959855/2026_Kip_Janvrin_Open/Mens-800-Meters"
-      },
-      {
-        "event": "1000",
-        "time": "2:31.41",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746780/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-1000-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "3:56.47",
-        "resultUrl": "https://www.tfrrs.org/results/96180/5996332/Midwest_Twilight_Final_Qualifier/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:16.31",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760498/Cyclone_Open/Mens-Mile"
-      },
-      {
-        "event": "3000S",
-        "time": "10:17.16",
-        "resultUrl": "https://www.tfrrs.org/results/96444/5935757/Dutch_Weather_Saver_20/Mens-3000-Steeplechase"
+        "time": "17:10.08",
+        "resultUrl": "https://www.tfrrs.org/results/56742/3472157/2018_Kip_Janvrin_Open/Mens-5000-Meters"
       },
       {
         "event": "PV",
-        "time": "3.60m",
-        "resultUrl": "https://www.tfrrs.org/results/96526/5987274/American_Rivers_Conference_Championships_/Mens-Pole-Vault"
+        "time": "3.20m",
+        "resultUrl": "https://www.tfrrs.org/results/64234/3926905/Jack_Jennett_Open/Mens-Pole-Vault"
+      },
+      {
+        "event": "JT",
+        "time": "29.27m",
+        "resultUrl": "https://www.tfrrs.org/results/61477/3742658/Wartburg_Outdoor_Select/Mens-Javelin"
       },
       {
         "event": "5K (XC)",
-        "time": "15:54.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
+        "time": "17:36.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
       },
       {
         "event": "8K (XC)",
-        "time": "26:33.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
+        "time": "28:46.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14673/21st_Dan_Huston_XC_Invite?meet_hnd=14673"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "29:52.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
       }
     ]
   },
-  "16980": {
-    "name": "Wes Hulseberg",
-    "tfrrsId": "8896796",
-    "fetchedAt": "2026-09-12T22:30:02.333Z",
-    "bests": [
-      {
-        "event": "3000",
-        "time": "9:14.26",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764258/Friday_Knight_Lights_Indoor_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "3200",
-        "time": "10:16.93",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618724/Wartburg_May_Triangular/Mens-3200-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "15:44.71",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959861/2026_Kip_Janvrin_Open/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "33:43.57",
-        "resultUrl": "https://www.tfrrs.org/results/95719/5886050/Wartburg_outdoor_Select_10k/Mens-10000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "16:20.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:59.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "26:27.5",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16982": {
-    "name": "Camden Kilker",
-    "tfrrsId": "8585410",
-    "fetchedAt": "2026-09-12T22:30:03.220Z",
+  "6139240": {
+    "name": "Conor Sapp",
+    "tfrrsId": "6139240",
+    "fetchedAt": "2026-09-13T03:07:51.365Z",
     "bests": [
       {
         "event": "800",
-        "time": "2:04.61",
-        "resultUrl": "https://www.tfrrs.org/results/96444/5935751/Dutch_Weather_Saver_20/Mens-800-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "4:15.31",
-        "resultUrl": "https://www.tfrrs.org/results/96444/5935752/Dutch_Weather_Saver_20/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:38.31",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764250/Friday_Knight_Lights_Indoor_Meet/Mens-Mile"
-      },
-      {
-        "event": "3000",
-        "time": "9:17.76",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777323/Wartburg_Indoor_Select_Meet/Mens-3000-Meters"
-      },
-      {
-        "event": "3200",
-        "time": "10:23.63",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618724/Wartburg_May_Triangular/Mens-3200-Meters"
-      },
-      {
-        "event": "5000",
-        "time": "15:59.09",
-        "resultUrl": "https://www.tfrrs.org/results/96386/5929057/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "16:12.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "20:13.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "27:10.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16985": {
-    "name": "Aaron Lursen",
-    "tfrrsId": "8585409",
-    "fetchedAt": "2026-09-12T22:30:08.283Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "1:58.07",
-        "resultUrl": "https://www.tfrrs.org/results/85000/5169256/Wartburg_Outdoor_Select/Mens-800-Meters"
+        "time": "1:57.85",
+        "resultUrl": "https://www.tfrrs.org/results/59587/3626353/Wartburg_Indoor_Invite/Mens-800-Meters"
       },
       {
         "event": "1000",
-        "time": "2:32.19",
-        "resultUrl": "https://www.tfrrs.org/results/87921/5353927/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-1000-Meters"
+        "time": "2:47.30",
+        "resultUrl": "https://www.tfrrs.org/results/53729/3278570/Wartburg_Indoor_Select/Mens-1000-Meters"
       },
       {
         "event": "1500",
-        "time": "3:56.41",
-        "resultUrl": "https://www.tfrrs.org/results/86096/5259288/Wartburg_May_Triangular/Mens-1500-Meters"
+        "time": "4:01.92",
+        "resultUrl": "https://www.tfrrs.org/results/62050/3788090/Phil_Esten_Challenge__UW-La_Crosse/Mens-1500-Meters"
       },
       {
         "event": "MILE",
-        "time": "4:13.96",
-        "resultUrl": "https://www.tfrrs.org/results/89161/5435677/Wartburg_Qualifier/Mens-Mile"
-      },
-      {
-        "event": "5000",
-        "time": "15:01.40",
-        "resultUrl": "https://www.tfrrs.org/results/90261/5544471/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:44.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/25313/Chiburg_5k?meet_hnd=25313"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "18:54.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24504/John_Kurtt_Invitational?meet_hnd=24504"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "25:48.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/24829/Dan_Huston_Invitational?meet_hnd=24829"
-      }
-    ]
-  },
-  "16987": {
-    "name": "Rylan Martin",
-    "tfrrsId": "8585419",
-    "fetchedAt": "2026-09-12T22:30:09.962Z",
-    "bests": [
-      {
-        "event": "800",
-        "time": "1:52.20",
-        "resultUrl": "https://www.tfrrs.org/results/91158/5645146/American_Rivers_Conference_Championships/Mens-800-Meters"
-      },
-      {
-        "event": "1000",
-        "time": "2:34.16",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746780/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-1000-Meters"
-      },
-      {
-        "event": "1500",
-        "time": "3:59.14",
-        "resultUrl": "https://www.tfrrs.org/results/90891/5568682/Meet_of_Champions/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:32.16",
-        "resultUrl": "https://www.tfrrs.org/results/87924/5405767/Liz_Wuertz_Indoor_Meet/Mens-Mile"
-      },
-      {
-        "event": "5K (XC)",
-        "time": "15:38.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/25313/Chiburg_5k?meet_hnd=25313"
-      },
-      {
-        "event": "6K (XC)",
-        "time": "19:41.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
-      },
-      {
-        "event": "8K (XC)",
-        "time": "26:17.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
-      }
-    ]
-  },
-  "16989": {
-    "name": "Nathan Moore",
-    "tfrrsId": "8896790",
-    "fetchedAt": "2026-09-12T22:30:13.367Z",
-    "bests": [
-      {
-        "event": "1500",
-        "time": "4:13.10",
-        "resultUrl": "https://www.tfrrs.org/results/90375/5510725/Wartburg_Outdoor_Select/Mens-1500-Meters"
-      },
-      {
-        "event": "MILE",
-        "time": "4:34.25",
-        "resultUrl": "https://www.tfrrs.org/results/87922/5372912/Wartburg_Indoor_Select_Meet/Mens-Mile"
+        "time": "4:22.24",
+        "resultUrl": "https://www.tfrrs.org/results/60004/3651431/Wartburg_Qualifier/Mens-Mile"
       },
       {
         "event": "3000",
-        "time": "8:55.07",
-        "resultUrl": "https://www.tfrrs.org/results/87921/5353920/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-3000-Meters"
+        "time": "9:01.57",
+        "resultUrl": "https://www.tfrrs.org/results/58774/3582653/Chelsey_M_Henkenius_Open/Mens-3000-Meters"
       },
       {
         "event": "3200",
-        "time": "9:22.98",
-        "resultUrl": "https://www.tfrrs.org/results/91892/5618724/Wartburg_May_Triangular/Mens-3200-Meters"
+        "time": "10:02.91",
+        "resultUrl": "https://www.tfrrs.org/results/51750/3172360/Luther_vs_Wartburg_Dual/Mens-3200-Meters"
       },
       {
-        "event": "5000",
-        "time": "15:15.64",
-        "resultUrl": "https://www.tfrrs.org/results/90261/5544471/UW-Platteville_Invitational/Mens-5000-Meters"
-      },
-      {
-        "event": "10,000",
-        "time": "32:26.47",
-        "resultUrl": "https://www.tfrrs.org/results/91807/5568522/Phil_Esten_Challenge/Mens-10000-Meters"
+        "event": "3000S",
+        "time": "9:45.83",
+        "resultUrl": "https://www.tfrrs.org/results/62304/3808797/2019_Kip_Janvrin_Open/Mens-3000-Steeplechase"
       },
       {
         "event": "5K (XC)",
-        "time": "15:38.8",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
+        "time": "16:14.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
       },
       {
-        "event": "6K (XC)",
-        "time": "19:09.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
+        "event": "6.437K (XC)",
+        "time": "23:34.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
       },
       {
         "event": "8K (XC)",
-        "time": "25:49.6",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
+        "time": "26:48.8",
+        "resultUrl": "https://www.tfrrs.org/results/xc/16603/Kollege_Town_Sports_Invitational?meet_hnd=16603"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "27:24.8",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15222/Bradley_Intercollegiate?meet_hnd=15222"
       }
     ]
   },
-  "16991": {
-    "name": "Carter Mulford",
-    "tfrrsId": "9200677",
-    "fetchedAt": "2026-09-12T22:30:15.128Z",
+  "6426421": {
+    "name": "Gabi Gonzalez",
+    "tfrrsId": "6426421",
+    "fetchedAt": "2026-09-13T03:08:05.907Z",
     "bests": [
       {
+        "event": "5K (XC)",
+        "time": "24:09.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11992/Crown_College_Invite?meet_hnd=11992"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "27:32.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12414/56th_Les_Duke?meet_hnd=12414"
+      }
+    ]
+  },
+  "6426422": {
+    "name": "Aryka Parsons",
+    "tfrrsId": "6426422",
+    "fetchedAt": "2026-09-13T03:08:12.616Z",
+    "bests": [
+      {
+        "event": "5K (XC)",
+        "time": "20:38.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "24:12.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12414/56th_Les_Duke?meet_hnd=12414"
+      }
+    ]
+  },
+  "6426438": {
+    "name": "Zac Sapiot",
+    "tfrrsId": "6426438",
+    "fetchedAt": "2026-09-13T03:07:50.508Z",
+    "bests": [
+      {
+        "event": "5K (XC)",
+        "time": "18:47.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11992/Crown_College_Invite?meet_hnd=11992"
+      },
+      {
+        "event": "6.437K (XC)",
+        "time": "24:29.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "30:11.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12414/56th_Les_Duke?meet_hnd=12414"
+      }
+    ]
+  },
+  "6426439": {
+    "name": "Matthew Schneider",
+    "tfrrsId": "6426439",
+    "fetchedAt": "2026-09-13T03:07:52.162Z",
+    "bests": [
+      {
+        "event": "5K (XC)",
+        "time": "16:47.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14228/John_Kurtt_Fall_Invitational?meet_hnd=14228"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "19:39.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "6.437K (XC)",
+        "time": "24:37.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "25:12.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17049/Wartburg_Triangular?meet_hnd=17049"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "27:31.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6592715": {
+    "name": "Janelle Baeskens",
+    "tfrrsId": "6592715",
+    "fetchedAt": "2026-09-13T03:07:56.471Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:36.01",
+        "resultUrl": "https://www.tfrrs.org/results/74305/4503009/SCIAC3_ULVCITCUCMSOC/Womens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "5:12.28",
+        "resultUrl": "https://www.tfrrs.org/results/61477/3742635/Wartburg_Outdoor_Select/Womens-1500-Meters"
+      },
+      {
         "event": "MILE",
-        "time": "4:29.62",
-        "resultUrl": "https://www.tfrrs.org/results/93672/5777319/Wartburg_Indoor_Select_Meet/Mens-Mile"
+        "time": "5:27.66",
+        "resultUrl": "https://www.tfrrs.org/results/67283/4062841/Wartburg_Indoor_Select/Womens-Mile"
       },
       {
         "event": "3000",
-        "time": "9:02.06",
-        "resultUrl": "https://www.tfrrs.org/results/93671/5764258/Friday_Knight_Lights_Indoor_Meet/Mens-3000-Meters"
+        "time": "10:37.12",
+        "resultUrl": "https://www.tfrrs.org/results/64478/3985533/American_Rivers_Indoor_Track__Field_Championships/Womens-3000-Meters"
       },
       {
         "event": "5000",
-        "time": "15:37.62",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959861/2026_Kip_Janvrin_Open/Mens-5000-Meters"
+        "time": "18:26.08",
+        "resultUrl": "https://www.tfrrs.org/results/66596/4081854/Liz_Wuertz_Indoor_Invitational/Womens-5000-Meters"
       },
       {
         "event": "10,000",
-        "time": "33:38.20",
-        "resultUrl": "https://www.tfrrs.org/results/93872/5938573/UW-La_Crosse_Phil_Esten_Challenge/Mens-10000-Meters"
+        "time": "38:32.93",
+        "resultUrl": "https://www.tfrrs.org/results/68984/4162124/Loras_Easter_Mid_Week/Womens-10000-Meters"
+      },
+      {
+        "event": "4.5K (XC)",
+        "time": "17:47.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17930/Redlands_Cross_Country_Invitational?meet_hnd=17930"
       },
       {
         "event": "5K (XC)",
-        "time": "15:49.9",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
+        "time": "19:45.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
       },
       {
         "event": "6K (XC)",
-        "time": "20:10.4",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
+        "time": "23:02.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17049/Wartburg_Triangular?meet_hnd=17049"
       },
       {
-        "event": "8K (XC)",
-        "time": "26:07.2",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26377/American_Rivers_Conference_Championships?meet_hnd=26377"
+        "event": "3 MILE (XC)",
+        "time": "18:59.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15222/Bradley_Intercollegiate?meet_hnd=15222"
+      },
+      {
+        "event": "3.73 MILE (XC)",
+        "time": "24:36.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/18970/2021_Pomona-Pitzer_XC_Invite?meet_hnd=18970"
       }
     ]
   },
-  "16993": {
-    "name": "Caleb Olson",
-    "tfrrsId": "9200668",
-    "fetchedAt": "2026-09-12T22:30:17.657Z",
+  "6592717": {
+    "name": "Cassidy Christopher",
+    "tfrrsId": "6592717",
+    "fetchedAt": "2026-09-13T03:07:59.933Z",
     "bests": [
       {
-        "event": "600",
-        "time": "1:26.88",
-        "resultUrl": "https://www.tfrrs.org/results/93686/5746792/CHELSEY_M_HENKENIUS_INDOOR_INVITATIONAL/Mens-600-Meters"
-      },
-      {
         "event": "800",
-        "time": "1:59.48",
-        "resultUrl": "https://www.tfrrs.org/results/96642/5959855/2026_Kip_Janvrin_Open/Mens-800-Meters"
+        "time": "2:21.90",
+        "resultUrl": "https://www.tfrrs.org/results/54104/3300259/Wartburg_Indoor_Invitational/Womens-800-Meters"
       },
       {
         "event": "1000",
-        "time": "2:44.17",
-        "resultUrl": "https://www.tfrrs.org/results/94829/5760500/Cyclone_Open/Mens-1000-Meters"
+        "time": "3:12.93",
+        "resultUrl": "https://www.tfrrs.org/results/58774/3582644/Chelsey_M_Henkenius_Open/Womens-1000-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:42.92",
+        "resultUrl": "https://www.tfrrs.org/results/56924/3511810/Augustana_Twilight_/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:07.10",
+        "resultUrl": "https://www.tfrrs.org/results/59146/3601926/Wartburg_Indoor_Select/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "9:50.70",
+        "resultUrl": "https://www.tfrrs.org/results/59897/3664530/NCAA_Division_III_Indoor_Track__Field_Championships/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "17:27.58",
+        "resultUrl": "https://www.tfrrs.org/results/59385/3718725/Washington_University_St_Louis_Invite/Womens-5000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "19:00.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "21:56.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13424/NCAA_Division_III_Cross_Country_Championships?meet_hnd=13424"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "22:25.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13031/NCAA_Division_III_Central_Region_Cross_Country_Championships?meet_hnd=13031"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "18:09.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15222/Bradley_Intercollegiate?meet_hnd=15222"
+      }
+    ]
+  },
+  "6592718": {
+    "name": "Carina Collet",
+    "tfrrsId": "6592718",
+    "fetchedAt": "2026-09-13T03:08:00.847Z",
+    "bests": [
+      {
+        "event": "1500",
+        "time": "4:48.74",
+        "resultUrl": "https://www.tfrrs.org/results/62515/3831446/Luther_vs_Wartburg_Dual/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:11.25",
+        "resultUrl": "https://www.tfrrs.org/results/57559/3593372/Mark_Schuck_Open_and_Multi/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "9:57.83",
+        "resultUrl": "https://www.tfrrs.org/results/59784/3637863/American_Rivers_Indoor_Conference_Championships/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "16:51.66",
+        "resultUrl": "https://www.tfrrs.org/results/59897/3664532/NCAA_Division_III_Indoor_Track__Field_Championships/Womens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "35:41.10",
+        "resultUrl": "https://www.tfrrs.org/results/57030/3505870/Iowa_Conference_Outdoor_Championships/Womens-10000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "18:19.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "21:28.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17049/Wartburg_Triangular?meet_hnd=17049"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "22:28.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13031/NCAA_Division_III_Central_Region_Cross_Country_Championships?meet_hnd=13031"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "17:21.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6592719": {
+    "name": "Clare Davison",
+    "tfrrsId": "6592719",
+    "fetchedAt": "2026-09-13T03:08:01.694Z",
+    "bests": [
+      {
+        "event": "1500",
+        "time": "5:24.26",
+        "resultUrl": "https://www.tfrrs.org/results/61477/3742635/Wartburg_Outdoor_Select/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:43.73",
+        "resultUrl": "https://www.tfrrs.org/results/67752/4116995/2021_Division_III_Elite_Indoor_Championships/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "11:27.68",
+        "resultUrl": "https://www.tfrrs.org/results/67571/4091760/Luther_A-R-C_Tri_4/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "19:28.28",
+        "resultUrl": "https://www.tfrrs.org/results/69806/4223259/2021_Kip_Janvrin_Open/Womens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "41:19.13",
+        "resultUrl": "https://www.tfrrs.org/results/68984/4162124/Loras_Easter_Mid_Week/Womens-10000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "20:55.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "25:29.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/16603/Kollege_Town_Sports_Invitational?meet_hnd=16603"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "20:22.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15222/Bradley_Intercollegiate?meet_hnd=15222"
+      }
+    ]
+  },
+  "6592724": {
+    "name": "Jacque Garza",
+    "tfrrsId": "6592724",
+    "fetchedAt": "2026-09-13T03:08:05.119Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:25.94",
+        "resultUrl": "https://www.tfrrs.org/results/56929/3490543/Wartburg_Luther_Dual/Womens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "5:14.35",
+        "resultUrl": "https://www.tfrrs.org/results/56531/3456319/Phil_Esten_Challenge_at_UW-La_Crosse/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:59.39",
+        "resultUrl": "https://www.tfrrs.org/results/58774/3582654/Chelsey_M_Henkenius_Open/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "12:06.83",
+        "resultUrl": "https://www.tfrrs.org/results/59146/3601967/Wartburg_Indoor_Select/Womens-3000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "22:24.8",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "25:54.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14980/Saga_Cup?meet_hnd=14980"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "20:42.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6592806": {
+    "name": "Ali Ali",
+    "tfrrsId": "6592806",
+    "fetchedAt": "2026-09-13T03:07:32.404Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "1:55.85",
+        "resultUrl": "https://www.tfrrs.org/results/69273/4208402/Meet_of_Champions/Mens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "3:57.07",
+        "resultUrl": "https://www.tfrrs.org/results/69618/4265575/American_Rivers_Outdoor_Conference_Championships/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:18.68",
+        "resultUrl": "https://www.tfrrs.org/results/67737/4105813/American_Rivers_Indoor_Conference_Championships/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:42.29",
+        "resultUrl": "https://www.tfrrs.org/results/67752/4116990/2021_Division_III_Elite_Indoor_Championships/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:22.90",
+        "resultUrl": "https://www.tfrrs.org/results/56929/3490545/Wartburg_Luther_Dual/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "15:20.52",
+        "resultUrl": "https://www.tfrrs.org/results/54503/3322839/Wartburg_Qualifier/Mens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "32:03.73",
+        "resultUrl": "https://www.tfrrs.org/results/56531/3456279/Phil_Esten_Challenge_at_UW-La_Crosse/Mens-10000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "10:34.28",
+        "resultUrl": "https://www.tfrrs.org/results/59385/3718744/Washington_University_St_Louis_Invite/Mens-3000-Steeplechase"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "15:51.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "20:17.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "25:48.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/19104/Augustana_Interregional_Invitational?meet_hnd=19104"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "26:28.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6592810": {
+    "name": "Christian Brothers",
+    "tfrrsId": "6592810",
+    "fetchedAt": "2026-09-13T03:07:34.946Z",
+    "bests": [
+      {
+        "event": "400",
+        "time": "50.84",
+        "resultUrl": "https://www.tfrrs.org/results/56929/3490523/Wartburg_Luther_Dual/Mens-400-Meters"
+      },
+      {
+        "event": "800",
+        "time": "1:55.82",
+        "resultUrl": "https://www.tfrrs.org/results/54503/3322860/Wartburg_Qualifier/Mens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:05.67",
+        "resultUrl": "https://www.tfrrs.org/results/56742/3472159/2018_Kip_Janvrin_Open/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:31.87",
+        "resultUrl": "https://www.tfrrs.org/results/54104/3300271/Wartburg_Indoor_Invitational/Mens-Mile"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "18:03.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14228/John_Kurtt_Fall_Invitational?meet_hnd=14228"
+      },
+      {
+        "event": "6.437K (XC)",
+        "time": "23:13.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "28:20.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12954/20th_Dan_Huston?meet_hnd=12954"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "28:28.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6592811": {
+    "name": "Liam Conroy",
+    "tfrrsId": "6592811",
+    "fetchedAt": "2026-09-13T03:07:36.657Z",
+    "bests": [
+      {
+        "event": "1500",
+        "time": "4:10.81",
+        "resultUrl": "https://www.tfrrs.org/results/62515/3831435/Luther_vs_Wartburg_Dual/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:28.63",
+        "resultUrl": "https://www.tfrrs.org/results/67101/4053414/Wartburg_Friday_Night_Lights_Meet/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:48.59",
+        "resultUrl": "https://www.tfrrs.org/results/58774/3582653/Chelsey_M_Henkenius_Open/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:48.08",
+        "resultUrl": "https://www.tfrrs.org/results/56929/3490545/Wartburg_Luther_Dual/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "15:04.71",
+        "resultUrl": "https://www.tfrrs.org/results/61152/3769460/UW-Platteville_Invitational/Mens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "32:46.58",
+        "resultUrl": "https://www.tfrrs.org/results/73793/4459051/Wartburg_Outdoor_Select/Mens-10000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "9:19.33",
+        "resultUrl": "https://www.tfrrs.org/results/62304/3808797/2019_Kip_Janvrin_Open/Mens-3000-Steeplechase"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "17:06.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11992/Crown_College_Invite?meet_hnd=11992"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "19:30.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "25:15.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17048/Dan_Huston_Triangular?meet_hnd=17048"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "26:22.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15222/Bradley_Intercollegiate?meet_hnd=15222"
+      }
+    ]
+  },
+  "6592812": {
+    "name": "Ryan Dalton",
+    "tfrrsId": "6592812",
+    "fetchedAt": "2026-09-13T03:07:37.504Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:07.65",
+        "resultUrl": "https://www.tfrrs.org/results/67283/4062830/Wartburg_Indoor_Select/Mens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:08.88",
+        "resultUrl": "https://www.tfrrs.org/results/62050/3788090/Phil_Esten_Challenge__UW-La_Crosse/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:18.43",
+        "resultUrl": "https://www.tfrrs.org/results/65189/4001360/Wartburg_Qualifier/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:45.52",
+        "resultUrl": "https://www.tfrrs.org/results/65128/3960672/Midwest_ELITE_Invitational/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:41.33",
+        "resultUrl": "https://www.tfrrs.org/results/56929/3490545/Wartburg_Luther_Dual/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "15:38.24",
+        "resultUrl": "https://www.tfrrs.org/results/62304/3808781/2019_Kip_Janvrin_Open/Mens-5000-Meters"
+      },
+      {
+        "event": "JT",
+        "time": "18.14m",
+        "resultUrl": "https://www.tfrrs.org/results/61477/3742658/Wartburg_Outdoor_Select/Mens-Javelin"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "16:13.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "20:58.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "26:55.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17049/Wartburg_Triangular?meet_hnd=17049"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "28:12.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15222/Bradley_Intercollegiate?meet_hnd=15222"
+      }
+    ]
+  },
+  "6592813": {
+    "name": "Collin Day",
+    "tfrrsId": "6592813",
+    "fetchedAt": "2026-09-13T03:08:17.631Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:00.95",
+        "resultUrl": "https://www.tfrrs.org/results/67283/4062830/Wartburg_Indoor_Select/Mens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:09.03",
+        "resultUrl": "https://www.tfrrs.org/results/69292/4185244/Wartburg_Outdoor_Select/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:26.11",
+        "resultUrl": "https://www.tfrrs.org/results/59146/3601946/Wartburg_Indoor_Select/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "9:02.10",
+        "resultUrl": "https://www.tfrrs.org/results/58774/3582653/Chelsey_M_Henkenius_Open/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:42.58",
+        "resultUrl": "https://www.tfrrs.org/results/62515/3831447/Luther_vs_Wartburg_Dual/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "15:04.94",
+        "resultUrl": "https://www.tfrrs.org/results/73599/4501500/UW-Platteville_Invitational/Mens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "31:32.43",
+        "resultUrl": "https://www.tfrrs.org/results/68984/4162103/Loras_Easter_Mid_Week/Mens-10000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "16:05.8",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "19:35.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "25:47.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17049/Wartburg_Triangular?meet_hnd=17049"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "26:58.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15222/Bradley_Intercollegiate?meet_hnd=15222"
+      }
+    ]
+  },
+  "6592814": {
+    "name": "Matt Egts",
+    "tfrrsId": "6592814",
+    "fetchedAt": "2026-09-13T03:07:38.405Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "1:58.13",
+        "resultUrl": "https://www.tfrrs.org/results/70172/4252595/Wartburg_Luther_Dual_/Mens-800-Meters"
+      },
+      {
+        "event": "1000",
+        "time": "2:43.67",
+        "resultUrl": "https://www.tfrrs.org/results/66592/4038659/Chelsey_M_Henkenius_Triangular/Mens-1000-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:12.41",
+        "resultUrl": "https://www.tfrrs.org/results/70018/4240021/Wartburg_Outdoor_Friday_Night_Lights/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:27.80",
+        "resultUrl": "https://www.tfrrs.org/results/67752/4117010/2021_Division_III_Elite_Indoor_Championships/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "9:21.20",
+        "resultUrl": "https://www.tfrrs.org/results/67317/4070457/BVU_Triangular/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "10:39.28",
+        "resultUrl": "https://www.tfrrs.org/results/62515/3831447/Luther_vs_Wartburg_Dual/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "16:59.63",
+        "resultUrl": "https://www.tfrrs.org/results/64949/3947735/Wartburg_Friday_Night_Lights_Meet/Mens-5000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "10:26.57",
+        "resultUrl": "https://www.tfrrs.org/results/68984/4162095/Loras_Easter_Mid_Week/Mens-3000-Steeplechase"
+      },
+      {
+        "event": "HJ",
+        "time": "1.61m",
+        "resultUrl": "https://www.tfrrs.org/results/54104/3300265/Wartburg_Indoor_Invitational/Mens-High-Jump"
+      },
+      {
+        "event": "JT",
+        "time": "52.78m",
+        "resultUrl": "https://www.tfrrs.org/results/74773/4520861/Phil_Esten_Challenge/Mens-Javelin"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "17:10.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "22:23.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "28:33.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17049/Wartburg_Triangular?meet_hnd=17049"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "29:19.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15222/Bradley_Intercollegiate?meet_hnd=15222"
+      }
+    ]
+  },
+  "6592815": {
+    "name": "Joe Freiburger",
+    "tfrrsId": "6592815",
+    "fetchedAt": "2026-09-13T03:07:39.286Z",
+    "bests": [
+      {
+        "event": "MILE",
+        "time": "4:12.72",
+        "resultUrl": "https://www.tfrrs.org/results/66596/4081878/Liz_Wuertz_Indoor_Invitational/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:16.55",
+        "resultUrl": "https://www.tfrrs.org/results/72302/4391140/2022_American_Rivers_Conference_Indoor_Championships/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:02.84",
+        "resultUrl": "https://www.tfrrs.org/results/70172/4252574/Wartburg_Luther_Dual_/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "14:00.69",
+        "resultUrl": "https://www.tfrrs.org/results/69821/4224605/Drake_Relays/Mens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "29:36.50",
+        "resultUrl": "https://www.tfrrs.org/results/68984/4162103/Loras_Easter_Mid_Week/Mens-10000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "15:24.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "18:49.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "23:58.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/19297/NCAA_Division_III_Cross_Country_Championships?meet_hnd=19297"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "25:30.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15222/Bradley_Intercollegiate?meet_hnd=15222"
+      }
+    ]
+  },
+  "6592819": {
+    "name": "Matt Heinzman",
+    "tfrrsId": "6592819",
+    "fetchedAt": "2026-09-13T03:07:41.025Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "1:53.18",
+        "resultUrl": "https://www.tfrrs.org/results/70172/4252595/Wartburg_Luther_Dual_/Mens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "3:49.07",
+        "resultUrl": "https://www.tfrrs.org/results/70179/4273529/NCAA_Division_III_Outdoor_Track__Field_Championships/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:14.39",
+        "resultUrl": "https://www.tfrrs.org/results/66596/4081878/Liz_Wuertz_Indoor_Invitational/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:30.74",
+        "resultUrl": "https://www.tfrrs.org/results/70668/4301983/GVSU_Holiday_Open/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:33.88",
+        "resultUrl": "https://www.tfrrs.org/results/56929/3490545/Wartburg_Luther_Dual/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "14:29.07",
+        "resultUrl": "https://www.tfrrs.org/results/69273/4208399/Meet_of_Champions/Mens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "33:05.77",
+        "resultUrl": "https://www.tfrrs.org/results/56531/3456279/Phil_Esten_Challenge_at_UW-La_Crosse/Mens-10000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "16:14.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "19:45.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "6.437K (XC)",
+        "time": "23:18.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "25:13.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/19104/Augustana_Interregional_Invitational?meet_hnd=19104"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "26:30.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6592820": {
+    "name": "Drew Hoffman",
+    "tfrrsId": "6592820",
+    "fetchedAt": "2026-09-13T03:07:42.005Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:03.59",
+        "resultUrl": "https://www.tfrrs.org/results/67283/4062830/Wartburg_Indoor_Select/Mens-800-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:29.08",
+        "resultUrl": "https://www.tfrrs.org/results/72301/4362061/Wartburg_Select_Meet/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:55.03",
+        "resultUrl": "https://www.tfrrs.org/results/72809/4381424/Liz_Wuertz_Invite_/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:50.19",
+        "resultUrl": "https://www.tfrrs.org/results/62515/3831447/Luther_vs_Wartburg_Dual/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "14:56.28",
+        "resultUrl": "https://www.tfrrs.org/results/73599/4501500/UW-Platteville_Invitational/Mens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "31:10.52",
+        "resultUrl": "https://www.tfrrs.org/results/74773/4520825/Phil_Esten_Challenge/Mens-10000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "16:34.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "20:17.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "6.437K (XC)",
+        "time": "22:41.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "25:57.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/19104/Augustana_Interregional_Invitational?meet_hnd=19104"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "27:12.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15222/Bradley_Intercollegiate?meet_hnd=15222"
+      }
+    ]
+  },
+  "6592823": {
+    "name": "Frosty Lorimer",
+    "tfrrsId": "6592823",
+    "fetchedAt": "2026-09-13T03:07:44.555Z",
+    "bests": [
+      {
+        "event": "400",
+        "time": "52.14",
+        "resultUrl": "https://www.tfrrs.org/results/56929/3490523/Wartburg_Luther_Dual/Mens-400-Meters"
+      },
+      {
+        "event": "800",
+        "time": "1:54.80",
+        "resultUrl": "https://www.tfrrs.org/results/67752/4116992/2021_Division_III_Elite_Indoor_Championships/Mens-800-Meters"
+      },
+      {
+        "event": "1000",
+        "time": "2:32.52",
+        "resultUrl": "https://www.tfrrs.org/results/71953/4336703/Chelsey_M_Henkenius_Invitational/Mens-1000-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "3:53.37",
+        "resultUrl": "https://www.tfrrs.org/results/70018/4240021/Wartburg_Outdoor_Friday_Night_Lights/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:15.17",
+        "resultUrl": "https://www.tfrrs.org/results/72302/4391163/2022_American_Rivers_Conference_Indoor_Championships/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:59.41",
+        "resultUrl": "https://www.tfrrs.org/results/58774/3582653/Chelsey_M_Henkenius_Open/Mens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "15:19.01",
+        "resultUrl": "https://www.tfrrs.org/results/73599/4501500/UW-Platteville_Invitational/Mens-5000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "16:47.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "20:51.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "6.437K (XC)",
+        "time": "23:23.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "25:35.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/18093/Dan_Huston_Invitational?meet_hnd=18093"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "27:01.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6592826": {
+    "name": "Sam Madson",
+    "tfrrsId": "6592826",
+    "fetchedAt": "2026-09-13T03:07:45.435Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "1:54.42",
+        "resultUrl": "https://www.tfrrs.org/results/69274/4270326/Augustana_College_Midwest_Twilight_Final_Qualifier/Mens-800-Meters"
+      },
+      {
+        "event": "1000",
+        "time": "2:34.04",
+        "resultUrl": "https://www.tfrrs.org/results/66592/4038659/Chelsey_M_Henkenius_Triangular/Mens-1000-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "3:58.76",
+        "resultUrl": "https://www.tfrrs.org/results/75102/4563521/Augustana_College_Twilight_Qualifier/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:15.81",
+        "resultUrl": "https://www.tfrrs.org/results/72644/4371389/Midwest_ELITE_Invitational/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:55.25",
+        "resultUrl": "https://www.tfrrs.org/results/71953/4336687/Chelsey_M_Henkenius_Invitational/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:46.45",
+        "resultUrl": "https://www.tfrrs.org/results/70172/4252574/Wartburg_Luther_Dual_/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "16:07.11",
+        "resultUrl": "https://www.tfrrs.org/results/54104/3300252/Wartburg_Indoor_Invitational/Mens-5000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "10:14.88",
+        "resultUrl": "https://www.tfrrs.org/results/56531/3456271/Phil_Esten_Challenge_at_UW-La_Crosse/Mens-3000-Steeplechase"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "16:14.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "20:11.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/18477/John_Kurtt_Invitational?meet_hnd=18477"
+      },
+      {
+        "event": "6.437K (XC)",
+        "time": "23:11.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "26:30.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/19104/Augustana_Interregional_Invitational?meet_hnd=19104"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "28:05.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6592827": {
+    "name": "Curren Matthias",
+    "tfrrsId": "6592827",
+    "fetchedAt": "2026-09-13T03:07:46.315Z",
+    "bests": [
+      {
+        "event": "60",
+        "time": "8.10",
+        "resultUrl": "https://www.tfrrs.org/results/59784/3639168/American_Rivers_Indoor_Conference_Championships/Mens-60-Meters"
+      },
+      {
+        "event": "800",
+        "time": "2:03.52",
+        "resultUrl": "https://www.tfrrs.org/results/56639/3464348/Taco_Tuesday_Twilight/Mens-800-Meters"
+      },
+      {
+        "event": "1000",
+        "time": "2:39.01",
+        "resultUrl": "https://www.tfrrs.org/results/59784/3639170/American_Rivers_Indoor_Conference_Championships/Mens-1000-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:11.66",
+        "resultUrl": "https://www.tfrrs.org/results/56531/3456278/Phil_Esten_Challenge_at_UW-La_Crosse/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:30.04",
+        "resultUrl": "https://www.tfrrs.org/results/67317/4070465/BVU_Triangular/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:47.54",
+        "resultUrl": "https://www.tfrrs.org/results/67752/4116990/2021_Division_III_Elite_Indoor_Championships/Mens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "16:20.85",
+        "resultUrl": "https://www.tfrrs.org/results/61152/3769460/UW-Platteville_Invitational/Mens-5000-Meters"
+      },
+      {
+        "event": "60H",
+        "time": "10.32",
+        "resultUrl": "https://www.tfrrs.org/results/59784/3639172/American_Rivers_Indoor_Conference_Championships/Mens-60-Hurdles"
+      },
+      {
+        "event": "60H",
+        "time": "10.33",
+        "resultUrl": "https://www.tfrrs.org/results/59587/3626343/Wartburg_Indoor_Invite/Mens-60-Hurdles"
+      },
+      {
+        "event": "400H",
+        "time": "1:00.46",
+        "resultUrl": "https://www.tfrrs.org/results/70172/4252580/Wartburg_Luther_Dual_/Mens-400-Hurdles"
+      },
+      {
+        "event": "3000S",
+        "time": "9:17.30",
+        "resultUrl": "https://www.tfrrs.org/results/70018/4240038/Wartburg_Outdoor_Friday_Night_Lights/Mens-3000-Steeplechase"
+      },
+      {
+        "event": "HJ",
+        "time": "1.62m",
+        "resultUrl": "https://www.tfrrs.org/results/59784/3639167/American_Rivers_Indoor_Conference_Championships/Mens-High-Jump"
+      },
+      {
+        "event": "PV",
+        "time": "3.05m",
+        "resultUrl": "https://www.tfrrs.org/results/59784/3639166/American_Rivers_Indoor_Conference_Championships/Mens-Pole-Vault"
+      },
+      {
+        "event": "LJ",
+        "time": "5.15m",
+        "resultUrl": "https://www.tfrrs.org/results/59784/3639171/American_Rivers_Indoor_Conference_Championships/Mens-Long-Jump"
+      },
+      {
+        "event": "SP",
+        "time": "7.71m",
+        "resultUrl": "https://www.tfrrs.org/results/59146/3607339/Wartburg_Indoor_Select/Mens-Shot-Put"
+      },
+      {
+        "event": "HEP",
+        "time": "3498",
+        "resultUrl": "https://www.tfrrs.org/results/59784/3637854/American_Rivers_Indoor_Conference_Championships/Mens-Heptathlon"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "16:57.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14228/John_Kurtt_Fall_Invitational?meet_hnd=14228"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "19:49.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "6.437K (XC)",
+        "time": "22:24.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "26:06.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17049/Wartburg_Triangular?meet_hnd=17049"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "27:57.3",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6592831": {
+    "name": "Sam Pinkowski",
+    "tfrrsId": "6592831",
+    "fetchedAt": "2026-09-13T03:07:48.770Z",
+    "bests": [
+      {
+        "event": "1500",
+        "time": "3:50.55",
+        "resultUrl": "https://www.tfrrs.org/results/56531/3456278/Phil_Esten_Challenge_at_UW-La_Crosse/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:10.40",
+        "resultUrl": "https://www.tfrrs.org/results/53086/3288524/Boston_University_David_Hemery_Valentine_Invitational/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:29.99",
+        "resultUrl": "https://www.tfrrs.org/results/53399/3259079/Chelsey_M_Henkenius_Open/Mens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "14:25.12",
+        "resultUrl": "https://www.tfrrs.org/results/56328/3510866/NCC_Gregory_Final_Qualifier/Mens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "32:03.56",
+        "resultUrl": "https://www.tfrrs.org/results/59385/3718742/Washington_University_St_Louis_Invite/Mens-10000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "15:56.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14228/John_Kurtt_Fall_Invitational?meet_hnd=14228"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "24:32.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/19104/Augustana_Interregional_Invitational?meet_hnd=19104"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "25:08.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6592835": {
+    "name": "Spencer Warehime",
+    "tfrrsId": "6592835",
+    "fetchedAt": "2026-09-13T03:07:53.851Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:01.74",
+        "resultUrl": "https://www.tfrrs.org/results/67283/4062830/Wartburg_Indoor_Select/Mens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:11.78",
+        "resultUrl": "https://www.tfrrs.org/results/55829/3398131/Cornell_Invitational/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:30.79",
+        "resultUrl": "https://www.tfrrs.org/results/53729/3278526/Wartburg_Indoor_Select/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "8:51.32",
+        "resultUrl": "https://www.tfrrs.org/results/67571/4091770/Luther_A-R-C_Tri_4/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:31.54",
+        "resultUrl": "https://www.tfrrs.org/results/62515/3831447/Luther_vs_Wartburg_Dual/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "15:01.22",
+        "resultUrl": "https://www.tfrrs.org/results/69618/4265589/American_Rivers_Outdoor_Conference_Championships/Mens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "31:37.19",
+        "resultUrl": "https://www.tfrrs.org/results/70018/4240020/Wartburg_Outdoor_Friday_Night_Lights/Mens-10000-Meters"
       },
       {
         "event": "5K (XC)",
         "time": "16:11.3",
-        "resultUrl": "https://www.tfrrs.org/results/xc/27286/Chiburg_5k?meet_hnd=27286"
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
       },
       {
         "event": "6K (XC)",
-        "time": "21:15.1",
-        "resultUrl": "https://www.tfrrs.org/results/xc/26434/John_Kurtt_Invitational?meet_hnd=26434"
+        "time": "20:11.8",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
       },
       {
         "event": "8K (XC)",
-        "time": "27:32.4",
-        "resultUrl": "https://www.tfrrs.org/res
+        "time": "26:04.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17049/Wartburg_Triangular?meet_hnd=17049"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "26:23.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6592836": {
+    "name": "Noah Worthington",
+    "tfrrsId": "6592836",
+    "fetchedAt": "2026-09-13T03:07:54.726Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:00.42",
+        "resultUrl": "https://www.tfrrs.org/results/66596/4081866/Liz_Wuertz_Indoor_Invitational/Mens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "4:08.76",
+        "resultUrl": "https://www.tfrrs.org/results/56531/3456278/Phil_Esten_Challenge_at_UW-La_Crosse/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:28.05",
+        "resultUrl": "https://www.tfrrs.org/results/65189/4001360/Wartburg_Qualifier/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "9:12.62",
+        "resultUrl": "https://www.tfrrs.org/results/64224/3918565/Chelsey_M_Henkenius_Indoor_Open/Mens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "15:45.78",
+        "resultUrl": "https://www.tfrrs.org/results/62304/3808781/2019_Kip_Janvrin_Open/Mens-5000-Meters"
+      },
+      {
+        "event": "3000S",
+        "time": "10:00.81",
+        "resultUrl": "https://www.tfrrs.org/results/69806/4223267/2021_Kip_Janvrin_Open/Mens-3000-Steeplechase"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "16:24.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "20:26.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "6.437K (XC)",
+        "time": "22:40.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "26:22.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17048/Dan_Huston_Triangular?meet_hnd=17048"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "27:44.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6592838": {
+    "name": "Jordan Yessak",
+    "tfrrsId": "6592838",
+    "fetchedAt": "2026-09-13T03:07:55.607Z",
+    "bests": [
+      {
+        "event": "1500",
+        "time": "4:24.10",
+        "resultUrl": "https://www.tfrrs.org/results/61477/3742636/Wartburg_Outdoor_Select/Mens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "4:37.87",
+        "resultUrl": "https://www.tfrrs.org/results/52031/3283236/2018_Jack_Jennett_Open_/Mens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "9:10.13",
+        "resultUrl": "https://www.tfrrs.org/results/59587/3626365/Wartburg_Indoor_Invite/Mens-3000-Meters"
+      },
+      {
+        "event": "3200",
+        "time": "9:46.47",
+        "resultUrl": "https://www.tfrrs.org/results/70172/4252574/Wartburg_Luther_Dual_/Mens-3200-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "15:39.67",
+        "resultUrl": "https://www.tfrrs.org/results/70018/4240019/Wartburg_Outdoor_Friday_Night_Lights/Mens-5000-Meters"
+      },
+      {
+        "event": "10,000",
+        "time": "32:50.20",
+        "resultUrl": "https://www.tfrrs.org/results/68984/4162103/Loras_Easter_Mid_Week/Mens-10000-Meters"
+      },
+      {
+        "event": "JT",
+        "time": "27.23m",
+        "resultUrl": "https://www.tfrrs.org/results/61477/3742658/Wartburg_Outdoor_Select/Mens-Javelin"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "16:29.9",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15977/John_Kurtt_Invitational?meet_hnd=15977"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "20:43.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17047/John_Kurtt_Triangular?meet_hnd=17047"
+      },
+      {
+        "event": "6.437K (XC)",
+        "time": "22:01.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/12813/2017_Brissman-Lundeen_Cross_Country_Invitational?meet_hnd=12813"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "26:31.8",
+        "resultUrl": "https://www.tfrrs.org/results/xc/17049/Wartburg_Triangular?meet_hnd=17049"
+      },
+      {
+        "event": "4.97 MILE (XC)",
+        "time": "27:16.1",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6915217": {
+    "name": "Bri Bower",
+    "tfrrsId": "6915217",
+    "fetchedAt": "2026-09-13T03:08:26.029Z",
+    "bests": [
+      {
+        "event": "800",
+        "time": "2:32.75",
+        "resultUrl": "https://www.tfrrs.org/results/50482/3074773/Wartburg_Outdoor_Select/Womens-800-Meters"
+      },
+      {
+        "event": "1500",
+        "time": "5:03.23",
+        "resultUrl": "https://www.tfrrs.org/results/50120/3052359/Augustana_College_Early_Spring_Opener/Womens-1500-Meters"
+      },
+      {
+        "event": "MILE",
+        "time": "5:24.21",
+        "resultUrl": "https://www.tfrrs.org/results/49065/2996723/Iowa_Conference_Indoor_Championships/Womens-Mile"
+      },
+      {
+        "event": "3000",
+        "time": "10:59.05",
+        "resultUrl": "https://www.tfrrs.org/results/47566/2965333/Keck_DIII_Select_2017/Womens-3000-Meters"
+      },
+      {
+        "event": "5000",
+        "time": "19:15.85",
+        "resultUrl": "https://www.tfrrs.org/results/47550/2975572/2017_Darren_Young_Classic/Womens-5000-Meters"
+      },
+      {
+        "event": "5K (XC)",
+        "time": "20:30.6",
+        "resultUrl": "https://www.tfrrs.org/results/xc/11918/National_Catholic_Invitational?meet_hnd=11918"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "24:07.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13353/Iowa_Conference_Championships?meet_hnd=13353"
+      },
+      {
+        "event": "8K (XC)",
+        "time": "24:01.5",
+        "resultUrl": "https://www.tfrrs.org/results/xc/13031/NCAA_Division_III_Central_Region_Cross_Country_Championships?meet_hnd=13031"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "19:42.7",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6915220": {
+    "name": "Alex Childs",
+    "tfrrsId": "6915220",
+    "fetchedAt": "2026-09-13T03:08:26.821Z",
+    "bests": [
+      {
+        "event": "6K (XC)",
+        "time": "24:05.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14673/21st_Dan_Huston_XC_Invite?meet_hnd=14673"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "19:42.2",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6915225": {
+    "name": "Alissa Neubauer",
+    "tfrrsId": "6915225",
+    "fetchedAt": "2026-09-13T03:08:31.933Z",
+    "bests": [
+      {
+        "event": "5K (XC)",
+        "time": "21:47.0",
+        "resultUrl": "https://www.tfrrs.org/results/xc/15853/Kohawk_Relays_and_Chase?meet_hnd=15853"
+      },
+      {
+        "event": "6K (XC)",
+        "time": "25:20.8",
+        "resultUrl": "https://www.tfrrs.org/results/xc/19128/Saga_Cup?meet_hnd=19128"
+      },
+      {
+        "event": "3 MILE (XC)",
+        "time": "20:56.4",
+        "resultUrl": "https://www.tfrrs.org/results/xc/14461/Bradley_Intercollegiate_Championships?meet_hnd=14461"
+      }
+    ]
+  },
+  "6915226": {
+    "name": "Emma Sinnwell",
+    "tfrrsId": "6915226",
+    "fetchedAt": "2026-09-13T03:08:32.930Z",
+    "bests": [
+      {
+        "event": "5K (XC)",
+        "time": "23:31.7",
+        "resultUrl": "https://www.tfrrs.or
 
-... [truncated, file is 110845 bytes, showing first 100000] ...
+... [truncated, file is 406537 bytes, showing first 100000] ...
 ```
 
 ### `src/pages/about.tsx`
@@ -8504,6 +15975,7 @@ const resourceLinks = [
   { label: "View Core", path: "/core" },
   { label: "View FMS", path: "/fms" },
   { label: "View Lifting Sheet", path: "/lifting_sheet" },
+  { label: "View Tuesday Workout", path: "/tuesday_workout" },
 ];
 
 const statsLinks = [
@@ -8619,14 +16091,14 @@ interface AthleteStats {
   bests: BestEvent[];
 }
 
-const statsById = tfrrsStats as Record<string, AthleteStats>;
+const statsByTfrrsId = tfrrsStats as Record<string, AthleteStats>;
 
 function TfrrsStats() {
   const { athlete } = useUser();
 
-  if (!athlete) return null; // RequireIdentity already guards this route
+  if (!athlete) return null;
 
-  const stats = statsById[athlete.id];
+  const stats = athlete.tfrrsId ? statsByTfrrsId[athlete.tfrrsId] : undefined;
 
   return (
     <div className="tfrrs-page">
@@ -8662,6 +16134,20 @@ function TfrrsStats() {
 }
 
 export default TfrrsStats;
+
+```
+
+### `src/pages/tuesdayWorkout.tsx`
+
+```tsx
+function TuesdayWorkout() {
+  return (
+    <div>
+      <h1>More info here</h1>
+    </div>
+  );
+}
+export default TuesdayWorkout;
 
 ```
 
@@ -9081,6 +16567,17 @@ export default TfrrsStats;
   opacity: 0.7;
 }
 
+.identity-year-select {
+  width: min(90vw, 400px);
+  padding: clamp(10px, 1.8vw, 14px) clamp(12px, 2vw, 16px);
+  font-size: clamp(14px, 1.8vw, 18px);
+  border-radius: 10px;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  color: black;
+  cursor: pointer;
+}
+
 ```
 
 ### `src/App.tsx`
@@ -9102,6 +16599,7 @@ import FMS from "./pages/fms";
 import LiftingSheet from "./pages/liftingSheet";
 import ComingSoon from "./components/comingSoon";
 import TfrrsStats from "./pages/tfrrsStats";
+import TuesdayWorkout from "./pages/tuesdayWorkout";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -9120,6 +16618,7 @@ function AppContent() {
     "/tfrrs-stats",
     "/personal-records",
     "/season-bests",
+    "/tuesday_workout",
   ].includes(location.pathname);
   const showBackButton =
     isKnownRoute && !BACK_BUTTON_ROUTES.has(location.pathname);
@@ -9200,6 +16699,14 @@ function AppContent() {
           element={
             <RequireIdentity>
               <ComingSoon message="Season bests aren't tracked yet — check back soon!" />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/tuesday_workout"
+          element={
+            <RequireIdentity>
+              <TuesdayWorkout />
             </RequireIdentity>
           }
         />
@@ -9463,7 +16970,10 @@ _(binary or excluded — contents not inlined)_
     "fetch-roster": "node scripts/fetch-roster.mjs",
     "fetch-tfrrs-ids": "node scripts/fetch-tfrrs-ids.mjs",
     "fetch-tfrrs-stats": "node scripts/fetch-tfrrs-stats.mjs",
-    "fetch-roster-history": "node scripts/fetch-roster-history.mjs"
+    "fetch-roster-history": "node scripts/fetch-roster-history.mjs",
+    "fetch-roster-by-year": "node scripts/fetch-roster-by-year.mjs",
+    "fetch-tfrrs-ids-all-years": "node scripts/fetch-tfrrs-ids-all-years.mjs",
+    "fetch-tfrrs-ids-historical": "node scripts/fetch-tfrrs-ids-historical.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
@@ -9940,4 +17450,4 @@ export default defineConfig({
 
 
 ---
-_Digest complete: 38 files inlined, 8 skipped (binary/excluded)._
+_Digest complete: 51 files inlined, 10 skipped (binary/excluded)._

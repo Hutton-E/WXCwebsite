@@ -14,6 +14,7 @@ import FMS from "./pages/fms";
 import LiftingSheet from "./pages/liftingSheet";
 import ComingSoon from "./components/comingSoon";
 import TfrrsStats from "./pages/tfrrsStats";
+import TuesdayWorkout from "./pages/tuesdayWorkout";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -32,6 +33,7 @@ function AppContent() {
     "/tfrrs-stats",
     "/personal-records",
     "/season-bests",
+    "/tuesday_workout",
   ].includes(location.pathname);
   const showBackButton =
     isKnownRoute && !BACK_BUTTON_ROUTES.has(location.pathname);
@@ -112,6 +114,14 @@ function AppContent() {
           element={
             <RequireIdentity>
               <ComingSoon message="Season bests aren't tracked yet — check back soon!" />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/tuesday_workout"
+          element={
+            <RequireIdentity>
+              <TuesdayWorkout />
             </RequireIdentity>
           }
         />
