@@ -1,6 +1,6 @@
 # Repository Digest
 
-Generated: 2026-09-13T03:28:45.278Z
+Generated: 2026-09-13T19:37:37.220Z
 Root: `WXC_Website`
 
 ## Directory Structure
@@ -36,9 +36,11 @@ WXC_Website/
 │   │   ├── comingSoon.tsx
 │   │   ├── identityLookup.tsx
 │   │   ├── navMenu.tsx
+│   │   ├── requireAdmin.tsx
 │   │   ├── requireIdentity.tsx
 │   │   └── switchIdentity.tsx
 │   ├── context/
+│   │   ├── AdminAuthContext.tsx
 │   │   └── UserContext.tsx
 │   ├── data/
 │   │   ├── distance_roster_17.json
@@ -53,8 +55,14 @@ WXC_Website/
 │   │   ├── distance_roster_26.json
 │   │   ├── roster_history.json
 │   │   └── tfrrs_stats.json
+│   ├── lib/
+│   │   ├── adminData.ts
+│   │   ├── pdfParser.ts
+│   │   └── supabaseClient.ts
 │   ├── pages/
 │   │   ├── about.tsx
+│   │   ├── adminDashboard.tsx
+│   │   ├── adminLogin.tsx
 │   │   ├── corePage.tsx
 │   │   ├── error.tsx
 │   │   ├── fms.tsx
@@ -1703,6 +1711,7 @@ export default ComingSoon;
 
 ```tsx
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useUser } from "../context/UserContext";
 
 // Direct imports so we can search within a specific season's roster.
@@ -1785,6 +1794,10 @@ function IdentityLookup() {
           No match found — check your spelling.
         </p>
       )}
+
+      <Link to="/admin" className="admin-login-link acme-regular text-outline">
+        Admin Login?
+      </Link>
     </div>
   );
 }
@@ -1858,6 +1871,30 @@ export default NavMenu;
 
 ```
 
+### `src/components/requireAdmin.tsx`
+
+```tsx
+import { Navigate, useLocation } from "react-router-dom";
+import type { ReactNode } from "react";
+import { useAdminAuth } from "../context/AdminAuthContext";
+
+function RequireAdmin({ children }: { children: ReactNode }) {
+  const { session, loading } = useAdminAuth();
+  const location = useLocation();
+
+  if (loading) return null; // avoid flashing a redirect while session is still loading
+
+  if (!session) {
+    return <Navigate to="/admin" replace state={{ from: location }} />;
+  }
+
+  return <>{children}</>;
+}
+
+export default RequireAdmin;
+
+```
+
 ### `src/components/requireIdentity.tsx`
 
 ```tsx
@@ -1920,6 +1957,82 @@ function SwitchIdentityPrompt() {
 }
 
 export default SwitchIdentityPrompt;
+
+```
+
+### `src/context/AdminAuthContext.tsx`
+
+```tsx
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
+import type { Session } from "@supabase/supabase-js";
+import { supabase } from "../lib/supabaseClient";
+
+interface AdminAuthContextValue {
+  session: Session | null;
+  loading: boolean;
+  signIn: (
+    email: string,
+    password: string,
+  ) => Promise<{ error: string | null }>;
+  signOut: () => Promise<void>;
+}
+
+const AdminAuthContext = createContext<AdminAuthContextValue | undefined>(
+  undefined,
+);
+
+export function AdminAuthProvider({ children }: { children: ReactNode }) {
+  const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setLoading(false);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, newSession) => {
+        setSession(newSession);
+      },
+    );
+
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  async function signIn(email: string, password: string) {
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+    return { error: error ? error.message : null };
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+  }
+
+  return (
+    <AdminAuthContext.Provider value={{ session, loading, signIn, signOut }}>
+      {children}
+    </AdminAuthContext.Provider>
+  );
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function useAdminAuth() {
+  const context = useContext(AdminAuthContext);
+  if (!context) {
+    throw new Error("useAdminAuth must be used within an AdminAuthProvider");
+  }
+  return context;
+}
 
 ```
 
@@ -15891,6 +16004,381 @@ export function useUser() {
 ... [truncated, file is 406537 bytes, showing first 100000] ...
 ```
 
+### `src/lib/adminData.ts`
+
+```typescript
+import { supabase } from "./supabaseClient";
+import type {
+  MileageRow,
+  WorkoutAssignment,
+  WorkoutGroupDefinition,
+} from "./pdfParser";
+
+export async function upsertMileageRows(rows: MileageRow[], weekOf: string) {
+  const payload = rows.map((r) => ({
+    athlete_name: r.name,
+    team: r.team,
+    week_of: weekOf,
+    monday: r.monday,
+    tuesday: r.tuesday,
+    wednesday: r.wednesday,
+    thursday: r.thursday,
+    friday: r.friday,
+    saturday: r.saturday,
+    sunday: r.sunday,
+    weekly_total: r.weeklyTotal,
+    notes: r.notes,
+  }));
+
+  const { error, count } = await supabase
+    .from("mileage_entries")
+    .upsert(payload, { onConflict: "athlete_name,week_of", count: "exact" });
+
+  if (error) throw new Error(error.message);
+  return count ?? payload.length;
+}
+
+export async function upsertWorkoutData(
+  assignments: WorkoutAssignment[],
+  groupDefinitions: WorkoutGroupDefinition[],
+  weekOf: string,
+  day: "tuesday" | "friday",
+) {
+  const groupPayload = groupDefinitions.map((g) => ({
+    week_of: weekOf,
+    day,
+    group_letter: g.groupLetter,
+    description: g.description,
+  }));
+
+  const { error: groupError } = await supabase
+    .from("workout_groups")
+    .upsert(groupPayload, { onConflict: "week_of,day,group_letter" });
+
+  if (groupError) throw new Error(groupError.message);
+
+  const assignmentPayload = assignments.map((a) => ({
+    athlete_name: a.name,
+    week_of: weekOf,
+    day,
+    group_letter: a.groupLetter,
+  }));
+
+  const { error: assignError, count } = await supabase
+    .from("workout_assignments")
+    .upsert(assignmentPayload, {
+      onConflict: "athlete_name,week_of,day",
+      count: "exact",
+    });
+
+  if (assignError) throw new Error(assignError.message);
+  return count ?? assignmentPayload.length;
+}
+
+```
+
+### `src/lib/pdfParser.ts`
+
+```typescript
+import * as pdfjsLib from "pdfjs-dist";
+import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
+interface PositionedWord {
+  text: string;
+  x: number;
+  top: number; // distance from top of page — smaller = higher up
+}
+
+export interface MileageRow {
+  name: string;
+  team: "mens-cross-country" | "womens-cross-country";
+  monday: string;
+  tuesday: string;
+  wednesday: string;
+  thursday: string;
+  friday: string;
+  saturday: string;
+  sunday: string;
+  weeklyTotal: string;
+  notes: string;
+}
+
+export interface WorkoutAssignment {
+  name: string;
+  groupLetter: string;
+}
+
+export interface WorkoutGroupDefinition {
+  groupLetter: string;
+  description: string;
+}
+
+export interface ParsedWorkouts {
+  assignments: WorkoutAssignment[];
+  groupDefinitions: WorkoutGroupDefinition[];
+}
+
+const ROW_TOLERANCE = 10; // px — words within this vertical distance are "the same row"
+
+// ---------- Core: extract positioned words from a PDF page ----------
+
+async function extractPageWords(
+  page: pdfjsLib.PDFPageProxy,
+): Promise<PositionedWord[]> {
+  const viewport = page.getViewport({ scale: 1 });
+  const content = await page.getTextContent();
+
+  return content.items
+    .filter(
+      (item): item is pdfjsLib.TextItem =>
+        "str" in item && item.str.trim().length > 0,
+    )
+    .map((item) => {
+      const x = item.transform[4];
+      const y = item.transform[5];
+      // pdfjs y is measured from the BOTTOM of the page — flip so smaller = higher,
+      // matching the "top" convention used throughout this parser.
+      const top = viewport.height - y;
+      return { text: item.str.trim(), x, top };
+    });
+}
+
+// ---------- Row clustering ----------
+
+function clusterIntoRows(words: PositionedWord[]): PositionedWord[][] {
+  const sorted = [...words].sort((a, b) => a.top - b.top);
+  const rows: PositionedWord[][] = [];
+
+  for (const word of sorted) {
+    const lastRow = rows[rows.length - 1];
+    if (lastRow && Math.abs(lastRow[0].top - word.top) <= ROW_TOLERANCE) {
+      lastRow.push(word);
+    } else {
+      rows.push([word]);
+    }
+  }
+
+  // Sort words left-to-right within each row
+  rows.forEach((row) => row.sort((a, b) => a.x - b.x));
+  return rows;
+}
+
+// ---------- Nearest-anchor column assignment ----------
+
+function assignToNearestColumn(
+  rowWords: PositionedWord[],
+  columnAnchors: { key: string; x: number }[],
+): Record<string, string> {
+  const buckets: Record<string, PositionedWord[]> = {};
+  columnAnchors.forEach((c) => (buckets[c.key] = []));
+
+  for (const word of rowWords) {
+    let closest = columnAnchors[0];
+    let minDist = Math.abs(word.x - closest.x);
+    for (const anchor of columnAnchors) {
+      const dist = Math.abs(word.x - anchor.x);
+      if (dist < minDist) {
+        minDist = dist;
+        closest = anchor;
+      }
+    }
+    buckets[closest.key].push(word);
+  }
+
+  const result: Record<string, string> = {};
+  for (const key of Object.keys(buckets)) {
+    result[key] = buckets[key]
+      .sort((a, b) => a.x - b.x)
+      .map((w) => w.text)
+      .join(" ");
+  }
+  return result;
+}
+
+// ---------- Mileage PDF parsing ----------
+
+const MILEAGE_DAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function findHeaderAnchors(
+  rows: PositionedWord[][],
+): { key: string; x: number }[] | null {
+  for (const row of rows) {
+    const rowText = row.map((w) => w.text);
+    const hasAllDays = MILEAGE_DAY_HEADERS.every((d) => rowText.includes(d));
+    if (!hasAllDays) continue;
+
+    const anchors: { key: string; x: number }[] = [];
+    const dayKeys = [
+      "monday",
+      "tuesday",
+      "wednesday",
+      "thursday",
+      "friday",
+      "saturday",
+      "sunday",
+    ];
+
+    MILEAGE_DAY_HEADERS.forEach((label, i) => {
+      const word = row.find((w) => w.text === label);
+      if (word) anchors.push({ key: dayKeys[i], x: word.x });
+    });
+
+    const mileageWord = row.find((w) => w.text === "Mileage");
+    if (mileageWord) anchors.push({ key: "weeklyTotal", x: mileageWord.x });
+
+    const notesWord = row.find((w) => w.text === "Notes");
+    if (notesWord) anchors.push({ key: "notes", x: notesWord.x });
+
+    if (anchors.length >= 8) return anchors;
+  }
+  return null;
+}
+
+export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+  const results: MileageRow[] = [];
+
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const words = await extractPageWords(page);
+    const rows = clusterIntoRows(words);
+
+    const allPageText = words.map((w) => w.text).join(" ");
+    const team: MileageRow["team"] = /women/i.test(allPageText)
+      ? "womens-cross-country"
+      : "mens-cross-country";
+
+    const anchors = findHeaderAnchors(rows);
+    if (!anchors) continue; // page has no roster table (e.g. a legend/notes-only page)
+
+    const nameColumnMaxX = Math.min(...anchors.map((a) => a.x)) - 20;
+
+    for (const row of rows) {
+      // Skip the header row itself
+      if (row.some((w) => w.text === "Mon")) continue;
+
+      const nameWords = row.filter((w) => w.x < nameColumnMaxX);
+      if (nameWords.length === 0) continue;
+
+      const name = nameWords
+        .map((w) => w.text)
+        .join(" ")
+        .replace(/,$/, "");
+      // Reformat "Last, First" -> "First Last" to match your roster's name format
+      const [last, first] = name.split(",").map((s) => s.trim());
+      const displayName = first ? `${first} ${last}` : name;
+
+      const dataWords = row.filter((w) => w.x >= nameColumnMaxX);
+      const assigned = assignToNearestColumn(dataWords, anchors);
+
+      results.push({
+        name: displayName,
+        team,
+        monday: assigned.monday || "",
+        tuesday: assigned.tuesday || "",
+        wednesday: assigned.wednesday || "",
+        thursday: assigned.thursday || "",
+        friday: assigned.friday || "",
+        saturday: assigned.saturday || "",
+        sunday: assigned.sunday || "",
+        weeklyTotal: assigned.weeklyTotal || "",
+        notes: assigned.notes || "",
+      });
+    }
+  }
+
+  return results;
+}
+
+// ---------- Workouts PDF parsing ----------
+
+export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+  const assignments: WorkoutAssignment[] = [];
+  const definitionsByLetter = new Map<string, string>();
+
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const words = await extractPageWords(page);
+
+    const groupHeaderWord = words.find((w) => w.text === "G");
+    if (!groupHeaderWord) continue; // not a roster/group page
+
+    const groupColumnX = groupHeaderWord.x;
+    const nameColumnMaxX = groupColumnX - 200; // names sit far left; dot-columns fill the middle
+    const descriptionMinX = groupColumnX + 15; // description text sits just right of the letter
+
+    const rows = clusterIntoRows(words);
+
+    for (const row of rows) {
+      const nameWords = row.filter((w) => w.x < nameColumnMaxX);
+      const groupWord = row.find(
+        (w) => Math.abs(w.x - groupColumnX) < 10 && /^[A-Z]{1,2}$/.test(w.text),
+      );
+
+      if (nameWords.length > 0 && groupWord) {
+        const rawName = nameWords
+          .map((w) => w.text)
+          .join(" ")
+          .replace(/,$/, "");
+        const [last, first] = rawName.split(",").map((s) => s.trim());
+        const displayName = first ? `${first} ${last}` : rawName;
+
+        assignments.push({ name: displayName, groupLetter: groupWord.text });
+      }
+    }
+
+    // Reconstruct group definitions from the description text block,
+    // read in top-to-bottom, left-to-right order, then split on "X:" labels.
+    const descWords = words
+      .filter((w) => w.x > descriptionMinX)
+      .sort((a, b) => a.top - b.top || a.x - b.x);
+
+    const fullText = descWords.map((w) => w.text).join(" ");
+    const segments = fullText.split(/(?=\b(?:[A-Z]{1,2}|XT|M):)/);
+
+    for (const segment of segments) {
+      const trimmed = segment.trim();
+      const match = trimmed.match(/^([A-Z]{1,2}|XT|M):\s*(.+)$/);
+      if (match) {
+        definitionsByLetter.set(match[1], match[2].trim());
+      }
+    }
+  }
+
+  const groupDefinitions: WorkoutGroupDefinition[] = Array.from(
+    definitionsByLetter.entries(),
+  ).map(([groupLetter, description]) => ({ groupLetter, description }));
+
+  return { assignments, groupDefinitions };
+}
+
+```
+
+### `src/lib/supabaseClient.ts`
+
+```typescript
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseKey = import.meta.env.VITE_SUPABASE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error(
+    "Missing Supabase environment variables. Check your .env file has VITE_SUPABASE_URL and VITE_SUPABASE_KEY set.",
+  );
+}
+
+export const supabase = createClient(supabaseUrl, supabaseKey);
+
+```
+
 ### `src/pages/about.tsx`
 
 ```tsx
@@ -15902,6 +16390,347 @@ function AboutInfo() {
   );
 }
 export default AboutInfo;
+
+```
+
+### `src/pages/adminDashboard.tsx`
+
+```tsx
+import { useState } from "react";
+import { useAdminAuth } from "../context/AdminAuthContext";
+import { parseMileagePdf, parseWorkoutsPdf } from "../lib/pdfParser";
+import type {
+  MileageRow,
+  WorkoutAssignment,
+  WorkoutGroupDefinition,
+} from "../lib/pdfParser";
+import { upsertMileageRows, upsertWorkoutData } from "../lib/adminData";
+
+type Mode = "mileage" | "workouts";
+
+function AdminDashboard() {
+  const { signOut } = useAdminAuth();
+  const [mode, setMode] = useState<Mode>("mileage");
+  const [weekOf, setWeekOf] = useState("");
+  const [day, setDay] = useState<"tuesday" | "friday">("tuesday");
+
+  const [mileageRows, setMileageRows] = useState<MileageRow[] | null>(null);
+  const [workoutData, setWorkoutData] = useState<{
+    assignments: WorkoutAssignment[];
+    groupDefinitions: WorkoutGroupDefinition[];
+  } | null>(null);
+
+  const [status, setStatus] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setStatus(null);
+    setBusy(true);
+    try {
+      if (mode === "mileage") {
+        const rows = await parseMileagePdf(file);
+        setMileageRows(rows);
+        setWorkoutData(null);
+      } else {
+        const data = await parseWorkoutsPdf(file);
+        setWorkoutData(data);
+        setMileageRows(null);
+      }
+    } catch (err) {
+      setStatus(`Failed to parse PDF: ${(err as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSubmit() {
+    if (!weekOf) {
+      setStatus("Please select the week's date first.");
+      return;
+    }
+
+    setBusy(true);
+    setStatus(null);
+    try {
+      if (mode === "mileage" && mileageRows) {
+        const count = await upsertMileageRows(mileageRows, weekOf);
+        setStatus(`✅ Saved ${count} mileage rows for week of ${weekOf}.`);
+      } else if (mode === "workouts" && workoutData) {
+        const count = await upsertWorkoutData(
+          workoutData.assignments,
+          workoutData.groupDefinitions,
+          weekOf,
+          day,
+        );
+        setStatus(
+          `✅ Saved ${count} workout assignments for ${day}, week of ${weekOf}.`,
+        );
+      }
+    } catch (err) {
+      setStatus(`❌ Failed to save: ${(err as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="admin-dashboard">
+      <h1 className="admin-title acme-regular text-outline">Admin Dashboard</h1>
+
+      <div className="admin-mode-toggle">
+        <button
+          className={mode === "mileage" ? "nav-menu-trigger" : "nav-menu-item"}
+          onClick={() => {
+            setMode("mileage");
+            setMileageRows(null);
+            setWorkoutData(null);
+            setStatus(null);
+          }}
+        >
+          Mileage
+        </button>
+        <button
+          className={mode === "workouts" ? "nav-menu-trigger" : "nav-menu-item"}
+          onClick={() => {
+            setMode("workouts");
+            setMileageRows(null);
+            setWorkoutData(null);
+            setStatus(null);
+          }}
+        >
+          Workouts
+        </button>
+      </div>
+
+      <div className="admin-controls">
+        <label className="admin-label">
+          Week of:
+          <input
+            type="date"
+            className="identity-input"
+            value={weekOf}
+            onChange={(e) => setWeekOf(e.target.value)}
+          />
+        </label>
+
+        {mode === "workouts" && (
+          <label className="admin-label">
+            Day:
+            <select
+              className="identity-year-select"
+              value={day}
+              onChange={(e) => setDay(e.target.value as "tuesday" | "friday")}
+            >
+              <option value="tuesday">Tuesday</option>
+              <option value="friday">Friday</option>
+            </select>
+          </label>
+        )}
+
+        <input
+          type="file"
+          accept="application/pdf"
+          onChange={handleFileChange}
+          disabled={busy}
+        />
+      </div>
+
+      {busy && <p className="admin-status">Working...</p>}
+      {status && <p className="admin-status">{status}</p>}
+
+      {mode === "mileage" && mileageRows && (
+        <div className="admin-preview">
+          <p className="admin-preview-count">
+            {mileageRows.length} athletes parsed — review before saving:
+          </p>
+          <div className="admin-table-wrapper">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Team</th>
+                  <th>Mon</th>
+                  <th>Tue</th>
+                  <th>Wed</th>
+                  <th>Thu</th>
+                  <th>Fri</th>
+                  <th>Sat</th>
+                  <th>Sun</th>
+                  <th>Total</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mileageRows.map((r) => (
+                  <tr key={r.name}>
+                    <td>{r.name}</td>
+                    <td>{r.team === "womens-cross-country" ? "W" : "M"}</td>
+                    <td>{r.monday}</td>
+                    <td>{r.tuesday}</td>
+                    <td>{r.wednesday}</td>
+                    <td>{r.thursday}</td>
+                    <td>{r.friday}</td>
+                    <td>{r.saturday}</td>
+                    <td>{r.sunday}</td>
+                    <td>{r.weeklyTotal}</td>
+                    <td>{r.notes}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button
+            className="nav-menu-trigger"
+            onClick={handleSubmit}
+            disabled={busy}
+          >
+            Save to Database
+          </button>
+        </div>
+      )}
+
+      {mode === "workouts" && workoutData && (
+        <div className="admin-preview">
+          <p className="admin-preview-count">
+            {workoutData.assignments.length} athletes,{" "}
+            {workoutData.groupDefinitions.length} group definitions parsed —
+            review before saving:
+          </p>
+
+          <div className="admin-table-wrapper">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Group</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {workoutData.groupDefinitions.map((g) => (
+                  <tr key={g.groupLetter}>
+                    <td>{g.groupLetter}</td>
+                    <td>{g.description}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="admin-table-wrapper">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Group</th>
+                </tr>
+              </thead>
+              <tbody>
+                {workoutData.assignments.map((a) => (
+                  <tr key={a.name}>
+                    <td>{a.name}</td>
+                    <td>{a.groupLetter}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <button
+            className="nav-menu-trigger"
+            onClick={handleSubmit}
+            disabled={busy}
+          >
+            Save to Database
+          </button>
+        </div>
+      )}
+
+      <button
+        className="switch-identity-link acme-regular text-outline"
+        onClick={signOut}
+      >
+        Sign Out
+      </button>
+    </div>
+  );
+}
+
+export default AdminDashboard;
+
+```
+
+### `src/pages/adminLogin.tsx`
+
+```tsx
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAdminAuth } from "../context/AdminAuthContext";
+
+function AdminLogin() {
+  const { signIn, session } = useAdminAuth();
+  const navigate = useNavigate();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  if (session) {
+    navigate("/admin/dashboard", { replace: true });
+    return null;
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+
+    const { error: signInError } = await signIn(email, password);
+
+    if (signInError) {
+      setError(signInError);
+      setSubmitting(false);
+    } else {
+      navigate("/admin/dashboard", { replace: true });
+    }
+  }
+
+  return (
+    <div className="admin-login">
+      <h1 className="admin-title acme-regular text-outline">Admin Login</h1>
+      <form className="admin-login-form" onSubmit={handleSubmit}>
+        <input
+          type="email"
+          className="identity-input"
+          placeholder="Email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          required
+        />
+        <input
+          type="password"
+          className="identity-input"
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          required
+        />
+        {error && <p className="admin-error">{error}</p>}
+        <button
+          type="submit"
+          className="nav-menu-trigger"
+          disabled={submitting}
+        >
+          {submitting ? "Signing in..." : "Sign In"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+export default AdminLogin;
 
 ```
 
@@ -16578,6 +17407,134 @@ export default TuesdayWorkout;
   cursor: pointer;
 }
 
+.admin-login,
+.admin-dashboard {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-lg) var(--space-md);
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+.admin-title {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 48px);
+}
+
+.admin-login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(90vw, 360px);
+}
+
+.admin-error {
+  color: #b00020;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.admin-mode-toggle {
+  display: flex;
+  gap: 12px;
+}
+
+.admin-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  justify-content: center;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+  padding: 16px;
+}
+
+.admin-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 14px;
+  color: black;
+  font-weight: 600;
+}
+
+.admin-status {
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+  padding: 10px 16px;
+  color: black;
+  margin: 0;
+}
+
+.admin-preview {
+  width: 100%;
+  max-width: 1100px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+
+.admin-preview-count {
+  color: white;
+  -webkit-text-stroke: 1px black;
+  margin: 0;
+}
+
+.admin-table-wrapper {
+  width: 100%;
+  max-height: 400px;
+  overflow: auto;
+  background: rgba(255, 255, 255, 0.9);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.15);
+  white-space: nowrap;
+}
+
+.admin-table th {
+  position: sticky;
+  top: 0;
+  background: rgba(240, 233, 233, 0.98);
+}
+
+.admin-login-link {
+  margin-top: 12px;
+  background: none;
+  border: none;
+  text-decoration: underline;
+  font-size: 40px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.admin-login-link:hover {
+  opacity: 0.8;
+}
+
 ```
 
 ### `src/App.tsx`
@@ -16588,18 +17545,15 @@ import Background from "./components/background";
 import "./App.css";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import Home from "./pages/home";
-import Lookup from "./pages/name_lookup";
 import ErrorPage from "./pages/error";
-import AboutInfo from "./pages/about";
-import MileagePage from "./pages/mileagePage";
-import CorePage from "./pages/corePage";
 import BackButton from "./components/backButton";
 import RequireIdentity from "./components/requireIdentity";
-import FMS from "./pages/fms";
-import LiftingSheet from "./pages/liftingSheet";
 import ComingSoon from "./components/comingSoon";
 import TfrrsStats from "./pages/tfrrsStats";
 import TuesdayWorkout from "./pages/tuesdayWorkout";
+import AdminLogin from "./pages/adminLogin";
+import RequireAdmin from "./components/requireAdmin";
+import AdminDashboard from "./pages/adminDashboard";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -16619,6 +17573,8 @@ function AppContent() {
     "/personal-records",
     "/season-bests",
     "/tuesday_workout",
+    "/admin",
+    "/admin/dashboard",
   ].includes(location.pathname);
   const showBackButton =
     isKnownRoute && !BACK_BUTTON_ROUTES.has(location.pathname);
@@ -16708,6 +17664,15 @@ function AppContent() {
             <RequireIdentity>
               <TuesdayWorkout />
             </RequireIdentity>
+          }
+        />
+        <Route path="/admin" element={<AdminLogin />} />
+        <Route
+          path="/admin/dashboard"
+          element={
+            <RequireAdmin>
+              <AdminDashboard />
+            </RequireAdmin>
           }
         />
       </Routes>
@@ -16860,13 +17825,16 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import App from "./App.tsx";
-import { UserProvider } from "./context/UserContext.tsx";
+import { UserProvider } from "./context/UserContext";
+import { AdminAuthProvider } from "./context/AdminAuthContext";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <UserProvider>
-      <App />
-    </UserProvider>
+    <AdminAuthProvider>
+      <UserProvider>
+        <App />
+      </UserProvider>
+    </AdminAuthProvider>
   </StrictMode>,
 );
 
@@ -16888,6 +17856,7 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
 
 # Editor directories and files
 .vscode/*
@@ -16976,6 +17945,8 @@ _(binary or excluded — contents not inlined)_
     "fetch-tfrrs-ids-historical": "node scripts/fetch-tfrrs-ids-historical.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
+    "pdfjs-dist": "^6.3.289",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.3"
@@ -17450,4 +18421,4 @@ export default defineConfig({
 
 
 ---
-_Digest complete: 51 files inlined, 10 skipped (binary/excluded)._
+_Digest complete: 58 files inlined, 10 skipped (binary/excluded)._

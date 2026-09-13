@@ -3,18 +3,16 @@ import Background from "./components/background";
 import "./App.css";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import Home from "./pages/home";
-import Lookup from "./pages/name_lookup";
 import ErrorPage from "./pages/error";
-import AboutInfo from "./pages/about";
-import MileagePage from "./pages/mileagePage";
-import CorePage from "./pages/corePage";
 import BackButton from "./components/backButton";
 import RequireIdentity from "./components/requireIdentity";
-import FMS from "./pages/fms";
-import LiftingSheet from "./pages/liftingSheet";
 import ComingSoon from "./components/comingSoon";
 import TfrrsStats from "./pages/tfrrsStats";
 import TuesdayWorkout from "./pages/tuesdayWorkout";
+import AdminLogin from "./pages/adminLogin";
+import RequireAdmin from "./components/requireAdmin";
+import AdminDashboard from "./pages/adminDashboard";
+import MileagePage from "./pages/mileagePage";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -34,6 +32,8 @@ function AppContent() {
     "/personal-records",
     "/season-bests",
     "/tuesday_workout",
+    "/admin",
+    "/admin/dashboard",
   ].includes(location.pathname);
   const showBackButton =
     isKnownRoute && !BACK_BUTTON_ROUTES.has(location.pathname);
@@ -57,7 +57,7 @@ function AppContent() {
           path="/mileage"
           element={
             <RequireIdentity>
-              <ComingSoon />
+              <MileagePage />
             </RequireIdentity>
           }
         />
@@ -123,6 +123,15 @@ function AppContent() {
             <RequireIdentity>
               <TuesdayWorkout />
             </RequireIdentity>
+          }
+        />
+        <Route path="/admin" element={<AdminLogin />} />
+        <Route
+          path="/admin/dashboard"
+          element={
+            <RequireAdmin>
+              <AdminDashboard />
+            </RequireAdmin>
           }
         />
       </Routes>
