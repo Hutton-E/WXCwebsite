@@ -2,10 +2,18 @@
 /**
  * fetch-roster.mjs
  *
- * Fetches the men's and women's cross country rosters from go-knights.net,
- * parses the roster table, and writes structured JSON to src/data/roster.json.
+ * Fetches the current-season men's and women's cross country rosters from
+ * go-knights.net and writes structured JSON to src/data/distance_roster_26.json.
  *
- * Run this whenever the roster changes (each new season).
+ * IMPORTANT: go-knights.net's no-year roster URL doesn't always point at the
+ * newest season for every team (e.g. it kept showing 2025 for women's after
+ * 2026 rosters existed). Explicit year URLs are used below instead of relying
+ * on the default, so this always pulls the season you actually specify.
+ *
+ * Merges into any existing output file rather than overwriting it, so
+ * previously-matched `tfrrsId` fields (from fetch-tfrrs-ids.mjs) aren't lost.
+ *
+ * Update CURRENT_SEASON below at the start of each new season.
  *
  * Usage: node scripts/fetch-roster.mjs
  */
@@ -14,18 +22,20 @@ import fs from "node:fs";
 import path from "node:path";
 import * as cheerio from "cheerio";
 
+const CURRENT_SEASON = 2026;
+
 const TEAMS = [
   {
-    url: "https://go-knights.net/sports/mens-cross-country/roster",
+    url: `https://go-knights.net/sports/mens-cross-country/roster/${CURRENT_SEASON}`,
     team: "mens-cross-country",
   },
   {
-    url: "https://go-knights.net/sports/womens-cross-country/roster",
+    url: `https://go-knights.net/sports/womens-cross-country/roster/${CURRENT_SEASON}`,
     team: "womens-cross-country",
   },
 ];
 
-const OUT_PATH = path.resolve("src/data/roster.json");
+const OUT_PATH = path.resolve("src/data/distance_roster_26.json");
 
 async function fetchTeamRoster({ url, team }) {
   const res = await fetch(url, {
@@ -39,9 +49,6 @@ async function fetchTeamRoster({ url, team }) {
 
   const athletes = [];
 
-  // Sidearm roster pages include an accessible <table> with headers like
-  // "Full Name", "Academic Year", "Hometown / High School". Find it generically
-  // by header text so this doesn't break if class names change.
   $("table").each((_, table) => {
     const headerText = $(table)
       .find("th")
@@ -92,17 +99,28 @@ async function fetchTeamRoster({ url, team }) {
   return athletes;
 }
 
+function loadExistingAthletes() {
+  if (!fs.existsSync(OUT_PATH)) return [];
+  try {
+    const existing = JSON.parse(fs.readFileSync(OUT_PATH, "utf8"));
+    return existing.athletes || [];
+  } catch {
+    console.warn("⚠️  Could not parse existing output file — starting fresh.");
+    return [];
+  }
+}
+
 async function main() {
-  const allAthletes = [];
+  const freshAthletes = [];
 
   for (const teamConfig of TEAMS) {
-    console.log(`Fetching ${teamConfig.team}...`);
+    console.log(`Fetching ${teamConfig.team} (${CURRENT_SEASON})...`);
     const athletes = await fetchTeamRoster(teamConfig);
     console.log(`  Found ${athletes.length} athletes`);
-    allAthletes.push(...athletes);
+    freshAthletes.push(...athletes);
   }
 
-  if (allAthletes.length === 0) {
+  if (freshAthletes.length === 0) {
     console.error(
       "⚠️  No athletes found. The site's table structure may have changed — " +
         "inspect the page HTML and update the selectors in this script.",
@@ -110,16 +128,32 @@ async function main() {
     process.exit(1);
   }
 
+  // Merge with existing data so previously-matched tfrrsId fields survive.
+  const existingAthletes = loadExistingAthletes();
+  const existingById = new Map(existingAthletes.map((a) => [a.id, a]));
+
+  const mergedAthletes = freshAthletes.map((fresh) => {
+    const prior = existingById.get(fresh.id);
+    return prior ? { ...fresh, tfrrsId: prior.tfrrsId } : fresh;
+  });
+
+  const carriedOverCount = mergedAthletes.filter((a) => a.tfrrsId).length;
+
   const output = {
     generatedAt: new Date().toISOString(),
+    season: CURRENT_SEASON,
     sources: TEAMS.map((t) => t.url),
-    athletes: allAthletes,
+    athletes: mergedAthletes,
   };
 
   fs.mkdirSync(path.dirname(OUT_PATH), { recursive: true });
   fs.writeFileSync(OUT_PATH, JSON.stringify(output, null, 2), "utf8");
 
-  console.log(`✅ Wrote ${allAthletes.length} athletes to ${OUT_PATH}`);
+  console.log(`\n✅ Wrote ${mergedAthletes.length} athletes to ${OUT_PATH}`);
+  console.log(`   ${carriedOverCount} carried over an existing tfrrsId match.`);
+  console.log(
+    `   ${mergedAthletes.length - carriedOverCount} still need tfrrsId — run fetch-tfrrs-ids.mjs.`,
+  );
 }
 
 main().catch((err) => {

@@ -1,0 +1,739 @@
+{
+  "generatedAt": "2026-09-13T02:47:11.210Z",
+  "season": 2022,
+  "sources": [
+    "https://go-knights.net/sports/mens-cross-country/roster/2022",
+    "https://go-knights.net/sports/womens-cross-country/roster/2022"
+  ],
+  "athletes": [
+    {
+      "id": "11594",
+      "name": "Josh Arias",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Indio, Calif.",
+      "highSchool": "Shadow Hills",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/josh-arias/11594",
+      "tfrrsId": "7918357"
+    },
+    {
+      "id": "11634",
+      "name": "Seth Bailey",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/seth-bailey/11634",
+      "tfrrsId": "8352840"
+    },
+    {
+      "id": "11595",
+      "name": "Ian Barry",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Fennimore, Wis.",
+      "highSchool": "Fennimore",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ian-barry/11595",
+      "tfrrsId": "7730278"
+    },
+    {
+      "id": "11596",
+      "name": "Luke Benson",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Sioux City, Iowa",
+      "highSchool": "Sioux City North",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/luke-benson/11596",
+      "tfrrsId": "7918377"
+    },
+    {
+      "id": "11597",
+      "name": "Callum Brittain",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "White River Junction, Ver.",
+      "highSchool": "Hartford",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/callum-brittain/11597",
+      "tfrrsId": "7043032"
+    },
+    {
+      "id": "11599",
+      "name": "Christopher Collet",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Verona, Ill.",
+      "highSchool": "Seneca",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/christopher-collet/11599",
+      "tfrrsId": "7370510"
+    },
+    {
+      "id": "11600",
+      "name": "Bert Cortez",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Lone Tree, Iowa",
+      "highSchool": "Lone Tree",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/bert-cortez/11600",
+      "tfrrsId": "7918360"
+    },
+    {
+      "id": "11601",
+      "name": "Carter Cruise",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Scotch Grove, Iowa",
+      "highSchool": "Monticello",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carter-cruise/11601",
+      "tfrrsId": "7730328"
+    },
+    {
+      "id": "11602",
+      "name": "Andrew Ellison",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline Senior",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-ellison/11602",
+      "tfrrsId": "7043035"
+    },
+    {
+      "id": "11635",
+      "name": "Shane Erb",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/shane-erb/11635",
+      "tfrrsId": "8352846"
+    },
+    {
+      "id": "11603",
+      "name": "Michael Goodenbour",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Cedar Falls, Iowa",
+      "highSchool": "Cedar Falls",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/michael-goodenbour/11603",
+      "tfrrsId": "7918361"
+    },
+    {
+      "id": "11604",
+      "name": "Jacob  Green",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Kennedy",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-green/11604",
+      "tfrrsId": "7730339"
+    },
+    {
+      "id": "11605",
+      "name": "Colin Greenwell",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Sioux City, Iowa",
+      "highSchool": "Sioux City North",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/colin-greenwell/11605",
+      "tfrrsId": "7918365"
+    },
+    {
+      "id": "11607",
+      "name": "Joe Hasken",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Miles, Iowa",
+      "highSchool": "Northeast",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/joe-hasken/11607",
+      "tfrrsId": "8017690"
+    },
+    {
+      "id": "11608",
+      "name": "Nick Henry",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Cheney, Wash.",
+      "highSchool": "Medical Lake",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nick-henry/11608",
+      "tfrrsId": "7370512"
+    },
+    {
+      "id": "11609",
+      "name": "Paul Hoopes",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Letts, Iowa",
+      "highSchool": "Louisa Muscatine",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/paul-hoopes/11609",
+      "tfrrsId": "7918366"
+    },
+    {
+      "id": "11610",
+      "name": "Aiden Housman",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Wapello, Iowa",
+      "highSchool": "Wapello",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/aiden-housman/11610",
+      "tfrrsId": "7730348"
+    },
+    {
+      "id": "11611",
+      "name": "Jon Hutton",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Moline, Ill.",
+      "highSchool": "Moline",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jon-hutton/11611",
+      "tfrrsId": "7918367"
+    },
+    {
+      "id": "11612",
+      "name": "Alec Ille",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Blooming Prairie, Minn.",
+      "highSchool": "Blooming Prairie",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/alec-ille/11612",
+      "tfrrsId": "7043039"
+    },
+    {
+      "id": "11613",
+      "name": "Jacob  Keay",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Treynor, Iowa",
+      "highSchool": "Treynor Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-keay/11613",
+      "tfrrsId": "7730350"
+    },
+    {
+      "id": "11614",
+      "name": "Jack Kinzer",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Liberty",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jack-kinzer/11614",
+      "tfrrsId": "7918369"
+    },
+    {
+      "id": "11615",
+      "name": "Nathaniel Knutson",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "New Lenox, Ill.",
+      "highSchool": "Lincoln-Way West",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/nathaniel-knutson/11615",
+      "tfrrsId": "7918371"
+    },
+    {
+      "id": "11616",
+      "name": "Connor Lancial",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Council Bluffs, Iowa",
+      "highSchool": "Lewis Central",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/connor-lancial/11616",
+      "tfrrsId": "7730351"
+    },
+    {
+      "id": "11637",
+      "name": "Eli Larson",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Walker, Iowa",
+      "highSchool": "Center Point-Urbana",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/eli-larson/11637",
+      "tfrrsId": "8352862"
+    },
+    {
+      "id": "11617",
+      "name": "Dalton Martin",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Rock Island, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/dalton-martin/11617",
+      "tfrrsId": "7043060"
+    },
+    {
+      "id": "11618",
+      "name": "Arthur Meyers",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Redlands, Calif.",
+      "highSchool": "Redlands East Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/arthur-meyers/11618",
+      "tfrrsId": "7918373"
+    },
+    {
+      "id": "11619",
+      "name": "Jack Meyers",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Bettendorf, Iowa",
+      "highSchool": "Pleasant Valley",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jack-meyers/11619",
+      "tfrrsId": "7730353"
+    },
+    {
+      "id": "12005",
+      "name": "Roberto Munoz",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "East Moline, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/roberto-munoz/12005"
+    },
+    {
+      "id": "11620",
+      "name": "Ryan  Neubauer",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Swisher, Iowa",
+      "highSchool": "Praire",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/ryan-neubauer/11620",
+      "tfrrsId": "7730357"
+    },
+    {
+      "id": "11638",
+      "name": "Cameron Noreen",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Lincoln, Calif.",
+      "highSchool": "Lincoln",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/cameron-noreen/11638",
+      "tfrrsId": "8271797"
+    },
+    {
+      "id": "11621",
+      "name": "Clay Pehl",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Madrid",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/clay-pehl/11621",
+      "tfrrsId": "7918374"
+    },
+    {
+      "id": "11622",
+      "name": "Andrew Poock",
+      "team": "mens-cross-country",
+      "year": "So.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/andrew-poock/11622",
+      "tfrrsId": "7918375"
+    },
+    {
+      "id": "11639",
+      "name": "Owen Pries",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/owen-pries/11639",
+      "tfrrsId": "8352883"
+    },
+    {
+      "id": "11998",
+      "name": "Brendan Rader",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Cedar Rapids, Iowa",
+      "highSchool": "Cedar Rapids Kennedy",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brendan-rader/11998",
+      "tfrrsId": "8352884"
+    },
+    {
+      "id": "11623",
+      "name": "Brice Rhodes",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Herbert Hoover",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/brice-rhodes/11623",
+      "tfrrsId": "7370517"
+    },
+    {
+      "id": "11624",
+      "name": "Gavin Roy",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Eldora, Iowa",
+      "highSchool": "South Hardin",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/gavin-roy/11624",
+      "tfrrsId": "7730364"
+    },
+    {
+      "id": "11625",
+      "name": "Carson Rygh",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Lake Mills, Iowa",
+      "highSchool": "Lake Mills Community",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/carson-rygh/11625",
+      "tfrrsId": "7730365"
+    },
+    {
+      "id": "11640",
+      "name": "Conner Sattler",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Clinton, Iowa",
+      "highSchool": "Clinton",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/conner-sattler/11640",
+      "tfrrsId": "8352888"
+    },
+    {
+      "id": "11641",
+      "name": "Sam Schaefer",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Iowa City, Iowa",
+      "highSchool": "City High",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-schaefer/11641",
+      "tfrrsId": "8271801"
+    },
+    {
+      "id": "11642",
+      "name": "Tyler Schermerhorn",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Ankeny, Iowa",
+      "highSchool": "Ankeny Cenntenial",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/tyler-schermerhorn/11642",
+      "tfrrsId": "8352891"
+    },
+    {
+      "id": "11626",
+      "name": "Wyatt  Schmidt",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Preston, Iowa",
+      "highSchool": "Northeast",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/wyatt-schmidt/11626",
+      "tfrrsId": "8659713"
+    },
+    {
+      "id": "11627",
+      "name": "Michael  Schmitz",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/michael-schmitz/11627",
+      "tfrrsId": "7370519"
+    },
+    {
+      "id": "11628",
+      "name": "Sam Schmitz",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Johnston, Iowa",
+      "highSchool": "Johnston",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/sam-schmitz/11628",
+      "tfrrsId": "7730366"
+    },
+    {
+      "id": "11629",
+      "name": "Morgan Shirley-Fairbairn",
+      "team": "mens-cross-country",
+      "year": "Sr.",
+      "hometown": "Bismarck, N.D.",
+      "highSchool": "Bismarck",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/morgan-shirley-fairbairn/11629",
+      "tfrrsId": "7043077"
+    },
+    {
+      "id": "11643",
+      "name": "Lance Sobaski",
+      "team": "mens-cross-country",
+      "year": "Fr.",
+      "hometown": "Brighton, Iowa",
+      "highSchool": "Washington",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/lance-sobaski/11643",
+      "tfrrsId": "8352892"
+    },
+    {
+      "id": "11631",
+      "name": "Jacob VanderWilt",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "Eldora, Iowa",
+      "highSchool": "South Hardin",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/jacob-vanderwilt/11631",
+      "tfrrsId": "7370522"
+    },
+    {
+      "id": "11632",
+      "name": "Logan Wisocki-Johnson",
+      "team": "mens-cross-country",
+      "year": "Jr.",
+      "hometown": "East Moline, Ill.",
+      "highSchool": "United Township",
+      "profileUrl": "https://go-knights.net/sports/mens-cross-country/roster/logan-wisocki-johnson/11632",
+      "tfrrsId": "7730371"
+    },
+    {
+      "id": "11645",
+      "name": "Rylie Bainbridge",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Cherokee, Iowa",
+      "highSchool": "Washington",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/rylie-bainbridge/11645",
+      "tfrrsId": "7918379"
+    },
+    {
+      "id": "11646",
+      "name": "Ashley  Bloomquist",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Fairfield, Iowa",
+      "highSchool": "Fairfield",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ashley-bloomquist/11646",
+      "tfrrsId": "7540843"
+    },
+    {
+      "id": "11664",
+      "name": "Lilly Boge",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Farley, Iowa",
+      "highSchool": "Western Dubuque",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lilly-boge/11664",
+      "tfrrsId": "8272157"
+    },
+    {
+      "id": "11648",
+      "name": "Lexi Brown",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "New London, Iowa",
+      "highSchool": "New London",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lexi-brown/11648",
+      "tfrrsId": "7699550"
+    },
+    {
+      "id": "11649",
+      "name": "Addy Carlson",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Saint Ansgar, Iowa",
+      "highSchool": "Saint Ansgar",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/addy-carlson/11649",
+      "tfrrsId": "7540845"
+    },
+    {
+      "id": "11650",
+      "name": "Alyssa Chyma",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Tama, Iowa",
+      "highSchool": "South Tama County",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/alyssa-chyma/11650",
+      "tfrrsId": "7918381"
+    },
+    {
+      "id": "11651",
+      "name": "Aubrie Fisher",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Ackley, Iowa",
+      "highSchool": "AGWSR",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/aubrie-fisher/11651",
+      "tfrrsId": "7540848"
+    },
+    {
+      "id": "11665",
+      "name": "Kelly Giardina",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Rockford, Ill.",
+      "highSchool": "Rockford Christian",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/kelly-giardina/11665",
+      "tfrrsId": "8352850"
+    },
+    {
+      "id": "11652",
+      "name": "Carlene Hamilton",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Mesa, Ariz.",
+      "highSchool": "Skyline",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/carlene-hamilton/11652",
+      "tfrrsId": "7540849"
+    },
+    {
+      "id": "11653",
+      "name": "Shaelyn Hostager",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Hempstead",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/shaelyn-hostager/11653",
+      "tfrrsId": "7730222"
+    },
+    {
+      "id": "11654",
+      "name": "Allegra  Knudson",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Manly, Iowa",
+      "highSchool": "Central Springs",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allegra-knudson/11654",
+      "tfrrsId": "7540851"
+    },
+    {
+      "id": "11668",
+      "name": "Allie Kounkel",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "North Liberty, Iowa",
+      "highSchool": "Clear Creek Amana",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allie-kounkel/11668",
+      "tfrrsId": "8272159"
+    },
+    {
+      "id": "11666",
+      "name": "Karle Kramer",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Monticello, Iowa",
+      "highSchool": "Monticello",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/karle-kramer/11666",
+      "tfrrsId": "8352860"
+    },
+    {
+      "id": "11655",
+      "name": "Riley Mayer",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Fort Dodge, Iowa",
+      "highSchool": "Saint Edmond",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/riley-mayer/11655",
+      "tfrrsId": "7042980"
+    },
+    {
+      "id": "11656",
+      "name": "Ellie Meyer",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Iowa Falls, Iowa",
+      "highSchool": "Iowa Falls-Alden",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ellie-meyer/11656",
+      "tfrrsId": "7918382"
+    },
+    {
+      "id": "11669",
+      "name": "Haley Meyer",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "New Albin, Iowa",
+      "highSchool": "Kee",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/haley-meyer/11669",
+      "tfrrsId": "8352865"
+    },
+    {
+      "id": "11657",
+      "name": "Jenna Morey",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Spencer, Iowa",
+      "highSchool": "Spencer",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jenna-morey/11657",
+      "tfrrsId": "7730228"
+    },
+    {
+      "id": "11658",
+      "name": "Ryleigh Parrack",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Papillion, Neb.",
+      "highSchool": "Papillion-La Vista South",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/ryleigh-parrack/11658",
+      "tfrrsId": "7730231"
+    },
+    {
+      "id": "11659",
+      "name": "Natalie  Paulson",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "Grimes, Iowa",
+      "highSchool": "Dallas Center-Grimes",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/natalie-paulson/11659",
+      "tfrrsId": "7540852"
+    },
+    {
+      "id": "11670",
+      "name": "Lily Peterson",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Hawley, Minn.",
+      "highSchool": "Hawley",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/lily-peterson/11670",
+      "tfrrsId": "8352880"
+    },
+    {
+      "id": "11660",
+      "name": "Erin Phelan",
+      "team": "womens-cross-country",
+      "year": "Jr.",
+      "hometown": "Waukesha, Wis.",
+      "highSchool": "Waukesha West",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/erin-phelan/11660",
+      "tfrrsId": "7740369"
+    },
+    {
+      "id": "11661",
+      "name": "Jane Pinkowski",
+      "team": "womens-cross-country",
+      "year": "Sr.",
+      "hometown": "La Crosse, Wis.",
+      "highSchool": "Central",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/jane-pinkowski/11661",
+      "tfrrsId": "7730233"
+    },
+    {
+      "id": "11671",
+      "name": "Madison Prier",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Marion, Iowa",
+      "highSchool": "Marion",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/madison-prier/11671",
+      "tfrrsId": "8352882"
+    },
+    {
+      "id": "11662",
+      "name": "Emily Richter",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Dubuque, Iowa",
+      "highSchool": "Dubuque Hempstead",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/emily-richter/11662",
+      "tfrrsId": "7918383"
+    },
+    {
+      "id": "11663",
+      "name": "Brielle Ruch",
+      "team": "womens-cross-country",
+      "year": "So.",
+      "hometown": "Des Moines, Iowa",
+      "highSchool": "Urbandale",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/brielle-ruch/11663",
+      "tfrrsId": "7918387"
+    },
+    {
+      "id": "11667",
+      "name": "Allie Spredemann",
+      "team": "womens-cross-country",
+      "year": "Fr.",
+      "hometown": "Sun Prairie, Wis.",
+      "highSchool": "Sun Prairie",
+      "profileUrl": "https://go-knights.net/sports/womens-cross-country/roster/allie-spredemann/11667",
+      "tfrrsId": "8352893"
+    }
+  ]
+}

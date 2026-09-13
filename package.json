@@ -11,7 +11,11 @@
     "digest": "node repo-digest.mjs",
     "fetch-roster": "node scripts/fetch-roster.mjs",
     "fetch-tfrrs-ids": "node scripts/fetch-tfrrs-ids.mjs",
-    "fetch-tfrrs-stats": "node scripts/fetch-tfrrs-stats.mjs"
+    "fetch-tfrrs-stats": "node scripts/fetch-tfrrs-stats.mjs",
+    "fetch-roster-history": "node scripts/fetch-roster-history.mjs",
+    "fetch-roster-by-year": "node scripts/fetch-roster-by-year.mjs",
+    "fetch-tfrrs-ids-all-years": "node scripts/fetch-tfrrs-ids-all-years.mjs",
+    "fetch-tfrrs-ids-historical": "node scripts/fetch-tfrrs-ids-historical.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",

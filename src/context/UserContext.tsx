@@ -1,5 +1,4 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
-import rosterData from "../data/distance_roster_26.json";
 
 interface Athlete {
   id: string;
@@ -11,41 +10,89 @@ interface Athlete {
   profileUrl: string;
 }
 
+interface RosterFile {
+  season: number;
+  athletes: Athlete[];
+}
+
 interface UserContextValue {
   athleteId: string | null;
+  season: number | null;
   athlete: Athlete | null;
-  selectAthlete: (id: string) => void;
+  availableSeasons: number[];
+  selectAthlete: (id: string, season: number) => void;
   clearAthlete: () => void;
 }
 
 const UserContext = createContext<UserContextValue | undefined>(undefined);
-const STORAGE_KEY = "wxc_selected_athlete_id";
+const ID_KEY = "wxc_selected_athlete_id";
+const SEASON_KEY = "wxc_selected_season";
 
-function findAthlete(id: string | null): Athlete | null {
-  if (!id) return null;
-  return rosterData.athletes.find((a) => a.id === id) ?? null;
+// Eagerly loads every distance_roster_*.json file in src/data at build time.
+const rosterModules = import.meta.glob("../data/distance_roster_*.json", {
+  eager: true,
+}) as Record<string, RosterFile>;
+
+function parseSeasonFromPath(filePath: string): number | null {
+  const match = filePath.match(/distance_roster_(\d{2})\.json$/);
+  if (!match) return null;
+  return 2000 + parseInt(match[1], 10);
+}
+
+const rostersBySeason: Record<number, Athlete[]> = {};
+for (const [filePath, mod] of Object.entries(rosterModules)) {
+  const season = mod.season ?? parseSeasonFromPath(filePath);
+  if (season && mod.athletes) {
+    rostersBySeason[season] = mod.athletes;
+  }
+}
+
+const availableSeasons = Object.keys(rostersBySeason)
+  .map(Number)
+  .sort((a, b) => b - a); // newest first
+
+function findAthlete(id: string | null, season: number | null): Athlete | null {
+  if (!id || !season) return null;
+  const roster = rostersBySeason[season];
+  if (!roster) return null;
+  return roster.find((a) => a.id === id) ?? null;
 }
 
 export function UserProvider({ children }: { children: ReactNode }) {
   const [athleteId, setAthleteIdState] = useState<string | null>(() =>
-    sessionStorage.getItem(STORAGE_KEY),
+    sessionStorage.getItem(ID_KEY),
   );
+  const [season, setSeasonState] = useState<number | null>(() => {
+    const stored = sessionStorage.getItem(SEASON_KEY);
+    return stored ? parseInt(stored, 10) : null;
+  });
 
-  function selectAthlete(id: string) {
-    sessionStorage.setItem(STORAGE_KEY, id);
+  function selectAthlete(id: string, selectedSeason: number) {
+    sessionStorage.setItem(ID_KEY, id);
+    sessionStorage.setItem(SEASON_KEY, String(selectedSeason));
     setAthleteIdState(id);
+    setSeasonState(selectedSeason);
   }
 
   function clearAthlete() {
-    sessionStorage.removeItem(STORAGE_KEY);
+    sessionStorage.removeItem(ID_KEY);
+    sessionStorage.removeItem(SEASON_KEY);
     setAthleteIdState(null);
+    setSeasonState(null);
   }
 
-  const athlete = findAthlete(athleteId);
+  const athlete = findAthlete(athleteId, season);
 
   return (
     <UserContext.Provider
-      value={{ athleteId, athlete, selectAthlete, clearAthlete }}
+      value={{
+        athleteId,
+        season,
+        athlete,
+        availableSeasons,
+        selectAthlete,
+        clearAthlete,
+      }}
     >
       {children}
     </UserContext.Provider>

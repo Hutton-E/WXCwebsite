@@ -2,13 +2,21 @@
 /**
  * fetch-tfrrs-stats.mjs
  *
- * For every athlete with a tfrrsId in distance_roster.json, fetches their
- * TFRRS profile and extracts their "College Bests" table — one best time
- * per event, career-wide (not broken out by season/indoor/outdoor).
+ * Scans EVERY src/data/distance_roster_*.json file, collects every unique
+ * tfrrsId across all seasons (the same real person may appear in several
+ * yearly files but always shares one tfrrsId — TFRRS IDs are stable across
+ * a career, unlike go-knights' per-season roster IDs), and fetches each
+ * unique athlete's "College Bests" table exactly once.
  *
- * Writes src/data/tfrrs_stats.json, keyed by your roster athlete id.
+ * Writes src/data/tfrrs_stats.json KEYED BY tfrrsId (not by roster id),
+ * so any season's athlete record can look up its own stats via
+ * athlete.tfrrsId, regardless of which year's file it came from.
  *
- * Run this periodically during the season to keep bests current.
+ * Supports two tfrrsId shapes:
+ *   - A plain numeric ID (e.g. "8271797") -> builds the standard
+ *     tfrrs.org/athletes/{id}/Wartburg/{Name}.html URL.
+ *   - A full URL already (for TFRRS's alternate hashed-profile format,
+ *     e.g. "https://www.tfrrs.org/athlete/{hash}.html") -> used as-is.
  *
  * Usage: node scripts/fetch-tfrrs-stats.mjs
  */
@@ -17,22 +25,32 @@ import fs from "node:fs";
 import path from "node:path";
 import * as cheerio from "cheerio";
 
-const ROSTER_PATH = path.resolve("src/data/distance_roster.json");
+const DATA_DIR = path.resolve("src/data");
 const OUT_PATH = path.resolve("src/data/tfrrs_stats.json");
-
-// Be polite — TFRRS is a shared community resource, not an API.
-const DELAY_MS = 750;
+const DELAY_MS = 700;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function fetchAthleteBests(tfrrsId, name) {
-  // The team ("Wartburg") and name-slug portion of the URL don't actually
-  // need to be correct for TFRRS to resolve the page — only the ID matters —
-  // but we build a plausible URL for clarity/debugging.
+function findRosterFiles() {
+  return fs
+    .readdirSync(DATA_DIR)
+    .filter((f) => /^distance_roster_\d+\.json$/.test(f))
+    .map((f) => path.join(DATA_DIR, f));
+}
+
+function resolveProfileUrl(tfrrsId, name) {
+  if (tfrrsId.startsWith("http")) {
+    // Hashed-format profile — already a full, usable URL.
+    return tfrrsId;
+  }
   const slug = name.replace(/\s+/g, "_");
-  const url = `https://www.tfrrs.org/athletes/${tfrrsId}/Wartburg/${slug}.html`;
+  return `https://www.tfrrs.org/athletes/${tfrrsId}/Wartburg/${slug}.html`;
+}
+
+async function fetchAthleteBests(tfrrsId, name) {
+  const url = resolveProfileUrl(tfrrsId, name);
 
   const res = await fetch(url, {
     headers: { "User-Agent": "Mozilla/5.0 (stats-fetch-script)" },
@@ -45,7 +63,6 @@ async function fetchAthleteBests(tfrrsId, name) {
   const html = await res.text();
   const $ = cheerio.load(html);
 
-  // The "College Bests" summary table is the first table on the page.
   const bestsTable = $("table").first();
   if (bestsTable.length === 0) {
     console.warn(`  ⚠️  ${name}: no tables found on profile page`);
@@ -55,7 +72,6 @@ async function fetchAthleteBests(tfrrsId, name) {
   const events = [];
   const cells = bestsTable.find("td").toArray();
 
-  // Cells alternate: [event label, result cell with a time link, event label, result cell, ...]
   for (let i = 0; i < cells.length; i += 2) {
     const labelCell = $(cells[i]);
     const resultCell = $(cells[i + 1]);
@@ -81,35 +97,55 @@ async function fetchAthleteBests(tfrrsId, name) {
 }
 
 async function main() {
-  const roster = JSON.parse(fs.readFileSync(ROSTER_PATH, "utf8"));
-  const athletesWithId = roster.athletes.filter((a) => a.tfrrsId);
-
-  if (athletesWithId.length === 0) {
-    console.error(
-      "No athletes have a tfrrsId yet. Run scripts/fetch-tfrrs-ids.mjs first.",
-    );
+  const rosterFiles = findRosterFiles();
+  if (rosterFiles.length === 0) {
+    console.error(`No distance_roster_*.json files found in ${DATA_DIR}`);
     process.exit(1);
   }
 
-  console.log(`Fetching stats for ${athletesWithId.length} athletes...\n`);
+  console.log(
+    `Scanning ${rosterFiles.length} roster file(s) for unique tfrrsIds...`,
+  );
+
+  // Map keyed by tfrrsId -> a representative display name (whichever we see first).
+  const uniqueAthletes = new Map();
+
+  for (const filePath of rosterFiles) {
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    for (const athlete of data.athletes) {
+      if (athlete.tfrrsId && !uniqueAthletes.has(athlete.tfrrsId)) {
+        uniqueAthletes.set(athlete.tfrrsId, athlete.name);
+      }
+    }
+  }
+
+  console.log(
+    `Found ${uniqueAthletes.size} unique athletes (by tfrrsId) across all seasons.\n`,
+  );
 
   const stats = {};
   let success = 0;
   let failed = 0;
+  let index = 0;
 
-  for (const athlete of athletesWithId) {
-    const events = await fetchAthleteBests(athlete.tfrrsId, athlete.name);
+  for (const [tfrrsId, name] of uniqueAthletes) {
+    index++;
+    const events = await fetchAthleteBests(tfrrsId, name);
     if (events && events.length > 0) {
-      stats[athlete.id] = {
-        name: athlete.name,
-        tfrrsId: athlete.tfrrsId,
+      stats[tfrrsId] = {
+        name,
+        tfrrsId,
         fetchedAt: new Date().toISOString(),
         bests: events,
       };
-      console.log(`✅ ${athlete.name}: ${events.length} events`);
+      console.log(
+        `✅ [${index}/${uniqueAthletes.size}] ${name}: ${events.length} events`,
+      );
       success++;
     } else {
-      console.log(`⚠️  ${athlete.name}: no data found`);
+      console.log(
+        `⚠️  [${index}/${uniqueAthletes.size}] ${name}: no data found`,
+      );
       failed++;
     }
     await sleep(DELAY_MS);
@@ -120,7 +156,7 @@ async function main() {
   console.log(`\n✅ Wrote stats for ${success} athletes to ${OUT_PATH}`);
   if (failed > 0) {
     console.log(
-      `⚠️  ${failed} athletes had no data — check their tfrrsId or profile page manually.`,
+      `⚠️  ${failed} athletes had no data — check their tfrrsId manually.`,
     );
   }
 }

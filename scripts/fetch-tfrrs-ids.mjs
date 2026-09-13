@@ -27,7 +27,7 @@ const TFRRS_TEAMS = [
   },
 ];
 
-const ROSTER_PATH = path.resolve("src/data/distance_roster.json");
+const ROSTER_PATH = path.resolve("src/data/distance_roster_26.json");
 
 // Add entries here when automatic matching fails due to spelling/nickname
 // differences between go-knights.net and TFRRS. Key = your roster id.

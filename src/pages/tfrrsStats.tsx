@@ -14,14 +14,14 @@ interface AthleteStats {
   bests: BestEvent[];
 }
 
-const statsById = tfrrsStats as Record<string, AthleteStats>;
+const statsByTfrrsId = tfrrsStats as Record<string, AthleteStats>;
 
 function TfrrsStats() {
   const { athlete } = useUser();
 
-  if (!athlete) return null; // RequireIdentity already guards this route
+  if (!athlete) return null;
 
-  const stats = statsById[athlete.id];
+  const stats = athlete.tfrrsId ? statsByTfrrsId[athlete.tfrrsId] : undefined;
 
   return (
     <div className="tfrrs-page">
