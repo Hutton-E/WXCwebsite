@@ -14,6 +14,8 @@ import RequireAdmin from "./components/requireAdmin";
 import AdminDashboard from "./pages/adminDashboard";
 import MileagePage from "./pages/mileagePage";
 import CorePage from "./pages/corePage";
+import AdminFmsAssignments from "./pages/adminFmsAssignments";
+import FmsPage from "./pages/fmsPage";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -36,6 +38,7 @@ function AppContent() {
     "/workouts",
     "/admin",
     "/admin/dashboard",
+    "/admin/fms",
   ].includes(location.pathname);
   const showBackButton =
     isKnownRoute && !BACK_BUTTON_ROUTES.has(location.pathname);
@@ -83,15 +86,7 @@ function AppContent() {
           path="/fms"
           element={
             <RequireIdentity>
-              <ComingSoon />
-            </RequireIdentity>
-          }
-        />
-        <Route
-          path="/lifting_sheet"
-          element={
-            <RequireIdentity>
-              <ComingSoon />
+              <FmsPage />
             </RequireIdentity>
           }
         />
@@ -133,6 +128,14 @@ function AppContent() {
           element={
             <RequireAdmin>
               <AdminDashboard />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="/admin/fms"
+          element={
+            <RequireAdmin>
+              <AdminFmsAssignments />
             </RequireAdmin>
           }
         />

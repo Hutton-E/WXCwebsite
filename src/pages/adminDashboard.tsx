@@ -27,12 +27,6 @@ const CURRENT_SEASON = 2026;
 
 type Mode = "mileage" | "workouts";
 
-interface WorkoutData {
-  assignments: WorkoutAssignment[];
-  groupDefinitions: WorkoutGroupDefinition[];
-  intervalRows: WorkoutIntervalRow[];
-}
-
 function AdminDashboard() {
   const { signOut } = useAdminAuth();
   const [mode, setMode] = useState<Mode>("mileage");
