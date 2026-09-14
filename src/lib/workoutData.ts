@@ -4,6 +4,7 @@ export interface WorkoutAssignmentRow {
   week_of: string;
   day: string;
   group_letter: string;
+  note: string | null;
 }
 
 export interface WorkoutGroupRow {
@@ -18,6 +19,7 @@ export interface WorkoutForDay {
   day: string;
   groupLetter: string;
   description: string | null;
+  note: string | null;
 }
 
 export interface WorkoutIntervalEntry {
@@ -28,19 +30,19 @@ export interface WorkoutIntervalEntry {
 }
 
 export async function fetchWorkoutsForAthlete(
-  athleteName: string,
+  athleteId: string,
+  season: number,
 ): Promise<WorkoutForDay[]> {
   const { data: assignments, error: assignError } = await supabase
     .from("workout_assignments")
-    .select("week_of, day, group_letter")
-    .eq("athlete_name", athleteName)
+    .select("week_of, day, group_letter, note")
+    .eq("athlete_id", athleteId)
+    .eq("season", season)
     .order("week_of", { ascending: false });
 
   if (assignError) throw new Error(assignError.message);
   if (!assignments || assignments.length === 0) return [];
 
-  // Fetch every group definition for the specific (week, day) pairs this
-  // athlete has assignments for, then join them together client-side.
   const weeksOf = [...new Set(assignments.map((a) => a.week_of))];
 
   const { data: groups, error: groupError } = await supabase
@@ -61,16 +63,19 @@ export async function fetchWorkoutsForAthlete(
     groupLetter: a.group_letter,
     description:
       groupLookup.get(`${a.week_of}|${a.day}|${a.group_letter}`) ?? null,
+    note: a.note ?? null,
   }));
 }
 
 export async function fetchIntervalsForAthlete(
-  athleteName: string,
+  athleteId: string,
+  season: number,
 ): Promise<WorkoutIntervalEntry[]> {
   const { data, error } = await supabase
     .from("workout_intervals")
     .select("week_of, day, interval_label, time_value")
-    .eq("athlete_name", athleteName)
+    .eq("athlete_id", athleteId)
+    .eq("season", season)
     .order("week_of", { ascending: false });
 
   if (error) throw new Error(error.message);

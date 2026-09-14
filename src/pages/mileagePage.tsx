@@ -23,7 +23,7 @@ function formatWeekOf(dateStr: string) {
 }
 
 function MileagePage() {
-  const { athlete } = useUser();
+  const { athlete, season } = useUser();
   const [entries, setEntries] = useState<MileageEntry[] | null>(null);
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +35,7 @@ function MileagePage() {
     setEntries(null);
     setError(null);
 
-    fetchMileageForAthlete(athlete.name)
+    fetchMileageForAthlete(athlete.id, season!)
       .then((data) => {
         if (cancelled) return;
         setEntries(data);

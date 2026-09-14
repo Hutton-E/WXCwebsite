@@ -6,16 +6,25 @@ import type {
   WorkoutIntervalRow,
 } from "./pdfParser";
 
-export async function upsertMileageRows(rows: MileageRow[], weekOf: string) {
-  // Defensive dedupe: if two parsed rows somehow share a name, keep the last
-  // one rather than sending Postgres a batch with a duplicate conflict key.
-  const dedupedByName = new Map<string, MileageRow>();
-  for (const row of rows) {
-    dedupedByName.set(row.name, row);
-  }
-  const deduped = Array.from(dedupedByName.values());
+export interface MatchedRow<T> {
+  data: T;
+  athleteId: string;
+}
 
-  const payload = deduped.map((r) => ({
+export async function upsertMileageRows(
+  rows: MatchedRow<MileageRow>[],
+  weekOf: string,
+  season: number,
+) {
+  const dedupedById = new Map<string, MatchedRow<MileageRow>>();
+  for (const row of rows) {
+    dedupedById.set(row.athleteId, row);
+  }
+  const deduped = Array.from(dedupedById.values());
+
+  const payload = deduped.map(({ data: r, athleteId }) => ({
+    athlete_id: athleteId,
+    season,
     athlete_name: r.name,
     team: r.team,
     week_of: weekOf,
@@ -32,17 +41,21 @@ export async function upsertMileageRows(rows: MileageRow[], weekOf: string) {
 
   const { error, count } = await supabase
     .from("mileage_entries")
-    .upsert(payload, { onConflict: "athlete_name,week_of", count: "exact" });
+    .upsert(payload, {
+      onConflict: "athlete_id,season,week_of",
+      count: "exact",
+    });
 
   if (error) throw new Error(error.message);
   return count ?? payload.length;
 }
 
 export async function upsertWorkoutData(
-  assignments: WorkoutAssignment[],
+  assignments: MatchedRow<WorkoutAssignment>[],
   groupDefinitions: WorkoutGroupDefinition[],
   weekOf: string,
   day: "tuesday" | "friday",
+  season: number,
 ) {
   const groupPayload = groupDefinitions.map((g) => ({
     week_of: weekOf,
@@ -57,25 +70,26 @@ export async function upsertWorkoutData(
 
   if (groupError) throw new Error(groupError.message);
 
-  // Defensive dedupe — protects against duplicate
-  // (athlete_name, week_of, day) keys in a single batch.
-  const dedupedByName = new Map<string, WorkoutAssignment>();
+  const dedupedById = new Map<string, MatchedRow<WorkoutAssignment>>();
   for (const a of assignments) {
-    dedupedByName.set(a.name, a);
+    dedupedById.set(a.athleteId, a);
   }
-  const dedupedAssignments = Array.from(dedupedByName.values());
+  const deduped = Array.from(dedupedById.values());
 
-  const assignmentPayload = dedupedAssignments.map((a) => ({
+  const assignmentPayload = deduped.map(({ data: a, athleteId }) => ({
+    athlete_id: athleteId,
+    season,
     athlete_name: a.name,
     week_of: weekOf,
     day,
     group_letter: a.groupLetter,
+    note: a.note,
   }));
 
   const { error: assignError, count } = await supabase
     .from("workout_assignments")
     .upsert(assignmentPayload, {
-      onConflict: "athlete_name,week_of,day",
+      onConflict: "athlete_id,season,week_of,day",
       count: "exact",
     });
 
@@ -84,11 +98,14 @@ export async function upsertWorkoutData(
 }
 
 export async function upsertWorkoutIntervals(
-  intervalRows: WorkoutIntervalRow[],
+  intervalRows: MatchedRow<WorkoutIntervalRow>[],
   weekOf: string,
   day: "tuesday" | "friday",
+  season: number,
 ) {
   const payload: {
+    athlete_id: string;
+    season: number;
     athlete_name: string;
     week_of: string;
     day: string;
@@ -96,9 +113,11 @@ export async function upsertWorkoutIntervals(
     time_value: string;
   }[] = [];
 
-  for (const row of intervalRows) {
+  for (const { data: row, athleteId } of intervalRows) {
     for (const [label, value] of Object.entries(row.intervals)) {
       payload.push({
+        athlete_id: athleteId,
+        season,
         athlete_name: row.name,
         week_of: weekOf,
         day,
@@ -113,7 +132,7 @@ export async function upsertWorkoutIntervals(
   const { error, count } = await supabase
     .from("workout_intervals")
     .upsert(payload, {
-      onConflict: "athlete_name,week_of,day,interval_label",
+      onConflict: "athlete_id,season,week_of,day,interval_label",
       count: "exact",
     });
 

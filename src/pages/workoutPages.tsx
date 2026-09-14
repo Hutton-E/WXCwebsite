@@ -10,6 +10,7 @@ interface DayWorkout {
   day: string;
   groupLetter?: string;
   description?: string;
+  note?: string | null;
   intervals?: { label: string; value: string }[];
 }
 
@@ -52,6 +53,7 @@ function combineIntoWeeks(
     const entry = getDayEntry(r.weekOf, r.day);
     entry.groupLetter = r.groupLetter;
     entry.description = r.description ?? undefined;
+    entry.note = r.note;
   }
 
   for (const r of intervalRows) {
@@ -71,21 +73,21 @@ function combineIntoWeeks(
 }
 
 function WorkoutsPage() {
-  const { athlete } = useUser();
+  const { athlete, season } = useUser();
   const [weeks, setWeeks] = useState<WeekWorkouts[] | null>(null);
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!athlete) return;
+    if (!athlete || !season) return;
 
     let cancelled = false;
     setWeeks(null);
     setError(null);
 
     Promise.all([
-      fetchWorkoutsForAthlete(athlete.name),
-      fetchIntervalsForAthlete(athlete.name),
+      fetchWorkoutsForAthlete(athlete.id, season),
+      fetchIntervalsForAthlete(athlete.id, season),
     ])
       .then(([groupData, intervalData]) => {
         if (cancelled) return;
@@ -101,7 +103,7 @@ function WorkoutsPage() {
     return () => {
       cancelled = true;
     };
-  }, [athlete]);
+  }, [athlete, season]);
 
   if (!athlete) return null;
 
@@ -168,6 +170,8 @@ function WorkoutsPage() {
                   {d.description && (
                     <p className="workouts-description">{d.description}</p>
                   )}
+
+                  {d.note && <p className="workouts-note">{d.note}</p>}
 
                   {d.intervals && d.intervals.length > 0 && (
                     <ul className="workouts-interval-list">

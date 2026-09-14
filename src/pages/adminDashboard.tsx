@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAdminAuth } from "../context/AdminAuthContext";
 import { parseMileagePdf, parseWorkoutsPdf } from "../lib/pdfParser";
 import type {
@@ -12,14 +12,14 @@ import {
   upsertWorkoutData,
   upsertWorkoutIntervals,
 } from "../lib/adminData";
+import type { MatchedRow } from "../lib/adminData";
+import { fetchAthletesForSeason } from "../lib/athleteData";
+import type { AthleteRecord } from "../lib/athleteData";
+import { buildNameLookup, matchName } from "../lib/nameMatching";
+
+const CURRENT_SEASON = 2026;
 
 type Mode = "mileage" | "workouts";
-
-interface WorkoutData {
-  assignments: WorkoutAssignment[];
-  groupDefinitions: WorkoutGroupDefinition[];
-  intervalRows: WorkoutIntervalRow[];
-}
 
 function AdminDashboard() {
   const { signOut } = useAdminAuth();
@@ -27,11 +27,43 @@ function AdminDashboard() {
   const [weekOf, setWeekOf] = useState("");
   const [day, setDay] = useState<"tuesday" | "friday">("tuesday");
 
-  const [mileageRows, setMileageRows] = useState<MileageRow[] | null>(null);
-  const [workoutData, setWorkoutData] = useState<WorkoutData | null>(null);
+  const [athletes, setAthletes] = useState<AthleteRecord[]>([]);
+  const [athletesLoaded, setAthletesLoaded] = useState(false);
+
+  const [mileageMatches, setMileageMatches] = useState<
+    MatchedRow<MileageRow>[] | null
+  >(null);
+  const [assignmentMatches, setAssignmentMatches] = useState<
+    MatchedRow<WorkoutAssignment>[] | null
+  >(null);
+  const [intervalMatches, setIntervalMatches] = useState<
+    MatchedRow<WorkoutIntervalRow>[] | null
+  >(null);
+  const [groupDefinitions, setGroupDefinitions] = useState<
+    WorkoutGroupDefinition[]
+  >([]);
 
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetchAthletesForSeason(CURRENT_SEASON)
+      .then((data) => {
+        setAthletes(data);
+        setAthletesLoaded(true);
+      })
+      .catch((err) =>
+        setStatus(`Failed to load athlete roster: ${err.message}`),
+      );
+  }, []);
+
+  function runMatching<T extends { name: string }>(rows: T[]): MatchedRow<T>[] {
+    const lookup = buildNameLookup(athletes);
+    return rows.map((data) => ({
+      data,
+      athleteId: matchName(data.name, lookup) ?? "",
+    }));
+  }
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -42,12 +74,15 @@ function AdminDashboard() {
     try {
       if (mode === "mileage") {
         const rows = await parseMileagePdf(file);
-        setMileageRows(rows);
-        setWorkoutData(null);
+        setMileageMatches(runMatching(rows));
+        setAssignmentMatches(null);
+        setIntervalMatches(null);
       } else {
-        const data = await parseWorkoutsPdf(file);
-        setWorkoutData(data);
-        setMileageRows(null);
+        const parsed = await parseWorkoutsPdf(file);
+        setAssignmentMatches(runMatching(parsed.assignments));
+        setIntervalMatches(runMatching(parsed.intervalRows));
+        setGroupDefinitions(parsed.groupDefinitions);
+        setMileageMatches(null);
       }
     } catch (err) {
       setStatus(`Failed to parse PDF: ${(err as Error).message}`);
@@ -55,6 +90,49 @@ function AdminDashboard() {
       setBusy(false);
     }
   }
+
+  function updateMileageMatch(index: number, athleteId: string) {
+    setMileageMatches((prev) =>
+      prev ? prev.map((r, i) => (i === index ? { ...r, athleteId } : r)) : prev,
+    );
+  }
+
+  function updateAssignmentMatch(index: number, athleteId: string) {
+    setAssignmentMatches((prev) =>
+      prev ? prev.map((r, i) => (i === index ? { ...r, athleteId } : r)) : prev,
+    );
+  }
+
+  function updateIntervalMatch(index: number, athleteId: string) {
+    setIntervalMatches((prev) =>
+      prev ? prev.map((r, i) => (i === index ? { ...r, athleteId } : r)) : prev,
+    );
+  }
+
+  function removeMileageRow(index: number) {
+    setMileageMatches((prev) =>
+      prev ? prev.filter((_, i) => i !== index) : prev,
+    );
+  }
+
+  function removeAssignmentRow(index: number) {
+    setAssignmentMatches((prev) =>
+      prev ? prev.filter((_, i) => i !== index) : prev,
+    );
+  }
+
+  function removeIntervalRow(index: number) {
+    setIntervalMatches((prev) =>
+      prev ? prev.filter((_, i) => i !== index) : prev,
+    );
+  }
+
+  const mileageUnmatchedCount =
+    mileageMatches?.filter((r) => !r.athleteId).length ?? 0;
+  const assignmentUnmatchedCount =
+    assignmentMatches?.filter((r) => !r.athleteId).length ?? 0;
+  const intervalUnmatchedCount =
+    intervalMatches?.filter((r) => !r.athleteId).length ?? 0;
 
   async function handleSubmit() {
     if (!weekOf) {
@@ -65,20 +143,30 @@ function AdminDashboard() {
     setBusy(true);
     setStatus(null);
     try {
-      if (mode === "mileage" && mileageRows) {
-        const count = await upsertMileageRows(mileageRows, weekOf);
+      if (mode === "mileage" && mileageMatches) {
+        const resolved = mileageMatches.filter((r) => r.athleteId);
+        const count = await upsertMileageRows(resolved, weekOf, CURRENT_SEASON);
         setStatus(`✅ Saved ${count} mileage rows for week of ${weekOf}.`);
-      } else if (mode === "workouts" && workoutData) {
+      } else if (mode === "workouts") {
+        const resolvedAssignments = (assignmentMatches ?? []).filter(
+          (r) => r.athleteId,
+        );
+        const resolvedIntervals = (intervalMatches ?? []).filter(
+          (r) => r.athleteId,
+        );
+
         const groupCount = await upsertWorkoutData(
-          workoutData.assignments,
-          workoutData.groupDefinitions,
+          resolvedAssignments,
+          groupDefinitions,
           weekOf,
           day,
+          CURRENT_SEASON,
         );
         const intervalCount = await upsertWorkoutIntervals(
-          workoutData.intervalRows,
+          resolvedIntervals,
           weekOf,
           day,
+          CURRENT_SEASON,
         );
         setStatus(
           `✅ Saved ${groupCount} group assignments and ${intervalCount} interval entries for ${day}, week of ${weekOf}.`,
@@ -91,6 +179,29 @@ function AdminDashboard() {
     }
   }
 
+  function AthleteSelect({
+    value,
+    onChange,
+  }: {
+    value: string;
+    onChange: (id: string) => void;
+  }) {
+    return (
+      <select
+        className="admin-match-select"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">-- Select athlete --</option>
+        {athletes.map((a) => (
+          <option key={a.id} value={a.id}>
+            {a.name}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
   return (
     <div className="admin-dashboard">
       <h1 className="admin-title acme-regular text-outline">Admin Dashboard</h1>
@@ -100,8 +211,9 @@ function AdminDashboard() {
           className={mode === "mileage" ? "nav-menu-trigger" : "nav-menu-item"}
           onClick={() => {
             setMode("mileage");
-            setMileageRows(null);
-            setWorkoutData(null);
+            setMileageMatches(null);
+            setAssignmentMatches(null);
+            setIntervalMatches(null);
             setStatus(null);
           }}
         >
@@ -111,8 +223,9 @@ function AdminDashboard() {
           className={mode === "workouts" ? "nav-menu-trigger" : "nav-menu-item"}
           onClick={() => {
             setMode("workouts");
-            setMileageRows(null);
-            setWorkoutData(null);
+            setMileageMatches(null);
+            setAssignmentMatches(null);
+            setIntervalMatches(null);
             setStatus(null);
           }}
         >
@@ -145,23 +258,33 @@ function AdminDashboard() {
           </label>
         )}
 
-        <input type="file" accept="application/pdf" onChange={handleFileChange} disabled={busy} />
+        <input
+          type="file"
+          accept="application/pdf"
+          onChange={handleFileChange}
+          disabled={busy || !athletesLoaded}
+        />
       </div>
 
+      {!athletesLoaded && (
+        <p className="admin-status">Loading athlete roster...</p>
+      )}
       {busy && <p className="admin-status">Working...</p>}
       {status && <p className="admin-status">{status}</p>}
 
-      {mode === "mileage" && mileageRows && (
+      {mode === "mileage" && mileageMatches && (
         <div className="admin-preview">
           <p className="admin-preview-count">
-            {mileageRows.length} athletes parsed — review before saving:
+            {mileageMatches.length} rows parsed
+            {mileageUnmatchedCount > 0 &&
+              ` — ${mileageUnmatchedCount} unmatched, fix or remove before saving`}
           </p>
           <div className="admin-table-wrapper">
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Team</th>
+                  <th>Match</th>
+                  <th>Parsed Name</th>
                   <th>Mon</th>
                   <th>Tue</th>
                   <th>Wed</th>
@@ -170,43 +293,56 @@ function AdminDashboard() {
                   <th>Sat</th>
                   <th>Sun</th>
                   <th>Total</th>
-                  <th>Notes</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
-                {mileageRows.map((r) => (
-                  <tr key={r.name}>
-                    <td>{r.name}</td>
-                    <td>{r.team === "womens-cross-country" ? "W" : "M"}</td>
-                    <td>{r.monday}</td>
-                    <td>{r.tuesday}</td>
-                    <td>{r.wednesday}</td>
-                    <td>{r.thursday}</td>
-                    <td>{r.friday}</td>
-                    <td>{r.saturday}</td>
-                    <td>{r.sunday}</td>
-                    <td>{r.weeklyTotal}</td>
-                    <td>{r.notes}</td>
+                {mileageMatches.map((r, i) => (
+                  <tr
+                    key={i}
+                    className={!r.athleteId ? "admin-row-unmatched" : ""}
+                  >
+                    <td>
+                      <AthleteSelect
+                        value={r.athleteId}
+                        onChange={(id) => updateMileageMatch(i, id)}
+                      />
+                    </td>
+                    <td>{r.data.name}</td>
+                    <td>{r.data.monday}</td>
+                    <td>{r.data.tuesday}</td>
+                    <td>{r.data.wednesday}</td>
+                    <td>{r.data.thursday}</td>
+                    <td>{r.data.friday}</td>
+                    <td>{r.data.saturday}</td>
+                    <td>{r.data.sunday}</td>
+                    <td>{r.data.weeklyTotal}</td>
+                    <td>
+                      <button
+                        className="admin-remove-btn"
+                        onClick={() => removeMileageRow(i)}
+                      >
+                        ✕
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <button className="nav-menu-trigger" onClick={handleSubmit} disabled={busy}>
+          <button
+            className="nav-menu-trigger"
+            onClick={handleSubmit}
+            disabled={busy}
+          >
             Save to Database
           </button>
         </div>
       )}
 
-      {mode === "workouts" && workoutData && (
+      {mode === "workouts" && (assignmentMatches || intervalMatches) && (
         <div className="admin-preview">
-          <p className="admin-preview-count">
-            {workoutData.assignments.length} grouped athletes, {workoutData.intervalRows.length}{" "}
-            interval athletes, {workoutData.groupDefinitions.length} group definitions parsed —
-            review before saving:
-          </p>
-
-          {workoutData.groupDefinitions.length > 0 && (
+          {groupDefinitions.length > 0 && (
             <div className="admin-table-wrapper">
               <table className="admin-table">
                 <thead>
@@ -216,7 +352,7 @@ function AdminDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {workoutData.groupDefinitions.map((g) => (
+                  {groupDefinitions.map((g) => (
                     <tr key={g.groupLetter}>
                       <td>{g.groupLetter}</td>
                       <td>{g.description}</td>
@@ -227,59 +363,118 @@ function AdminDashboard() {
             </div>
           )}
 
-          {workoutData.assignments.length > 0 && (
-            <div className="admin-table-wrapper">
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Group</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {workoutData.assignments.map((a) => (
-                    <tr key={a.name}>
-                      <td>{a.name}</td>
-                      <td>{a.groupLetter}</td>
+          {assignmentMatches && assignmentMatches.length > 0 && (
+            <>
+              <p className="admin-preview-count">
+                {assignmentMatches.length} group assignments
+                {assignmentUnmatchedCount > 0 &&
+                  ` — ${assignmentUnmatchedCount} unmatched`}
+              </p>
+              <div className="admin-table-wrapper">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Match</th>
+                      <th>Parsed Name</th>
+                      <th>Group</th>
+                      <th></th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {assignmentMatches.map((r, i) => (
+                      <tr
+                        key={i}
+                        className={!r.athleteId ? "admin-row-unmatched" : ""}
+                      >
+                        <td>
+                          <AthleteSelect
+                            value={r.athleteId}
+                            onChange={(id) => updateAssignmentMatch(i, id)}
+                          />
+                        </td>
+                        <td>{r.data.name}</td>
+                        <td>{r.data.groupLetter}</td>
+                        <td>
+                          <button
+                            className="admin-remove-btn"
+                            onClick={() => removeAssignmentRow(i)}
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
 
-          {workoutData.intervalRows.length > 0 && (
-            <div className="admin-table-wrapper">
-              <table className="admin-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Intervals</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {workoutData.intervalRows.map((r) => (
-                    <tr key={r.name}>
-                      <td>{r.name}</td>
-                      <td>
-                        {Object.entries(r.intervals)
-                          .map(([label, value]) => `${label}: ${value}`)
-                          .join(" | ")}
-                      </td>
+          {intervalMatches && intervalMatches.length > 0 && (
+            <>
+              <p className="admin-preview-count">
+                {intervalMatches.length} interval rows
+                {intervalUnmatchedCount > 0 &&
+                  ` — ${intervalUnmatchedCount} unmatched`}
+              </p>
+              <div className="admin-table-wrapper">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Match</th>
+                      <th>Parsed Name</th>
+                      <th>Intervals</th>
+                      <th></th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {intervalMatches.map((r, i) => (
+                      <tr
+                        key={i}
+                        className={!r.athleteId ? "admin-row-unmatched" : ""}
+                      >
+                        <td>
+                          <AthleteSelect
+                            value={r.athleteId}
+                            onChange={(id) => updateIntervalMatch(i, id)}
+                          />
+                        </td>
+                        <td>{r.data.name}</td>
+                        <td>
+                          {Object.entries(r.data.intervals)
+                            .map(([label, value]) => `${label}: ${value}`)
+                            .join(" | ")}
+                        </td>
+                        <td>
+                          <button
+                            className="admin-remove-btn"
+                            onClick={() => removeIntervalRow(i)}
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
 
-          <button className="nav-menu-trigger" onClick={handleSubmit} disabled={busy}>
+          <button
+            className="nav-menu-trigger"
+            onClick={handleSubmit}
+            disabled={busy}
+          >
             Save to Database
           </button>
         </div>
       )}
 
-      <button className="switch-identity-link acme-regular text-outline" onClick={signOut}>
+      <button
+        className="switch-identity-link acme-regular text-outline"
+        onClick={signOut}
+      >
         Sign Out
       </button>
     </div>

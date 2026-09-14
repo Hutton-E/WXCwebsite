@@ -14,14 +14,16 @@ export interface MileageEntry {
 }
 
 export async function fetchMileageForAthlete(
-  athleteName: string,
+  athleteId: string,
+  season: number,
 ): Promise<MileageEntry[]> {
   const { data, error } = await supabase
     .from("mileage_entries")
     .select(
       "week_of, monday, tuesday, wednesday, thursday, friday, saturday, sunday, weekly_total, notes",
     )
-    .eq("athlete_name", athleteName)
+    .eq("athlete_id", athleteId)
+    .eq("season", season)
     .order("week_of", { ascending: false });
 
   if (error) throw new Error(error.message);
