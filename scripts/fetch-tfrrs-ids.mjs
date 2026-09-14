@@ -2,19 +2,16 @@
 /**
  * fetch-tfrrs-ids.mjs
  *
- * Matches athletes in src/data/distance_roster.json against TFRRS team
- * roster pages, and adds a `tfrrsId` field to each matched athlete.
- *
- * TFRRS lists names as "Last, First" — this does a normalized match against
- * your "First Last" roster names. Mismatches (nicknames, spelling
- * differences) are logged so you can add manual overrides below.
+ * Matches current-season athletes in Supabase's `athletes` table against
+ * the current TFRRS team roster pages, and writes tfrrs_id back to Supabase.
  *
  * Usage: node scripts/fetch-tfrrs-ids.mjs
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import * as cheerio from "cheerio";
+import { getAuthenticatedSupabaseClient } from "./lib/supabaseAdminClient.mjs";
+
+const CURRENT_SEASON = 2026;
 
 const TFRRS_TEAMS = [
   {
@@ -27,19 +24,23 @@ const TFRRS_TEAMS = [
   },
 ];
 
-const ROSTER_PATH = path.resolve("src/data/distance_roster_26.json");
-
-// Add entries here when automatic matching fails due to spelling/nickname
-// differences between go-knights.net and TFRRS. Key = your roster id.
+// Confirmed manual matches from earlier spelling/nickname mismatches.
+// IMPORTANT: if you've added more overrides since, merge them in here.
 const MANUAL_OVERRIDES = {
-  17015: "9444002", // e.g. Philip Dahlen -> TFRRS Phillip Dahlen
-  17028: "9444015", // e.g. Adam Wilke -> TFRRS Adam Wilkie
+  "philip dahlen": "9444002",
+  "adam wilke": "9444015",
+  "cameron noreen": "8271797",
+  "alex childs": "6915220",
+  "maria colette choi lei": "9017626",
+  "benjamin rhodes": "7699569",
+  "madison prier": "8352882",
 };
 
 function normalize(name) {
   return name
     .toLowerCase()
     .replace(/[^a-z\s]/g, "")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -67,9 +68,9 @@ async function fetchTfrrsRoster(url) {
         const cells = $(row).find("td");
         if (cells.length < 1) return;
         const link = $(cells[0]).find("a").first();
-        const rawName = link.text().trim(); // "Last, First"
+        const rawName = link.text().trim();
         const href = link.attr("href") || "";
-        const tfrrsId = href.split("/").filter(Boolean)[1] || ""; // /athletes/{id}/...
+        const tfrrsId = href.split("/").filter(Boolean)[1] || "";
 
         if (!rawName || !tfrrsId) return;
 
@@ -79,7 +80,6 @@ async function fetchTfrrsRoster(url) {
         entries.push({
           tfrrsId,
           normalizedName: normalize(`${first} ${last}`),
-          rawName,
         });
       });
   });
@@ -88,7 +88,7 @@ async function fetchTfrrsRoster(url) {
 }
 
 async function main() {
-  const roster = JSON.parse(fs.readFileSync(ROSTER_PATH, "utf8"));
+  const supabase = await getAuthenticatedSupabaseClient();
 
   const allTfrrsEntries = [];
   for (const { url, team } of TFRRS_TEAMS) {
@@ -98,39 +98,59 @@ async function main() {
     allTfrrsEntries.push(...entries);
   }
 
+  const { data: roster, error: fetchError } = await supabase
+    .from("athletes")
+    .select("id, name, tfrrs_id")
+    .eq("season", CURRENT_SEASON);
+
+  if (fetchError) throw new Error(fetchError.message);
+
   let matched = 0;
   const unmatched = [];
+  const updates = [];
 
-  for (const athlete of roster.athletes) {
-    if (MANUAL_OVERRIDES[athlete.id]) {
-      athlete.tfrrsId = MANUAL_OVERRIDES[athlete.id];
-      matched++;
-      continue;
+  for (const athlete of roster) {
+    let tfrrsId = athlete.tfrrs_id;
+
+    if (!tfrrsId) {
+      if (MANUAL_OVERRIDES[normalize(athlete.name)]) {
+        tfrrsId = MANUAL_OVERRIDES[normalize(athlete.name)];
+      } else {
+        const match = allTfrrsEntries.find(
+          (e) => e.normalizedName === normalize(athlete.name),
+        );
+        if (match) tfrrsId = match.tfrrsId;
+      }
     }
 
-    const target = normalize(athlete.name);
-    const match = allTfrrsEntries.find((e) => e.normalizedName === target);
-
-    if (match) {
-      athlete.tfrrsId = match.tfrrsId;
+    if (tfrrsId) {
       matched++;
+      if (tfrrsId !== athlete.tfrrs_id) {
+        updates.push({ id: athlete.id, tfrrs_id: tfrrsId });
+      }
     } else {
       unmatched.push(athlete.name);
     }
   }
 
-  fs.writeFileSync(ROSTER_PATH, JSON.stringify(roster, null, 2), "utf8");
+  for (const update of updates) {
+    const { error } = await supabase
+      .from("athletes")
+      .update({ tfrrs_id: update.tfrrs_id })
+      .eq("id", update.id)
+      .eq("season", CURRENT_SEASON);
+    if (error) console.error(`Failed to update ${update.id}: ${error.message}`);
+  }
 
-  console.log(`\n✅ Matched ${matched}/${roster.athletes.length} athletes.`);
+  console.log(
+    `\n✅ Matched ${matched}/${roster.length} athletes. Updated ${updates.length} rows in Supabase.`,
+  );
   if (unmatched.length > 0) {
     console.log(
       `\n⚠️  Could not match ${unmatched.length} athletes automatically:`,
     );
     unmatched.forEach((n) => console.log(`   - ${n}`));
-    console.log(
-      "\nFind their TFRRS profile manually (search their name on tfrrs.org), " +
-        "grab the numeric ID from the profile URL, and add it to MANUAL_OVERRIDES in this script.",
-    );
+    console.log("\nAdd confirmed matches to MANUAL_OVERRIDES in this script.");
   }
 }
 

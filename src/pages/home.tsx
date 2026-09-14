@@ -6,10 +6,10 @@ import { useUser } from "../context/UserContext";
 
 const resourceLinks = [
   { label: "View Mileage", path: "/mileage" },
+  { label: "View Workouts", path: "/workouts" },
   { label: "View Core", path: "/core" },
   { label: "View FMS", path: "/fms" },
   { label: "View Lifting Sheet", path: "/lifting_sheet" },
-  { label: "View Workouts", path: "/workouts" },
 ];
 
 const statsLinks = [
@@ -19,7 +19,13 @@ const statsLinks = [
 ];
 
 function Home() {
-  const { athlete } = useUser();
+  const { athlete, athleteId, athleteLoading } = useUser();
+
+  // A session is stored and still resolving — avoid flashing the
+  // identity-lookup screen before we know whether it's valid.
+  if (athleteId && athleteLoading) {
+    return null;
+  }
 
   return (
     <>
@@ -32,6 +38,7 @@ function Home() {
       </h1>
 
       {!athlete && <IdentityLookup />}
+
       {athlete && (
         <>
           <nav className="left-res-drop">

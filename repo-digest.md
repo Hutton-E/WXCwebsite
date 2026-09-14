@@ -1,6 +1,6 @@
 # Repository Digest
 
-Generated: 2026-09-14T00:16:59.744Z
+Generated: 2026-09-14T02:36:59.841Z
 Root: `WXC_Website`
 
 ## Directory Structure
@@ -19,7 +19,8 @@ WXC_Website/
 │   ├── fetch-tfrrs-ids-all-years.mjs
 │   ├── fetch-tfrrs-ids-historical.mjs
 │   ├── fetch-tfrrs-ids.mjs
-│   └── fetch-tfrrs-stats.mjs
+│   ├── fetch-tfrrs-stats.mjs
+│   └── migrate-roster-to-supabase.mjs
 ├── src/
 │   ├── assets/
 │   │   ├── fonts/
@@ -58,7 +59,9 @@ WXC_Website/
 │   │   └── tfrrs_stats.json
 │   ├── lib/
 │   │   ├── adminData.ts
+│   │   ├── athleteData.ts
 │   │   ├── mileageData.ts
+│   │   ├── nameMatching.ts
 │   │   ├── pdfParser.ts
 │   │   ├── supabaseClient.ts
 │   │   └── workoutData.ts
@@ -321,6 +324,7 @@ main().catch((err) => {
   console.error("Failed to fetch rosters by year:", err);
   process.exit(1);
 });
+
 ```
 
 ### `scripts/fetch-roster-history.mjs`
@@ -622,6 +626,7 @@ main().catch((err) => {
   console.error("Failed to fetch roster history:", err);
   process.exit(1);
 });
+
 ```
 
 ### `scripts/fetch-roster.mjs`
@@ -789,6 +794,7 @@ main().catch((err) => {
   console.error("Failed to fetch roster:", err);
   process.exit(1);
 });
+
 ```
 
 ### `scripts/fetch-tfrrs-ids-all-years.mjs`
@@ -1018,6 +1024,7 @@ main().catch((err) => {
   console.error("Failed to match TFRRS IDs across years:", err);
   process.exit(1);
 });
+
 ```
 
 ### `scripts/fetch-tfrrs-ids-historical.mjs`
@@ -1279,6 +1286,7 @@ main().catch((err) => {
   console.error("Failed historical TFRRS ID matching:", err);
   process.exit(1);
 });
+
 ```
 
 ### `scripts/fetch-tfrrs-ids.mjs`
@@ -1424,6 +1432,7 @@ main().catch((err) => {
   console.error("Failed to match TFRRS IDs:", err);
   process.exit(1);
 });
+
 ```
 
 ### `scripts/fetch-tfrrs-stats.mjs`
@@ -1596,6 +1605,107 @@ main().catch((err) => {
   console.error("Failed to fetch TFRRS stats:", err);
   process.exit(1);
 });
+
+```
+
+### `scripts/migrate-roster-to-supabase.mjs`
+
+```javascript
+#!/usr/bin/env node
+/**
+ * migrate-roster-to-supabase.mjs
+ *
+ * Pushes every athlete from every src/data/distance_roster_*.json file into
+ * the Supabase `athletes` table, keyed by (id, season). This becomes the
+ * single source of truth used to match PDF-parsed names during admin
+ * uploads, replacing raw name-string comparisons scattered across JSON files.
+ *
+ * Requires ADMIN_EMAIL / ADMIN_PASSWORD in .env so this script can
+ * authenticate and satisfy the "Admin write access" RLS policy.
+ *
+ * Usage: node scripts/migrate-roster-to-supabase.mjs
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import "dotenv/config";
+import { createClient } from "@supabase/supabase-js";
+
+const DATA_DIR = path.resolve("src/data");
+
+const supabase = createClient(
+  process.env.VITE_SUPABASE_URL,
+  process.env.VITE_SUPABASE_KEY,
+);
+
+function findRosterFiles() {
+  return fs
+    .readdirSync(DATA_DIR)
+    .filter((f) => /^distance_roster_\d+\.json$/.test(f))
+    .map((f) => path.join(DATA_DIR, f));
+}
+
+async function main() {
+  const email = process.env.ADMIN_EMAIL;
+  const password = process.env.ADMIN_PASSWORD;
+  if (!email || !password) {
+    console.error(
+      "Set ADMIN_EMAIL and ADMIN_PASSWORD in .env before running this script.",
+    );
+    process.exit(1);
+  }
+
+  const { error: authError } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+  if (authError) {
+    console.error("Failed to authenticate:", authError.message);
+    process.exit(1);
+  }
+
+  const files = findRosterFiles();
+  let totalUpserted = 0;
+
+  for (const filePath of files) {
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const season = data.season;
+    if (!season) {
+      console.warn(
+        `Skipping ${path.basename(filePath)} — no "season" field found.`,
+      );
+      continue;
+    }
+
+    const payload = data.athletes.map((a) => ({
+      id: a.id,
+      season,
+      name: a.name,
+      team: a.team,
+      hometown: a.hometown || null,
+      high_school: a.highSchool || null,
+    }));
+
+    const { error, count } = await supabase
+      .from("athletes")
+      .upsert(payload, { onConflict: "id,season", count: "exact" });
+
+    if (error) {
+      console.error(`${path.basename(filePath)}: FAILED — ${error.message}`);
+      continue;
+    }
+
+    console.log(
+      `${path.basename(filePath)}: upserted ${count ?? payload.length} athletes (season ${season})`,
+    );
+    totalUpserted += count ?? payload.length;
+  }
+
+  console.log(`\n✅ Total athletes migrated: ${totalUpserted}`);
+}
+
+main();
+
 ```
 
 ### `src/assets/fonts/Acme-Regular.ttf`
@@ -1642,6 +1752,7 @@ function BackButton() {
   );
 }
 export default BackButton;
+
 ```
 
 ### `src/components/background.tsx`
@@ -1673,6 +1784,7 @@ function Background({ imageUrl, opacity }: BackgroundProps) {
 }
 
 export default Background;
+
 ```
 
 ### `src/components/comingSoon.tsx`
@@ -1702,44 +1814,56 @@ function ComingSoon({ message = DEFAULT_MESSAGE }: ComingSoonProps) {
 }
 
 export default ComingSoon;
+
 ```
 
 ### `src/components/identityLookup.tsx`
 
 ```tsx
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useUser } from "../context/UserContext";
-
-// Direct imports so we can search within a specific season's roster.
-// (UserContext still auto-discovers every file for the lookup-by-id step,
-// but the search UI needs the raw athlete lists per season.)
-const rosterModules = import.meta.glob("../data/distance_roster_*.json", {
-  eager: true,
-}) as Record<
-  string,
-  { season: number; athletes: { id: string; name: string }[] }
->;
-
-function buildRostersBySeason() {
-  const map: Record<number, { id: string; name: string }[]> = {};
-  for (const mod of Object.values(rosterModules)) {
-    if (mod.season && mod.athletes) map[mod.season] = mod.athletes;
-  }
-  return map;
-}
-
-const rostersBySeason = buildRostersBySeason();
-const seasons = Object.keys(rostersBySeason)
-  .map(Number)
-  .sort((a, b) => b - a);
+import { fetchAthletesForSeason } from "../lib/athleteData";
+import type { AthleteRecord } from "../lib/athleteData";
 
 function IdentityLookup() {
-  const { selectAthlete } = useUser();
-  const [season, setSeason] = useState<number>(seasons[0]);
+  const { selectAthlete, availableSeasons } = useUser();
+  const [season, setSeason] = useState<number | null>(null);
   const [query, setQuery] = useState("");
+  const [roster, setRoster] = useState<AthleteRecord[]>([]);
+  const [loadingRoster, setLoadingRoster] = useState(false);
 
-  const roster = rostersBySeason[season] || [];
+  // Once availableSeasons loads from Supabase, default to the newest one.
+  useEffect(() => {
+    if (availableSeasons.length > 0 && season === null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSeason(availableSeasons[0]);
+    }
+  }, [availableSeasons, season]);
+
+  // Fetch that season's athlete list whenever the season selection changes.
+  useEffect(() => {
+    if (season === null) return;
+
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoadingRoster(true);
+    setQuery("");
+
+    fetchAthletesForSeason(season)
+      .then((data) => {
+        if (cancelled) return;
+        setRoster(data);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRoster(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [season]);
+
   const matches =
     query.trim().length > 0
       ? roster.filter((a) => a.name.toLowerCase().includes(query.toLowerCase()))
@@ -1749,44 +1873,50 @@ function IdentityLookup() {
     <div className="identity-lookup">
       <h1 className="identity-title acme-regular text-outline">Who are you?</h1>
 
-      <select
-        className="identity-year-select"
-        value={season}
-        onChange={(e) => {
-          setSeason(Number(e.target.value));
-          setQuery("");
-        }}
-      >
-        {seasons.map((s) => (
-          <option key={s} value={s}>
-            {s} Season
-          </option>
-        ))}
-      </select>
+      {availableSeasons.length === 0 ? (
+        <p className="identity-no-match acme-regular text-outline">
+          Loading seasons...
+        </p>
+      ) : (
+        <select
+          className="identity-year-select"
+          value={season ?? ""}
+          onChange={(e) => setSeason(Number(e.target.value))}
+        >
+          {availableSeasons.map((s) => (
+            <option key={s} value={s}>
+              {s} Season
+            </option>
+          ))}
+        </select>
+      )}
 
       <input
         type="text"
         className="identity-input"
-        placeholder="Start typing your name..."
+        placeholder={
+          loadingRoster ? "Loading roster..." : "Start typing your name..."
+        }
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        disabled={loadingRoster}
         autoFocus
       />
       {matches.length > 0 && (
         <ul className="identity-results">
-          {matches.map((athlete) => (
-            <li key={athlete.id}>
+          {matches.map((a) => (
+            <li key={a.id}>
               <button
                 className="identity-result-item"
-                onClick={() => selectAthlete(athlete.id, season)}
+                onClick={() => season !== null && selectAthlete(a.id, season)}
               >
-                {athlete.name}
+                {a.name}
               </button>
             </li>
           ))}
         </ul>
       )}
-      {query.trim().length > 0 && matches.length === 0 && (
+      {query.trim().length > 0 && matches.length === 0 && !loadingRoster && (
         <p className="identity-no-match acme-regular text-outline">
           No match found — check your spelling.
         </p>
@@ -1800,6 +1930,7 @@ function IdentityLookup() {
 }
 
 export default IdentityLookup;
+
 ```
 
 ### `src/components/navMenu.tsx`
@@ -1864,6 +1995,7 @@ function NavMenu({ label, items }: NavMenuProps) {
 }
 
 export default NavMenu;
+
 ```
 
 ### `src/components/requireAdmin.tsx`
@@ -1887,6 +2019,7 @@ function RequireAdmin({ children }: { children: ReactNode }) {
 }
 
 export default RequireAdmin;
+
 ```
 
 ### `src/components/requireIdentity.tsx`
@@ -1897,8 +2030,12 @@ import type { ReactNode } from "react";
 import { useUser } from "../context/UserContext";
 
 function RequireIdentity({ children }: { children: ReactNode }) {
-  const { athlete } = useUser();
+  const { athlete, athleteId, athleteLoading } = useUser();
   const location = useLocation();
+
+  // A session is stored but the athlete record hasn't finished loading from
+  // Supabase yet — wait rather than redirecting prematurely on every refresh.
+  if (athleteId && athleteLoading) return null;
 
   if (!athlete) {
     return <Navigate to="/" replace state={{ from: location }} />;
@@ -1908,6 +2045,7 @@ function RequireIdentity({ children }: { children: ReactNode }) {
 }
 
 export default RequireIdentity;
+
 ```
 
 ### `src/components/switchIdentity.tsx`
@@ -1950,6 +2088,7 @@ function SwitchIdentityPrompt() {
 }
 
 export default SwitchIdentityPrompt;
+
 ```
 
 ### `src/context/AdminAuthContext.tsx`
@@ -2025,32 +2164,35 @@ export function useAdminAuth() {
   }
   return context;
 }
+
 ```
 
 ### `src/context/UserContext.tsx`
 
 ```tsx
-import { createContext, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
+import { supabase } from "../lib/supabaseClient";
 
-interface Athlete {
+export interface Athlete {
   id: string;
+  season: number;
   name: string;
   team: string;
-  year: string;
-  hometown: string;
-  highSchool: string;
-  profileUrl: string;
-}
-
-interface RosterFile {
-  season: number;
-  athletes: Athlete[];
+  hometown: string | null;
+  highSchool: string | null;
 }
 
 interface UserContextValue {
   athleteId: string | null;
   season: number | null;
   athlete: Athlete | null;
+  athleteLoading: boolean;
   availableSeasons: number[];
   selectAthlete: (id: string, season: number) => void;
   clearAthlete: () => void;
@@ -2060,36 +2202,6 @@ const UserContext = createContext<UserContextValue | undefined>(undefined);
 const ID_KEY = "wxc_selected_athlete_id";
 const SEASON_KEY = "wxc_selected_season";
 
-// Eagerly loads every distance_roster_*.json file in src/data at build time.
-const rosterModules = import.meta.glob("../data/distance_roster_*.json", {
-  eager: true,
-}) as Record<string, RosterFile>;
-
-function parseSeasonFromPath(filePath: string): number | null {
-  const match = filePath.match(/distance_roster_(\d{2})\.json$/);
-  if (!match) return null;
-  return 2000 + parseInt(match[1], 10);
-}
-
-const rostersBySeason: Record<number, Athlete[]> = {};
-for (const [filePath, mod] of Object.entries(rosterModules)) {
-  const season = mod.season ?? parseSeasonFromPath(filePath);
-  if (season && mod.athletes) {
-    rostersBySeason[season] = mod.athletes;
-  }
-}
-
-const availableSeasons = Object.keys(rostersBySeason)
-  .map(Number)
-  .sort((a, b) => b - a); // newest first
-
-function findAthlete(id: string | null, season: number | null): Athlete | null {
-  if (!id || !season) return null;
-  const roster = rostersBySeason[season];
-  if (!roster) return null;
-  return roster.find((a) => a.id === id) ?? null;
-}
-
 export function UserProvider({ children }: { children: ReactNode }) {
   const [athleteId, setAthleteIdState] = useState<string | null>(() =>
     sessionStorage.getItem(ID_KEY),
@@ -2098,6 +2210,71 @@ export function UserProvider({ children }: { children: ReactNode }) {
     const stored = sessionStorage.getItem(SEASON_KEY);
     return stored ? parseInt(stored, 10) : null;
   });
+
+  const [athlete, setAthlete] = useState<Athlete | null>(null);
+  const [athleteLoading, setAthleteLoading] = useState(false);
+  const [availableSeasons, setAvailableSeasons] = useState<number[]>([]);
+
+  // Fetch the list of seasons that exist in the athletes table, once on mount.
+  useEffect(() => {
+    let cancelled = false;
+
+    supabase
+      .from("athletes")
+      .select("season")
+      .then(({ data, error }) => {
+        if (cancelled || error || !data) return;
+        const uniqueSeasons = [...new Set(data.map((row) => row.season))].sort(
+          (a, b) => b - a,
+        );
+        setAvailableSeasons(uniqueSeasons);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Fetch the specific athlete record whenever the selected id/season changes.
+  // This runs on every page load if a session is already stored, which is
+  // why athleteLoading exists — consumers need to know "still checking" vs
+  // "confirmed nobody's selected" so they don't redirect/flash prematurely.
+  useEffect(() => {
+    if (!athleteId || !season) {
+      setAthlete(null);
+      return;
+    }
+
+    let cancelled = false;
+    setAthleteLoading(true);
+
+    supabase
+      .from("athletes")
+      .select("id, season, name, team, hometown, high_school")
+      .eq("id", athleteId)
+      .eq("season", season)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error || !data) {
+          setAthlete(null);
+        } else {
+          setAthlete({
+            id: data.id,
+            season: data.season,
+            name: data.name,
+            team: data.team,
+            hometown: data.hometown,
+            highSchool: data.high_school,
+          });
+        }
+        setAthleteLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [athleteId, season]);
 
   function selectAthlete(id: string, selectedSeason: number) {
     sessionStorage.setItem(ID_KEY, id);
@@ -2111,9 +2288,8 @@ export function UserProvider({ children }: { children: ReactNode }) {
     sessionStorage.removeItem(SEASON_KEY);
     setAthleteIdState(null);
     setSeasonState(null);
+    setAthlete(null);
   }
-
-  const athlete = findAthlete(athleteId, season);
 
   return (
     <UserContext.Provider
@@ -2121,6 +2297,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
         athleteId,
         season,
         athlete,
+        athleteLoading,
         availableSeasons,
         selectAthlete,
         clearAthlete,
@@ -2139,6 +2316,7 @@ export function useUser() {
   }
   return context;
 }
+
 ```
 
 ### `src/data/distance_roster_17.json`
@@ -2197,19 +2375,28 @@ import type {
   MileageRow,
   WorkoutAssignment,
   WorkoutGroupDefinition,
+  WorkoutIntervalRow,
 } from "./pdfParser";
 
-export async function upsertMileageRows(rows: MileageRow[], weekOf: string) {
-  // Defensive dedupe: if two parsed rows somehow share a name, keep the last
-  // one rather than sending Postgres a batch with a duplicate conflict key,
-  // which raises "ON CONFLICT DO UPDATE command cannot affect row a second time."
-  const dedupedByName = new Map<string, MileageRow>();
-  for (const row of rows) {
-    dedupedByName.set(row.name, row);
-  }
-  const deduped = Array.from(dedupedByName.values());
+export interface MatchedRow<T> {
+  data: T;
+  athleteId: string;
+}
 
-  const payload = deduped.map((r) => ({
+export async function upsertMileageRows(
+  rows: MatchedRow<MileageRow>[],
+  weekOf: string,
+  season: number,
+) {
+  const dedupedById = new Map<string, MatchedRow<MileageRow>>();
+  for (const row of rows) {
+    dedupedById.set(row.athleteId, row);
+  }
+  const deduped = Array.from(dedupedById.values());
+
+  const payload = deduped.map(({ data: r, athleteId }) => ({
+    athlete_id: athleteId,
+    season,
     athlete_name: r.name,
     team: r.team,
     week_of: weekOf,
@@ -2226,17 +2413,21 @@ export async function upsertMileageRows(rows: MileageRow[], weekOf: string) {
 
   const { error, count } = await supabase
     .from("mileage_entries")
-    .upsert(payload, { onConflict: "athlete_name,week_of", count: "exact" });
+    .upsert(payload, {
+      onConflict: "athlete_id,season,week_of",
+      count: "exact",
+    });
 
   if (error) throw new Error(error.message);
   return count ?? payload.length;
 }
 
 export async function upsertWorkoutData(
-  assignments: WorkoutAssignment[],
+  assignments: MatchedRow<WorkoutAssignment>[],
   groupDefinitions: WorkoutGroupDefinition[],
   weekOf: string,
   day: "tuesday" | "friday",
+  season: number,
 ) {
   const groupPayload = groupDefinitions.map((g) => ({
     week_of: weekOf,
@@ -2251,31 +2442,104 @@ export async function upsertWorkoutData(
 
   if (groupError) throw new Error(groupError.message);
 
-  // Same defensive dedupe as mileage — protects against duplicate
-  // (athlete_name, week_of, day) keys in a single batch.
-  const dedupedByName = new Map<string, WorkoutAssignment>();
+  const dedupedById = new Map<string, MatchedRow<WorkoutAssignment>>();
   for (const a of assignments) {
-    dedupedByName.set(a.name, a);
+    dedupedById.set(a.athleteId, a);
   }
-  const dedupedAssignments = Array.from(dedupedByName.values());
+  const deduped = Array.from(dedupedById.values());
 
-  const assignmentPayload = dedupedAssignments.map((a) => ({
+  const assignmentPayload = deduped.map(({ data: a, athleteId }) => ({
+    athlete_id: athleteId,
+    season,
     athlete_name: a.name,
     week_of: weekOf,
     day,
     group_letter: a.groupLetter,
+    note: a.note,
   }));
 
   const { error: assignError, count } = await supabase
     .from("workout_assignments")
     .upsert(assignmentPayload, {
-      onConflict: "athlete_name,week_of,day",
+      onConflict: "athlete_id,season,week_of,day",
       count: "exact",
     });
 
   if (assignError) throw new Error(assignError.message);
   return count ?? assignmentPayload.length;
 }
+
+export async function upsertWorkoutIntervals(
+  intervalRows: MatchedRow<WorkoutIntervalRow>[],
+  weekOf: string,
+  day: "tuesday" | "friday",
+  season: number,
+) {
+  const payload: {
+    athlete_id: string;
+    season: number;
+    athlete_name: string;
+    week_of: string;
+    day: string;
+    interval_label: string;
+    time_value: string;
+  }[] = [];
+
+  for (const { data: row, athleteId } of intervalRows) {
+    for (const [label, value] of Object.entries(row.intervals)) {
+      payload.push({
+        athlete_id: athleteId,
+        season,
+        athlete_name: row.name,
+        week_of: weekOf,
+        day,
+        interval_label: label,
+        time_value: value,
+      });
+    }
+  }
+
+  if (payload.length === 0) return 0;
+
+  const { error, count } = await supabase
+    .from("workout_intervals")
+    .upsert(payload, {
+      onConflict: "athlete_id,season,week_of,day,interval_label",
+      count: "exact",
+    });
+
+  if (error) throw new Error(error.message);
+  return count ?? payload.length;
+}
+
+```
+
+### `src/lib/athleteData.ts`
+
+```typescript
+import { supabase } from "./supabaseClient";
+
+export interface AthleteRecord {
+  id: string;
+  season: number;
+  name: string;
+  team: string;
+  hometown: string | null;
+  high_school: string | null;
+}
+
+export async function fetchAthletesForSeason(
+  season: number,
+): Promise<AthleteRecord[]> {
+  const { data, error } = await supabase
+    .from("athletes")
+    .select("id, season, name, team, hometown, high_school")
+    .eq("season", season);
+
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
 ```
 
 ### `src/lib/mileageData.ts`
@@ -2297,19 +2561,49 @@ export interface MileageEntry {
 }
 
 export async function fetchMileageForAthlete(
-  athleteName: string,
+  athleteId: string,
+  season: number,
 ): Promise<MileageEntry[]> {
   const { data, error } = await supabase
     .from("mileage_entries")
     .select(
       "week_of, monday, tuesday, wednesday, thursday, friday, saturday, sunday, weekly_total, notes",
     )
-    .eq("athlete_name", athleteName)
+    .eq("athlete_id", athleteId)
+    .eq("season", season)
     .order("week_of", { ascending: false });
 
   if (error) throw new Error(error.message);
   return data ?? [];
 }
+
+```
+
+### `src/lib/nameMatching.ts`
+
+```typescript
+export function normalizeName(name: string): string {
+  return name.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+export function buildNameLookup(
+  athletes: { id: string; name: string }[],
+): Map<string, { id: string; name: string }> {
+  const map = new Map<string, { id: string; name: string }>();
+  for (const a of athletes) {
+    map.set(normalizeName(a.name), a);
+  }
+  return map;
+}
+
+export function matchName(
+  parsedName: string,
+  lookup: Map<string, { id: string; name: string }>,
+): string | null {
+  const match = lookup.get(normalizeName(parsedName));
+  return match ? match.id : null;
+}
+
 ```
 
 ### `src/lib/pdfParser.ts`
@@ -2323,7 +2617,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 interface PositionedWord {
   text: string;
   x: number;
-  top: number; // distance from top of page — smaller = higher up
+  top: number;
 }
 
 export interface MileageRow {
@@ -2343,6 +2637,7 @@ export interface MileageRow {
 export interface WorkoutAssignment {
   name: string;
   groupLetter: string;
+  note: string | null;
 }
 
 export interface WorkoutGroupDefinition {
@@ -2350,14 +2645,52 @@ export interface WorkoutGroupDefinition {
   description: string;
 }
 
+export interface WorkoutIntervalRow {
+  name: string;
+  intervals: Record<string, string>;
+}
+
 export interface ParsedWorkouts {
   assignments: WorkoutAssignment[];
   groupDefinitions: WorkoutGroupDefinition[];
+  intervalRows: WorkoutIntervalRow[];
 }
 
-const ROW_TOLERANCE = 10; // px — words within this vertical distance are "the same row"
+const ROW_TOLERANCE = 10;
+const COLUMN_GAP_THRESHOLD = 25;
+
+const NAME_TOKEN_RE = /^[A-Za-z'.-]+,?$/;
+const DATE_TOKEN_RE = /^\d{1,2}\/\d{1,2}\/\d{4}$/;
+
+// Decorative dot/ellipsis "columns" — made up entirely of periods or the
+// ellipsis character. These are visual filler, never a real coach note.
+const DECORATIVE_DOTS_RE = /^[.\u2026]+$/;
 
 // ---------- Core: extract positioned words from a PDF page ----------
+
+function splitIntoWordTokens(
+  str: string,
+  x: number,
+  top: number,
+  width: number,
+): PositionedWord[] {
+  const parts = str.split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) {
+    return [{ text: str, x, top }];
+  }
+
+  const totalChars = parts.reduce((sum, p) => sum + p.length, 0) || 1;
+  let cursor = x;
+  const results: PositionedWord[] = [];
+
+  for (const part of parts) {
+    results.push({ text: part, x: cursor, top });
+    const partWidth = (width * part.length) / totalChars;
+    cursor += partWidth + width * 0.02;
+  }
+
+  return results;
+}
 
 async function extractPageWords(
   page: pdfjsLib.PDFPageProxy,
@@ -2365,19 +2698,19 @@ async function extractPageWords(
   const viewport = page.getViewport({ scale: 1 });
   const content = await page.getTextContent();
 
-  return content.items
-    .filter(
-      (item): item is pdfjsLib.TextItem =>
-        "str" in item && item.str.trim().length > 0,
-    )
-    .map((item) => {
-      const x = item.transform[4];
-      const y = item.transform[5];
-      // pdfjs y is measured from the BOTTOM of the page — flip so smaller = higher,
-      // matching the "top" convention used throughout this parser.
-      const top = viewport.height - y;
-      return { text: item.str.trim(), x, top };
-    });
+  const words: PositionedWord[] = [];
+
+  for (const item of content.items) {
+    if (!("str" in item) || item.str.trim().length === 0) continue;
+    const x = item.transform[4];
+    const y = item.transform[5];
+    const top = viewport.height - y;
+    const width = "width" in item ? (item.width as number) : 0;
+
+    words.push(...splitIntoWordTokens(item.str.trim(), x, top, width));
+  }
+
+  return words;
 }
 
 // ---------- Row clustering ----------
@@ -2395,9 +2728,34 @@ function clusterIntoRows(words: PositionedWord[]): PositionedWord[][] {
     }
   }
 
-  // Sort words left-to-right within each row
   rows.forEach((row) => row.sort((a, b) => a.x - b.x));
   return rows;
+}
+
+// ---------- Name extraction ----------
+
+function extractLeadingName(
+  sortedRowWords: PositionedWord[],
+  maxTokens = 2,
+): PositionedWord[] {
+  const result: PositionedWord[] = [];
+  for (const w of sortedRowWords) {
+    if (result.length >= maxTokens) break;
+    if (!NAME_TOKEN_RE.test(w.text)) break;
+    result.push(w);
+  }
+  return result;
+}
+
+function toDisplayName(nameWords: PositionedWord[]): string | null {
+  if (nameWords.length < 2) return null;
+  const raw = nameWords
+    .map((w) => w.text)
+    .join(" ")
+    .replace(/,$/, "");
+  const [last, first] = raw.split(",").map((s) => s.trim());
+  if (!first) return null;
+  return `${first} ${last}`;
 }
 
 // ---------- Nearest-anchor column assignment ----------
@@ -2430,6 +2788,34 @@ function assignToNearestColumn(
       .join(" ");
   }
   return result;
+}
+
+// ---------- Interval header column detection ----------
+
+function clusterHeaderIntoColumns(
+  headerWords: PositionedWord[],
+): { key: string; x: number }[] {
+  const relevant = headerWords
+    .filter((w) => w.text !== "WO" && !DATE_TOKEN_RE.test(w.text))
+    .sort((a, b) => a.x - b.x);
+
+  if (relevant.length === 0) return [];
+
+  const groups: PositionedWord[][] = [[relevant[0]]];
+  for (let i = 1; i < relevant.length; i++) {
+    const prev = relevant[i - 1];
+    const curr = relevant[i];
+    if (curr.x - prev.x <= COLUMN_GAP_THRESHOLD) {
+      groups[groups.length - 1].push(curr);
+    } else {
+      groups.push([curr]);
+    }
+  }
+
+  return groups.map((group) => ({
+    key: group.map((w) => w.text).join(" "),
+    x: group.reduce((sum, w) => sum + w.x, 0) / group.length,
+  }));
 }
 
 // ---------- Mileage PDF parsing ----------
@@ -2488,34 +2874,16 @@ export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
       : "mens-cross-country";
 
     const anchors = findHeaderAnchors(rows);
-    if (!anchors) continue; // page has no roster table (e.g. a legend/notes-only page)
-
-    const nameColumnMaxX = Math.min(...anchors.map((a) => a.x)) - 20;
+    if (!anchors) continue;
 
     for (const row of rows) {
-      // Skip the header row itself
       if (row.some((w) => w.text === "Mon")) continue;
 
-      const rawNameWords = row.filter((w) => w.x < nameColumnMaxX);
+      const nameWords = extractLeadingName(row, 2);
+      const displayName = toDisplayName(nameWords);
+      if (!displayName) continue;
 
-      // Drop stray single-character marker tokens (1, 2, 4, L, *) that sit in
-      // the unlabeled marker column between Name and FMS — these aren't part
-      // of anyone's actual name, they're coaching shorthand we're ignoring.
-      const nameWords = rawNameWords.filter((w) => !/^[0-9A-Z*]$/.test(w.text));
-
-      if (nameWords.length === 0) continue; // this "row" was just a lone marker
-
-      const name = nameWords
-        .map((w) => w.text)
-        .join(" ")
-        .replace(/,$/, "");
-      const [last, first] = name.split(",").map((s) => s.trim());
-      const displayName = first ? `${first} ${last}` : name;
-
-      // Anything that still doesn't look like a real "First Last" name — skip it
-      if (!first || displayName.length < 3) continue;
-
-      const dataWords = row.filter((w) => w.x >= nameColumnMaxX);
+      const dataWords = row.filter((w) => !nameWords.includes(w));
       const assigned = assignToNearestColumn(dataWords, anchors);
 
       results.push({
@@ -2545,52 +2913,95 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
 
   const assignments: WorkoutAssignment[] = [];
   const definitionsByLetter = new Map<string, string>();
+  const intervalRows: WorkoutIntervalRow[] = [];
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const words = await extractPageWords(page);
-
-    const groupHeaderWord = words.find((w) => w.text === "G");
-    if (!groupHeaderWord) continue; // not a roster/group page
-
-    const groupColumnX = groupHeaderWord.x;
-    const nameColumnMaxX = groupColumnX - 200; // names sit far left; dot-columns fill the middle
-    const descriptionMinX = groupColumnX + 15; // description text sits just right of the letter
-
     const rows = clusterIntoRows(words);
 
-    for (const row of rows) {
-      const nameWords = row.filter((w) => w.x < nameColumnMaxX);
-      const groupWord = row.find(
-        (w) => Math.abs(w.x - groupColumnX) < 10 && /^[A-Z]{1,2}$/.test(w.text),
-      );
+    const groupHeaderWord = words.find((w) => w.text === "G" && w.top < 30);
 
-      if (nameWords.length > 0 && groupWord) {
-        const rawName = nameWords
-          .map((w) => w.text)
-          .join(" ")
-          .replace(/,$/, "");
-        const [last, first] = rawName.split(",").map((s) => s.trim());
-        const displayName = first ? `${first} ${last}` : rawName;
+    if (groupHeaderWord) {
+      // ---- Lettered-group format ----
+      const groupColumnX = groupHeaderWord.x;
+      const descriptionMinX = groupColumnX + 15;
 
-        assignments.push({ name: displayName, groupLetter: groupWord.text });
+      for (const row of rows) {
+        const nameWords = extractLeadingName(row, 2);
+        const displayName = toDisplayName(nameWords);
+        if (!displayName) continue;
+
+        const groupWord = row.find(
+          (w) =>
+            Math.abs(w.x - groupColumnX) < 10 && /^[A-Z]{1,2}$/.test(w.text),
+        );
+        if (!groupWord) continue;
+
+        // Anything left between the name and the group letter that ISN'T a
+        // decorative dot/ellipsis filler is a real coach note — e.g. "20 max"
+        // or "20 max or XT" attached to a specific athlete's row.
+        const noteWords = row
+          .filter((w) => w !== groupWord && !nameWords.includes(w))
+          .filter((w) => w.x < groupColumnX - 5)
+          .filter((w) => !DECORATIVE_DOTS_RE.test(w.text))
+          .sort((a, b) => a.x - b.x);
+
+        const note =
+          noteWords.length > 0
+            ? noteWords
+                .map((w) => w.text)
+                .join(" ")
+                .trim()
+            : null;
+
+        assignments.push({
+          name: displayName,
+          groupLetter: groupWord.text,
+          note,
+        });
       }
-    }
 
-    // Reconstruct group definitions from the description text block,
-    // read in top-to-bottom, left-to-right order, then split on "X:" labels.
-    const descWords = words
-      .filter((w) => w.x > descriptionMinX)
-      .sort((a, b) => a.top - b.top || a.x - b.x);
+      const descWords = words
+        .filter((w) => w.x > descriptionMinX)
+        .sort((a, b) => a.top - b.top || a.x - b.x);
 
-    const fullText = descWords.map((w) => w.text).join(" ");
-    const segments = fullText.split(/(?=\b(?:[A-Z]{1,2}|XT|M):)/);
+      const fullText = descWords.map((w) => w.text).join(" ");
+      const segments = fullText.split(/(?=\b(?:[A-Z]{1,2}|XT|M):)/);
 
-    for (const segment of segments) {
-      const trimmed = segment.trim();
-      const match = trimmed.match(/^([A-Z]{1,2}|XT|M):\s*(.+)$/);
-      if (match) {
-        definitionsByLetter.set(match[1], match[2].trim());
+      for (const segment of segments) {
+        const trimmed = segment.trim();
+        const match = trimmed.match(/^([A-Z]{1,2}|XT|M):\s*(.+)$/);
+        if (match) {
+          definitionsByLetter.set(match[1], match[2].trim());
+        }
+      }
+    } else {
+      // ---- Interval/pace-table format ----
+      const headerRow = rows.find((row) => row.some((w) => w.text === "WO"));
+      if (!headerRow) continue;
+
+      const columnAnchors = clusterHeaderIntoColumns(headerRow);
+      if (columnAnchors.length === 0) continue;
+
+      for (const row of rows) {
+        if (row === headerRow) continue;
+
+        const nameWords = extractLeadingName(row, 2);
+        const displayName = toDisplayName(nameWords);
+        if (!displayName) continue;
+
+        const dataWords = row.filter((w) => !nameWords.includes(w));
+        const assigned = assignToNearestColumn(dataWords, columnAnchors);
+
+        const intervals: Record<string, string> = {};
+        for (const [label, value] of Object.entries(assigned)) {
+          if (value.trim().length > 0) intervals[label] = value.trim();
+        }
+
+        if (Object.keys(intervals).length > 0) {
+          intervalRows.push({ name: displayName, intervals });
+        }
       }
     }
   }
@@ -2599,8 +3010,9 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
     definitionsByLetter.entries(),
   ).map(([groupLetter, description]) => ({ groupLetter, description }));
 
-  return { assignments, groupDefinitions };
+  return { assignments, groupDefinitions, intervalRows };
 }
+
 ```
 
 ### `src/lib/supabaseClient.ts`
@@ -2618,6 +3030,7 @@ if (!supabaseUrl || !supabaseKey) {
 }
 
 export const supabase = createClient(supabaseUrl, supabaseKey);
+
 ```
 
 ### `src/lib/workoutData.ts`
@@ -2629,6 +3042,7 @@ export interface WorkoutAssignmentRow {
   week_of: string;
   day: string;
   group_letter: string;
+  note: string | null;
 }
 
 export interface WorkoutGroupRow {
@@ -2643,22 +3057,30 @@ export interface WorkoutForDay {
   day: string;
   groupLetter: string;
   description: string | null;
+  note: string | null;
+}
+
+export interface WorkoutIntervalEntry {
+  week_of: string;
+  day: string;
+  interval_label: string;
+  time_value: string;
 }
 
 export async function fetchWorkoutsForAthlete(
-  athleteName: string,
+  athleteId: string,
+  season: number,
 ): Promise<WorkoutForDay[]> {
   const { data: assignments, error: assignError } = await supabase
     .from("workout_assignments")
-    .select("week_of, day, group_letter")
-    .eq("athlete_name", athleteName)
+    .select("week_of, day, group_letter, note")
+    .eq("athlete_id", athleteId)
+    .eq("season", season)
     .order("week_of", { ascending: false });
 
   if (assignError) throw new Error(assignError.message);
   if (!assignments || assignments.length === 0) return [];
 
-  // Fetch every group definition for the specific (week, day) pairs this
-  // athlete has assignments for, then join them together client-side.
   const weeksOf = [...new Set(assignments.map((a) => a.week_of))];
 
   const { data: groups, error: groupError } = await supabase
@@ -2679,8 +3101,25 @@ export async function fetchWorkoutsForAthlete(
     groupLetter: a.group_letter,
     description:
       groupLookup.get(`${a.week_of}|${a.day}|${a.group_letter}`) ?? null,
+    note: a.note ?? null,
   }));
 }
+
+export async function fetchIntervalsForAthlete(
+  athleteId: string,
+  season: number,
+): Promise<WorkoutIntervalEntry[]> {
+  const { data, error } = await supabase
+    .from("workout_intervals")
+    .select("week_of, day, interval_label, time_value")
+    .eq("athlete_id", athleteId)
+    .eq("season", season)
+    .order("week_of", { ascending: false });
+
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
 ```
 
 ### `src/pages/about.tsx`
@@ -2694,20 +3133,32 @@ function AboutInfo() {
   );
 }
 export default AboutInfo;
+
 ```
 
 ### `src/pages/adminDashboard.tsx`
 
 ```tsx
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAdminAuth } from "../context/AdminAuthContext";
 import { parseMileagePdf, parseWorkoutsPdf } from "../lib/pdfParser";
 import type {
   MileageRow,
   WorkoutAssignment,
   WorkoutGroupDefinition,
+  WorkoutIntervalRow,
 } from "../lib/pdfParser";
-import { upsertMileageRows, upsertWorkoutData } from "../lib/adminData";
+import {
+  upsertMileageRows,
+  upsertWorkoutData,
+  upsertWorkoutIntervals,
+} from "../lib/adminData";
+import type { MatchedRow } from "../lib/adminData";
+import { fetchAthletesForSeason } from "../lib/athleteData";
+import type { AthleteRecord } from "../lib/athleteData";
+import { buildNameLookup, matchName } from "../lib/nameMatching";
+
+const CURRENT_SEASON = 2026;
 
 type Mode = "mileage" | "workouts";
 
@@ -2717,14 +3168,43 @@ function AdminDashboard() {
   const [weekOf, setWeekOf] = useState("");
   const [day, setDay] = useState<"tuesday" | "friday">("tuesday");
 
-  const [mileageRows, setMileageRows] = useState<MileageRow[] | null>(null);
-  const [workoutData, setWorkoutData] = useState<{
-    assignments: WorkoutAssignment[];
-    groupDefinitions: WorkoutGroupDefinition[];
-  } | null>(null);
+  const [athletes, setAthletes] = useState<AthleteRecord[]>([]);
+  const [athletesLoaded, setAthletesLoaded] = useState(false);
+
+  const [mileageMatches, setMileageMatches] = useState<
+    MatchedRow<MileageRow>[] | null
+  >(null);
+  const [assignmentMatches, setAssignmentMatches] = useState<
+    MatchedRow<WorkoutAssignment>[] | null
+  >(null);
+  const [intervalMatches, setIntervalMatches] = useState<
+    MatchedRow<WorkoutIntervalRow>[] | null
+  >(null);
+  const [groupDefinitions, setGroupDefinitions] = useState<
+    WorkoutGroupDefinition[]
+  >([]);
 
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    fetchAthletesForSeason(CURRENT_SEASON)
+      .then((data) => {
+        setAthletes(data);
+        setAthletesLoaded(true);
+      })
+      .catch((err) =>
+        setStatus(`Failed to load athlete roster: ${err.message}`),
+      );
+  }, []);
+
+  function runMatching<T extends { name: string }>(rows: T[]): MatchedRow<T>[] {
+    const lookup = buildNameLookup(athletes);
+    return rows.map((data) => ({
+      data,
+      athleteId: matchName(data.name, lookup) ?? "",
+    }));
+  }
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -2735,12 +3215,15 @@ function AdminDashboard() {
     try {
       if (mode === "mileage") {
         const rows = await parseMileagePdf(file);
-        setMileageRows(rows);
-        setWorkoutData(null);
+        setMileageMatches(runMatching(rows));
+        setAssignmentMatches(null);
+        setIntervalMatches(null);
       } else {
-        const data = await parseWorkoutsPdf(file);
-        setWorkoutData(data);
-        setMileageRows(null);
+        const parsed = await parseWorkoutsPdf(file);
+        setAssignmentMatches(runMatching(parsed.assignments));
+        setIntervalMatches(runMatching(parsed.intervalRows));
+        setGroupDefinitions(parsed.groupDefinitions);
+        setMileageMatches(null);
       }
     } catch (err) {
       setStatus(`Failed to parse PDF: ${(err as Error).message}`);
@@ -2748,6 +3231,49 @@ function AdminDashboard() {
       setBusy(false);
     }
   }
+
+  function updateMileageMatch(index: number, athleteId: string) {
+    setMileageMatches((prev) =>
+      prev ? prev.map((r, i) => (i === index ? { ...r, athleteId } : r)) : prev,
+    );
+  }
+
+  function updateAssignmentMatch(index: number, athleteId: string) {
+    setAssignmentMatches((prev) =>
+      prev ? prev.map((r, i) => (i === index ? { ...r, athleteId } : r)) : prev,
+    );
+  }
+
+  function updateIntervalMatch(index: number, athleteId: string) {
+    setIntervalMatches((prev) =>
+      prev ? prev.map((r, i) => (i === index ? { ...r, athleteId } : r)) : prev,
+    );
+  }
+
+  function removeMileageRow(index: number) {
+    setMileageMatches((prev) =>
+      prev ? prev.filter((_, i) => i !== index) : prev,
+    );
+  }
+
+  function removeAssignmentRow(index: number) {
+    setAssignmentMatches((prev) =>
+      prev ? prev.filter((_, i) => i !== index) : prev,
+    );
+  }
+
+  function removeIntervalRow(index: number) {
+    setIntervalMatches((prev) =>
+      prev ? prev.filter((_, i) => i !== index) : prev,
+    );
+  }
+
+  const mileageUnmatchedCount =
+    mileageMatches?.filter((r) => !r.athleteId).length ?? 0;
+  const assignmentUnmatchedCount =
+    assignmentMatches?.filter((r) => !r.athleteId).length ?? 0;
+  const intervalUnmatchedCount =
+    intervalMatches?.filter((r) => !r.athleteId).length ?? 0;
 
   async function handleSubmit() {
     if (!weekOf) {
@@ -2758,18 +3284,33 @@ function AdminDashboard() {
     setBusy(true);
     setStatus(null);
     try {
-      if (mode === "mileage" && mileageRows) {
-        const count = await upsertMileageRows(mileageRows, weekOf);
+      if (mode === "mileage" && mileageMatches) {
+        const resolved = mileageMatches.filter((r) => r.athleteId);
+        const count = await upsertMileageRows(resolved, weekOf, CURRENT_SEASON);
         setStatus(`✅ Saved ${count} mileage rows for week of ${weekOf}.`);
-      } else if (mode === "workouts" && workoutData) {
-        const count = await upsertWorkoutData(
-          workoutData.assignments,
-          workoutData.groupDefinitions,
+      } else if (mode === "workouts") {
+        const resolvedAssignments = (assignmentMatches ?? []).filter(
+          (r) => r.athleteId,
+        );
+        const resolvedIntervals = (intervalMatches ?? []).filter(
+          (r) => r.athleteId,
+        );
+
+        const groupCount = await upsertWorkoutData(
+          resolvedAssignments,
+          groupDefinitions,
           weekOf,
           day,
+          CURRENT_SEASON,
+        );
+        const intervalCount = await upsertWorkoutIntervals(
+          resolvedIntervals,
+          weekOf,
+          day,
+          CURRENT_SEASON,
         );
         setStatus(
-          `✅ Saved ${count} workout assignments for ${day}, week of ${weekOf}.`,
+          `✅ Saved ${groupCount} group assignments and ${intervalCount} interval entries for ${day}, week of ${weekOf}.`,
         );
       }
     } catch (err) {
@@ -2777,6 +3318,29 @@ function AdminDashboard() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function AthleteSelect({
+    value,
+    onChange,
+  }: {
+    value: string;
+    onChange: (id: string) => void;
+  }) {
+    return (
+      <select
+        className="admin-match-select"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">-- Select athlete --</option>
+        {athletes.map((a) => (
+          <option key={a.id} value={a.id}>
+            {a.name}
+          </option>
+        ))}
+      </select>
+    );
   }
 
   return (
@@ -2788,8 +3352,9 @@ function AdminDashboard() {
           className={mode === "mileage" ? "nav-menu-trigger" : "nav-menu-item"}
           onClick={() => {
             setMode("mileage");
-            setMileageRows(null);
-            setWorkoutData(null);
+            setMileageMatches(null);
+            setAssignmentMatches(null);
+            setIntervalMatches(null);
             setStatus(null);
           }}
         >
@@ -2799,8 +3364,9 @@ function AdminDashboard() {
           className={mode === "workouts" ? "nav-menu-trigger" : "nav-menu-item"}
           onClick={() => {
             setMode("workouts");
-            setMileageRows(null);
-            setWorkoutData(null);
+            setMileageMatches(null);
+            setAssignmentMatches(null);
+            setIntervalMatches(null);
             setStatus(null);
           }}
         >
@@ -2837,24 +3403,29 @@ function AdminDashboard() {
           type="file"
           accept="application/pdf"
           onChange={handleFileChange}
-          disabled={busy}
+          disabled={busy || !athletesLoaded}
         />
       </div>
 
+      {!athletesLoaded && (
+        <p className="admin-status">Loading athlete roster...</p>
+      )}
       {busy && <p className="admin-status">Working...</p>}
       {status && <p className="admin-status">{status}</p>}
 
-      {mode === "mileage" && mileageRows && (
+      {mode === "mileage" && mileageMatches && (
         <div className="admin-preview">
           <p className="admin-preview-count">
-            {mileageRows.length} athletes parsed — review before saving:
+            {mileageMatches.length} rows parsed
+            {mileageUnmatchedCount > 0 &&
+              ` — ${mileageUnmatchedCount} unmatched, fix or remove before saving`}
           </p>
           <div className="admin-table-wrapper">
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Team</th>
+                  <th>Match</th>
+                  <th>Parsed Name</th>
                   <th>Mon</th>
                   <th>Tue</th>
                   <th>Wed</th>
@@ -2863,23 +3434,38 @@ function AdminDashboard() {
                   <th>Sat</th>
                   <th>Sun</th>
                   <th>Total</th>
-                  <th>Notes</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
-                {mileageRows.map((r) => (
-                  <tr key={r.name}>
-                    <td>{r.name}</td>
-                    <td>{r.team === "womens-cross-country" ? "W" : "M"}</td>
-                    <td>{r.monday}</td>
-                    <td>{r.tuesday}</td>
-                    <td>{r.wednesday}</td>
-                    <td>{r.thursday}</td>
-                    <td>{r.friday}</td>
-                    <td>{r.saturday}</td>
-                    <td>{r.sunday}</td>
-                    <td>{r.weeklyTotal}</td>
-                    <td>{r.notes}</td>
+                {mileageMatches.map((r, i) => (
+                  <tr
+                    key={i}
+                    className={!r.athleteId ? "admin-row-unmatched" : ""}
+                  >
+                    <td>
+                      <AthleteSelect
+                        value={r.athleteId}
+                        onChange={(id) => updateMileageMatch(i, id)}
+                      />
+                    </td>
+                    <td>{r.data.name}</td>
+                    <td>{r.data.monday}</td>
+                    <td>{r.data.tuesday}</td>
+                    <td>{r.data.wednesday}</td>
+                    <td>{r.data.thursday}</td>
+                    <td>{r.data.friday}</td>
+                    <td>{r.data.saturday}</td>
+                    <td>{r.data.sunday}</td>
+                    <td>{r.data.weeklyTotal}</td>
+                    <td>
+                      <button
+                        className="admin-remove-btn"
+                        onClick={() => removeMileageRow(i)}
+                      >
+                        ✕
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -2895,51 +3481,126 @@ function AdminDashboard() {
         </div>
       )}
 
-      {mode === "workouts" && workoutData && (
+      {mode === "workouts" && (assignmentMatches || intervalMatches) && (
         <div className="admin-preview">
-          <p className="admin-preview-count">
-            {workoutData.assignments.length} athletes,{" "}
-            {workoutData.groupDefinitions.length} group definitions parsed —
-            review before saving:
-          </p>
-
-          <div className="admin-table-wrapper">
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>Group</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {workoutData.groupDefinitions.map((g) => (
-                  <tr key={g.groupLetter}>
-                    <td>{g.groupLetter}</td>
-                    <td>{g.description}</td>
+          {groupDefinitions.length > 0 && (
+            <div className="admin-table-wrapper">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Group</th>
+                    <th>Description</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {groupDefinitions.map((g) => (
+                    <tr key={g.groupLetter}>
+                      <td>{g.groupLetter}</td>
+                      <td>{g.description}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
-          <div className="admin-table-wrapper">
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Group</th>
-                </tr>
-              </thead>
-              <tbody>
-                {workoutData.assignments.map((a) => (
-                  <tr key={a.name}>
-                    <td>{a.name}</td>
-                    <td>{a.groupLetter}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {assignmentMatches && assignmentMatches.length > 0 && (
+            <>
+              <p className="admin-preview-count">
+                {assignmentMatches.length} group assignments
+                {assignmentUnmatchedCount > 0 &&
+                  ` — ${assignmentUnmatchedCount} unmatched`}
+              </p>
+              <div className="admin-table-wrapper">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Match</th>
+                      <th>Parsed Name</th>
+                      <th>Group</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {assignmentMatches.map((r, i) => (
+                      <tr
+                        key={i}
+                        className={!r.athleteId ? "admin-row-unmatched" : ""}
+                      >
+                        <td>
+                          <AthleteSelect
+                            value={r.athleteId}
+                            onChange={(id) => updateAssignmentMatch(i, id)}
+                          />
+                        </td>
+                        <td>{r.data.name}</td>
+                        <td>{r.data.groupLetter}</td>
+                        <td>
+                          <button
+                            className="admin-remove-btn"
+                            onClick={() => removeAssignmentRow(i)}
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
+          {intervalMatches && intervalMatches.length > 0 && (
+            <>
+              <p className="admin-preview-count">
+                {intervalMatches.length} interval rows
+                {intervalUnmatchedCount > 0 &&
+                  ` — ${intervalUnmatchedCount} unmatched`}
+              </p>
+              <div className="admin-table-wrapper">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Match</th>
+                      <th>Parsed Name</th>
+                      <th>Intervals</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {intervalMatches.map((r, i) => (
+                      <tr
+                        key={i}
+                        className={!r.athleteId ? "admin-row-unmatched" : ""}
+                      >
+                        <td>
+                          <AthleteSelect
+                            value={r.athleteId}
+                            onChange={(id) => updateIntervalMatch(i, id)}
+                          />
+                        </td>
+                        <td>{r.data.name}</td>
+                        <td>
+                          {Object.entries(r.data.intervals)
+                            .map(([label, value]) => `${label}: ${value}`)
+                            .join(" | ")}
+                        </td>
+                        <td>
+                          <button
+                            className="admin-remove-btn"
+                            onClick={() => removeIntervalRow(i)}
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
 
           <button
             className="nav-menu-trigger"
@@ -2962,6 +3623,7 @@ function AdminDashboard() {
 }
 
 export default AdminDashboard;
+
 ```
 
 ### `src/pages/adminLogin.tsx`
@@ -3033,6 +3695,7 @@ function AdminLogin() {
 }
 
 export default AdminLogin;
+
 ```
 
 ### `src/pages/corePage.tsx`
@@ -3047,6 +3710,7 @@ function CorePage() {
   );
 }
 export default CorePage;
+
 ```
 
 ### `src/pages/error.tsx`
@@ -3073,6 +3737,7 @@ function ErrorPage() {
   );
 }
 export default ErrorPage;
+
 ```
 
 ### `src/pages/fms.tsx`
@@ -3086,6 +3751,7 @@ function FMS() {
   );
 }
 export default FMS;
+
 ```
 
 ### `src/pages/home.tsx`
@@ -3102,7 +3768,6 @@ const resourceLinks = [
   { label: "View Core", path: "/core" },
   { label: "View FMS", path: "/fms" },
   { label: "View Lifting Sheet", path: "/lifting_sheet" },
-  { label: "View Workouts", path: "/workouts" },
 ];
 
 const statsLinks = [
@@ -3112,7 +3777,13 @@ const statsLinks = [
 ];
 
 function Home() {
-  const { athlete } = useUser();
+  const { athlete, athleteId, athleteLoading } = useUser();
+
+  // A session is stored and still resolving — avoid flashing the
+  // identity-lookup screen before we know whether it's valid.
+  if (athleteId && athleteLoading) {
+    return null;
+  }
 
   return (
     <>
@@ -3125,6 +3796,7 @@ function Home() {
       </h1>
 
       {!athlete && <IdentityLookup />}
+
       {athlete && (
         <>
           <nav className="left-res-drop">
@@ -3142,6 +3814,7 @@ function Home() {
 }
 
 export default Home;
+
 ```
 
 ### `src/pages/liftingSheet.tsx`
@@ -3155,6 +3828,7 @@ function LiftingSheet() {
   );
 }
 export default LiftingSheet;
+
 ```
 
 ### `src/pages/mileagePage.tsx`
@@ -3185,7 +3859,7 @@ function formatWeekOf(dateStr: string) {
 }
 
 function MileagePage() {
-  const { athlete } = useUser();
+  const { athlete, season } = useUser();
   const [entries, setEntries] = useState<MileageEntry[] | null>(null);
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -3197,7 +3871,7 @@ function MileagePage() {
     setEntries(null);
     setError(null);
 
-    fetchMileageForAthlete(athlete.name)
+    fetchMileageForAthlete(athlete.id, season!)
       .then((data) => {
         if (cancelled) return;
         setEntries(data);
@@ -3211,7 +3885,7 @@ function MileagePage() {
     return () => {
       cancelled = true;
     };
-  }, [athlete]);
+  }, [athlete, season]);
 
   if (!athlete) return null;
 
@@ -3297,6 +3971,7 @@ function MileagePage() {
 }
 
 export default MileagePage;
+
 ```
 
 ### `src/pages/name_lookup.tsx`
@@ -3310,6 +3985,7 @@ function Lookup() {
   );
 }
 export default Lookup;
+
 ```
 
 ### `src/pages/tfrrsStats.tsx`
@@ -3374,6 +4050,7 @@ function TfrrsStats() {
 }
 
 export default TfrrsStats;
+
 ```
 
 ### `src/pages/workoutPages.tsx`
@@ -3381,8 +4058,24 @@ export default TfrrsStats;
 ```tsx
 import { useEffect, useState } from "react";
 import { useUser } from "../context/UserContext";
-import { fetchWorkoutsForAthlete } from "../lib/workoutData";
-import type { WorkoutForDay } from "../lib/workoutData";
+import {
+  fetchWorkoutsForAthlete,
+  fetchIntervalsForAthlete,
+} from "../lib/workoutData";
+import type { WorkoutForDay, WorkoutIntervalEntry } from "../lib/workoutData";
+
+interface DayWorkout {
+  day: string;
+  groupLetter?: string;
+  description?: string;
+  note?: string | null;
+  intervals?: { label: string; value: string }[];
+}
+
+interface WeekWorkouts {
+  weekOf: string;
+  days: DayWorkout[];
+}
 
 function formatWeekOf(dateStr: string) {
   const date = new Date(dateStr + "T00:00:00");
@@ -3397,41 +4090,68 @@ function capitalize(word: string) {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
-// Groups a flat list of (week, day, group) rows into one entry per week,
-// each holding its Tuesday/Friday workouts together.
-function groupByWeek(rows: WorkoutForDay[]) {
-  const weeks = new Map<string, WorkoutForDay[]>();
-  for (const row of rows) {
-    const existing = weeks.get(row.weekOf) ?? [];
-    existing.push(row);
-    weeks.set(row.weekOf, existing);
+// Merges group-assignment rows and interval rows into one combined
+// per-week, per-day structure, since an athlete's day may have either
+// (or in principle both, though the two source PDF formats are mutually
+// exclusive per page in practice).
+function combineIntoWeeks(
+  groupRows: WorkoutForDay[],
+  intervalRows: WorkoutIntervalEntry[],
+): WeekWorkouts[] {
+  const weekMap = new Map<string, Map<string, DayWorkout>>();
+
+  function getDayEntry(weekOf: string, day: string): DayWorkout {
+    if (!weekMap.has(weekOf)) weekMap.set(weekOf, new Map());
+    const dayMap = weekMap.get(weekOf)!;
+    if (!dayMap.has(day)) dayMap.set(day, { day });
+    return dayMap.get(day)!;
   }
-  return Array.from(weeks.entries())
-    .map(([weekOf, days]) => ({
+
+  for (const r of groupRows) {
+    const entry = getDayEntry(r.weekOf, r.day);
+    entry.groupLetter = r.groupLetter;
+    entry.description = r.description ?? undefined;
+    entry.note = r.note;
+  }
+
+  for (const r of intervalRows) {
+    const entry = getDayEntry(r.week_of, r.day);
+    if (!entry.intervals) entry.intervals = [];
+    entry.intervals.push({ label: r.interval_label, value: r.time_value });
+  }
+
+  return Array.from(weekMap.entries())
+    .map(([weekOf, dayMap]) => ({
       weekOf,
-      days: days.sort((a, b) => a.day.localeCompare(b.day)),
+      days: Array.from(dayMap.values()).sort((a, b) =>
+        a.day.localeCompare(b.day),
+      ),
     }))
     .sort((a, b) => b.weekOf.localeCompare(a.weekOf));
 }
 
-function Workouts() {
-  const { athlete } = useUser();
-  const [rows, setRows] = useState<WorkoutForDay[] | null>(null);
+function WorkoutsPage() {
+  const { athlete, season } = useUser();
+  const [weeks, setWeeks] = useState<WeekWorkouts[] | null>(null);
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!athlete) return;
+    if (!athlete || !season) return;
 
     let cancelled = false;
-    setRows(null);
+    setWeeks(null);
     setError(null);
 
-    fetchWorkoutsForAthlete(athlete.name)
-      .then((data) => {
+    Promise.all([
+      fetchWorkoutsForAthlete(athlete.id, season),
+      fetchIntervalsForAthlete(athlete.id, season),
+    ])
+      .then(([groupData, intervalData]) => {
         if (cancelled) return;
-        setRows(data);
-        setSelectedWeek(data.length > 0 ? data[0].weekOf : null);
+        const combined = combineIntoWeeks(groupData, intervalData);
+        setWeeks(combined);
+        setSelectedWeek(combined.length > 0 ? combined[0].weekOf : null);
       })
       .catch((err) => {
         if (cancelled) return;
@@ -3441,12 +4161,11 @@ function Workouts() {
     return () => {
       cancelled = true;
     };
-  }, [athlete]);
+  }, [athlete, season]);
 
   if (!athlete) return null;
 
-  const weeks = rows ? groupByWeek(rows) : [];
-  const currentWeek = weeks.find((w) => w.weekOf === selectedWeek) ?? null;
+  const currentWeek = weeks?.find((w) => w.weekOf === selectedWeek) ?? null;
 
   return (
     <div className="workouts-page">
@@ -3460,18 +4179,18 @@ function Workouts() {
         </p>
       )}
 
-      {!error && rows === null && (
+      {!error && weeks === null && (
         <p className="workouts-no-data acme-regular text-outline">Loading...</p>
       )}
 
-      {!error && rows !== null && rows.length === 0 && (
+      {!error && weeks !== null && weeks.length === 0 && (
         <p className="workouts-no-data acme-regular text-outline">
           No workouts have been assigned to you yet — check back once this
           week's sheet is in!
         </p>
       )}
 
-      {!error && weeks.length > 0 && (
+      {!error && weeks !== null && weeks.length > 0 && (
         <>
           {weeks.length > 1 && (
             <select
@@ -3499,14 +4218,40 @@ function Workouts() {
                     <span className="workouts-day-name">
                       {capitalize(d.day)}
                     </span>
-                    <span className="workouts-group-badge">
-                      Group {d.groupLetter}
-                    </span>
+                    {d.groupLetter && (
+                      <span className="workouts-group-badge">
+                        Group {d.groupLetter}
+                      </span>
+                    )}
                   </div>
-                  <p className="workouts-description">
-                    {d.description ??
-                      "No workout description found for this group."}
-                  </p>
+
+                  {d.description && (
+                    <p className="workouts-description">{d.description}</p>
+                  )}
+
+                  {d.note && <p className="workouts-note">{d.note}</p>}
+
+                  {d.intervals && d.intervals.length > 0 && (
+                    <ul className="workouts-interval-list">
+                      {d.intervals.map((i) => (
+                        <li key={i.label} className="workouts-interval-item">
+                          <span className="workouts-interval-label">
+                            {i.label}
+                          </span>
+                          <span className="workouts-interval-value">
+                            {i.value}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  {!d.description &&
+                    (!d.intervals || d.intervals.length === 0) && (
+                      <p className="workouts-description">
+                        No workout description found for this day.
+                      </p>
+                    )}
                 </div>
               ))}
             </div>
@@ -3517,7 +4262,8 @@ function Workouts() {
   );
 }
 
-export default Workouts;
+export default WorkoutsPage;
+
 ```
 
 ### `src/App.css`
@@ -4268,6 +5014,60 @@ export default Workouts;
   font-size: clamp(14px, 1.6vw, 16px);
   line-height: 1.4;
 }
+
+.workouts-interval-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workouts-interval-item {
+  display: flex;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.4);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: clamp(13px, 1.5vw, 15px);
+}
+
+.workouts-interval-label {
+  font-weight: 700;
+  color: black;
+}
+
+.workouts-interval-value {
+  color: black;
+}
+
+.admin-row-unmatched {
+  background: rgba(255, 200, 200, 0.5);
+}
+
+.admin-match-select {
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+}
+
+.admin-remove-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #b00020;
+  font-weight: 700;
+}
+
+.workouts-note {
+  margin: 0;
+  font-size: clamp(12px, 1.4vw, 14px);
+  font-style: italic;
+  color: rgba(0, 0, 0, 0.75);
+}
+
 ```
 
 ### `src/App.tsx`
@@ -4425,6 +5225,7 @@ function App() {
 }
 
 export default App;
+
 ```
 
 ### `src/index.css`
@@ -4549,6 +5350,7 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
 ```
 
 ### `src/main.tsx`
@@ -4570,6 +5372,7 @@ createRoot(document.getElementById("root")!).render(
     </AdminAuthProvider>
   </StrictMode>,
 );
+
 ```
 
 ### `.gitignore`
@@ -4606,17 +5409,17 @@ dist-ssr
 ### `eslint.config.js`
 
 ```javascript
-import js from "@eslint/js";
-import globals from "globals";
-import reactHooks from "eslint-plugin-react-hooks";
-import reactRefresh from "eslint-plugin-react-refresh";
-import tseslint from "typescript-eslint";
-import { defineConfig, globalIgnores } from "eslint/config";
+import js from '@eslint/js'
+import globals from 'globals'
+import reactHooks from 'eslint-plugin-react-hooks'
+import reactRefresh from 'eslint-plugin-react-refresh'
+import tseslint from 'typescript-eslint'
+import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(["dist"]),
+  globalIgnores(['dist']),
   {
-    files: ["**/*.{ts,tsx}"],
+    files: ['**/*.{ts,tsx}'],
     extends: [
       js.configs.recommended,
       tseslint.configs.recommended,
@@ -4627,7 +5430,8 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
-]);
+])
+
 ```
 
 ### `index.html`
@@ -4646,6 +5450,7 @@ export default defineConfig([
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
+
 ```
 
 ### `package-lock.json`
@@ -4658,7 +5463,7 @@ _(binary or excluded — contents not inlined)_
 
 ### `README.md`
 
-````markdown
+```markdown
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
@@ -4678,9 +5483,9 @@ If you are developing a production application, we recommend updating the config
 
 ```js
 export default defineConfig([
-  globalIgnores(["dist"]),
+  globalIgnores(['dist']),
   {
-    files: ["**/*.{ts,tsx}"],
+    files: ['**/*.{ts,tsx}'],
     extends: [
       // Other configs...
 
@@ -4695,46 +5500,47 @@ export default defineConfig([
     ],
     languageOptions: {
       parserOptions: {
-        project: ["./tsconfig.node.json", "./tsconfig.app.json"],
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
         tsconfigRootDir: import.meta.dirname,
       },
       // other options...
     },
   },
-]);
+])
+
 ```
-````
 
 You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
 
 ```js
 // eslint.config.js
-import reactX from "eslint-plugin-react-x";
-import reactDom from "eslint-plugin-react-dom";
+import reactX from 'eslint-plugin-react-x'
+import reactDom from 'eslint-plugin-react-dom'
 
 export default defineConfig([
-  globalIgnores(["dist"]),
+  globalIgnores(['dist']),
   {
-    files: ["**/*.{ts,tsx}"],
+    files: ['**/*.{ts,tsx}'],
     extends: [
       // Other configs...
       // Enable lint rules for React
-      reactX.configs["recommended-typescript"],
+      reactX.configs['recommended-typescript'],
       // Enable lint rules for React DOM
       reactDom.configs.recommended,
     ],
     languageOptions: {
       parserOptions: {
-        project: ["./tsconfig.node.json", "./tsconfig.app.json"],
+        project: ['./tsconfig.node.json', './tsconfig.app.json'],
         tsconfigRootDir: import.meta.dirname,
       },
       // other options...
     },
   },
-]);
+])
+
 ```
 
-````
+```
 
 ### `repo-digest.md`
 
@@ -5016,7 +5822,7 @@ function main() {
 
 main();
 
-````
+```
 
 ### `tsconfig.app.json`
 
@@ -5033,15 +5839,16 @@ _(binary or excluded — contents not inlined)_
 ### `vite.config.ts`
 
 ```typescript
-import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite'
 
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
-});
+})
+
 ```
 
----
 
-_Digest complete: 44 files inlined, 27 skipped (binary/excluded)._
+---
+_Digest complete: 47 files inlined, 27 skipped (binary/excluded)._

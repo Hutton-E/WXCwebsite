@@ -1,36 +1,47 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useUser } from "../context/UserContext";
-
-// Direct imports so we can search within a specific season's roster.
-// (UserContext still auto-discovers every file for the lookup-by-id step,
-// but the search UI needs the raw athlete lists per season.)
-const rosterModules = import.meta.glob("../data/distance_roster_*.json", {
-  eager: true,
-}) as Record<
-  string,
-  { season: number; athletes: { id: string; name: string }[] }
->;
-
-function buildRostersBySeason() {
-  const map: Record<number, { id: string; name: string }[]> = {};
-  for (const mod of Object.values(rosterModules)) {
-    if (mod.season && mod.athletes) map[mod.season] = mod.athletes;
-  }
-  return map;
-}
-
-const rostersBySeason = buildRostersBySeason();
-const seasons = Object.keys(rostersBySeason)
-  .map(Number)
-  .sort((a, b) => b - a);
+import { fetchAthletesForSeason } from "../lib/athleteData";
+import type { AthleteRecord } from "../lib/athleteData";
 
 function IdentityLookup() {
-  const { selectAthlete } = useUser();
-  const [season, setSeason] = useState<number>(seasons[0]);
+  const { selectAthlete, availableSeasons } = useUser();
+  const [season, setSeason] = useState<number | null>(null);
   const [query, setQuery] = useState("");
+  const [roster, setRoster] = useState<AthleteRecord[]>([]);
+  const [loadingRoster, setLoadingRoster] = useState(false);
 
-  const roster = rostersBySeason[season] || [];
+  // Once availableSeasons loads from Supabase, default to the newest one.
+  useEffect(() => {
+    if (availableSeasons.length > 0 && season === null) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSeason(availableSeasons[0]);
+    }
+  }, [availableSeasons, season]);
+
+  // Fetch that season's athlete list whenever the season selection changes.
+  useEffect(() => {
+    if (season === null) return;
+
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLoadingRoster(true);
+    setQuery("");
+
+    fetchAthletesForSeason(season)
+      .then((data) => {
+        if (cancelled) return;
+        setRoster(data);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRoster(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [season]);
+
   const matches =
     query.trim().length > 0
       ? roster.filter((a) => a.name.toLowerCase().includes(query.toLowerCase()))
@@ -40,44 +51,50 @@ function IdentityLookup() {
     <div className="identity-lookup">
       <h1 className="identity-title acme-regular text-outline">Who are you?</h1>
 
-      <select
-        className="identity-year-select"
-        value={season}
-        onChange={(e) => {
-          setSeason(Number(e.target.value));
-          setQuery("");
-        }}
-      >
-        {seasons.map((s) => (
-          <option key={s} value={s}>
-            {s} Season
-          </option>
-        ))}
-      </select>
+      {availableSeasons.length === 0 ? (
+        <p className="identity-no-match acme-regular text-outline">
+          Loading seasons...
+        </p>
+      ) : (
+        <select
+          className="identity-year-select"
+          value={season ?? ""}
+          onChange={(e) => setSeason(Number(e.target.value))}
+        >
+          {availableSeasons.map((s) => (
+            <option key={s} value={s}>
+              {s} Season
+            </option>
+          ))}
+        </select>
+      )}
 
       <input
         type="text"
         className="identity-input"
-        placeholder="Start typing your name..."
+        placeholder={
+          loadingRoster ? "Loading roster..." : "Start typing your name..."
+        }
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        disabled={loadingRoster}
         autoFocus
       />
       {matches.length > 0 && (
         <ul className="identity-results">
-          {matches.map((athlete) => (
-            <li key={athlete.id}>
+          {matches.map((a) => (
+            <li key={a.id}>
               <button
                 className="identity-result-item"
-                onClick={() => selectAthlete(athlete.id, season)}
+                onClick={() => season !== null && selectAthlete(a.id, season)}
               >
-                {athlete.name}
+                {a.name}
               </button>
             </li>
           ))}
         </ul>
       )}
-      {query.trim().length > 0 && matches.length === 0 && (
+      {query.trim().length > 0 && matches.length === 0 && !loadingRoster && (
         <p className="identity-no-match acme-regular text-outline">
           No match found — check your spelling.
         </p>

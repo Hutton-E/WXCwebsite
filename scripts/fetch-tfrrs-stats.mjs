@@ -2,21 +2,15 @@
 /**
  * fetch-tfrrs-stats.mjs
  *
- * Scans EVERY src/data/distance_roster_*.json file, collects every unique
- * tfrrsId across all seasons (the same real person may appear in several
- * yearly files but always shares one tfrrsId — TFRRS IDs are stable across
- * a career, unlike go-knights' per-season roster IDs), and fetches each
- * unique athlete's "College Bests" table exactly once.
+ * Reads every unique tfrrs_id from Supabase's `athletes` table (across all
+ * seasons — the same person may appear multiple times but shares one
+ * tfrrs_id), fetches each unique athlete's "College Bests" table once, and
+ * writes src/data/tfrrs_stats.json keyed by tfrrs_id.
  *
- * Writes src/data/tfrrs_stats.json KEYED BY tfrrsId (not by roster id),
- * so any season's athlete record can look up its own stats via
- * athlete.tfrrsId, regardless of which year's file it came from.
- *
- * Supports two tfrrsId shapes:
- *   - A plain numeric ID (e.g. "8271797") -> builds the standard
- *     tfrrs.org/athletes/{id}/Wartburg/{Name}.html URL.
- *   - A full URL already (for TFRRS's alternate hashed-profile format,
- *     e.g. "https://www.tfrrs.org/athlete/{hash}.html") -> used as-is.
+ * Note: this script's OUTPUT is still a local JSON file, since your live
+ * app (tfrrsStats.tsx) already reads it directly and works correctly.
+ * Only the INPUT (which athletes to fetch) now comes from Supabase instead
+ * of scanning local roster files.
  *
  * Usage: node scripts/fetch-tfrrs-stats.mjs
  */
@@ -24,8 +18,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as cheerio from "cheerio";
+import { getAuthenticatedSupabaseClient } from "./lib/supabaseAdminClient.mjs";
 
-const DATA_DIR = path.resolve("src/data");
 const OUT_PATH = path.resolve("src/data/tfrrs_stats.json");
 const DELAY_MS = 700;
 
@@ -33,18 +27,8 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function findRosterFiles() {
-  return fs
-    .readdirSync(DATA_DIR)
-    .filter((f) => /^distance_roster_\d+\.json$/.test(f))
-    .map((f) => path.join(DATA_DIR, f));
-}
-
 function resolveProfileUrl(tfrrsId, name) {
-  if (tfrrsId.startsWith("http")) {
-    // Hashed-format profile — already a full, usable URL.
-    return tfrrsId;
-  }
+  if (tfrrsId.startsWith("http")) return tfrrsId;
   const slug = name.replace(/\s+/g, "_");
   return `https://www.tfrrs.org/athletes/${tfrrsId}/Wartburg/${slug}.html`;
 }
@@ -97,30 +81,24 @@ async function fetchAthleteBests(tfrrsId, name) {
 }
 
 async function main() {
-  const rosterFiles = findRosterFiles();
-  if (rosterFiles.length === 0) {
-    console.error(`No distance_roster_*.json files found in ${DATA_DIR}`);
-    process.exit(1);
-  }
+  const supabase = await getAuthenticatedSupabaseClient();
 
-  console.log(
-    `Scanning ${rosterFiles.length} roster file(s) for unique tfrrsIds...`,
-  );
+  const { data: rows, error } = await supabase
+    .from("athletes")
+    .select("tfrrs_id, name")
+    .not("tfrrs_id", "is", null);
 
-  // Map keyed by tfrrsId -> a representative display name (whichever we see first).
+  if (error) throw new Error(error.message);
+
   const uniqueAthletes = new Map();
-
-  for (const filePath of rosterFiles) {
-    const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    for (const athlete of data.athletes) {
-      if (athlete.tfrrsId && !uniqueAthletes.has(athlete.tfrrsId)) {
-        uniqueAthletes.set(athlete.tfrrsId, athlete.name);
-      }
+  for (const row of rows) {
+    if (!uniqueAthletes.has(row.tfrrs_id)) {
+      uniqueAthletes.set(row.tfrrs_id, row.name);
     }
   }
 
   console.log(
-    `Found ${uniqueAthletes.size} unique athletes (by tfrrsId) across all seasons.\n`,
+    `Found ${uniqueAthletes.size} unique athletes (by tfrrs_id) in Supabase.\n`,
   );
 
   const stats = {};
@@ -154,11 +132,7 @@ async function main() {
   fs.writeFileSync(OUT_PATH, JSON.stringify(stats, null, 2), "utf8");
 
   console.log(`\n✅ Wrote stats for ${success} athletes to ${OUT_PATH}`);
-  if (failed > 0) {
-    console.log(
-      `⚠️  ${failed} athletes had no data — check their tfrrsId manually.`,
-    );
-  }
+  if (failed > 0) console.log(`⚠️  ${failed} athletes had no data.`);
 }
 
 main().catch((err) => {

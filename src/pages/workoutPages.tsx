@@ -82,6 +82,7 @@ function WorkoutsPage() {
     if (!athlete || !season) return;
 
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setWeeks(null);
     setError(null);
 

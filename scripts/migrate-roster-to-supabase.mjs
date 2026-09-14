@@ -71,6 +71,7 @@ async function main() {
       team: a.team,
       hometown: a.hometown || null,
       high_school: a.highSchool || null,
+      tfrrs_id: a.tfrrsId || null,
     }));
 
     const { error, count } = await supabase

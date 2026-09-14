@@ -3,19 +3,18 @@
  * fetch-roster-by-year.mjs
  *
  * Fetches men's + women's cross country rosters from go-knights.net for
- * each year listed in YEARS, and writes one file per season:
- *   src/data/distance_roster_{YY}.json   (e.g. distance_roster_25.json for 2025)
+ * each year listed in YEARS and upserts them DIRECTLY into the Supabase
+ * `athletes` table — no local JSON files.
  *
- * These are separate from distance_roster_26.json (the current-season login
- * roster used by identity lookup) — this script is for building out
- * additional selectable seasons.
+ * Handles two page formats:
+ *  - Modern Sidearm: an accessible <table>.
+ *  - Legacy Sidearm (e.g. 2014 and earlier): a card list with no table.
  *
  * Usage: node scripts/fetch-roster-by-year.mjs
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import * as cheerio from "cheerio";
+import { getAuthenticatedSupabaseClient } from "./lib/supabaseAdminClient.mjs";
 
 // Edit this list to add/remove seasons you want generated.
 const YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025];
@@ -33,24 +32,9 @@ const TEAMS = [
 
 const DELAY_MS = 700;
 
-const CLASS_YEAR_MAP = {
-  freshman: "Fr.",
-  sophomore: "So.",
-  junior: "Jr.",
-  senior: "Sr.",
-  graduate: "Gr.",
-};
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-function normalizeClassYear(raw) {
-  const cleaned = raw.trim().replace(/\.$/, "").toLowerCase();
-  return CLASS_YEAR_MAP[cleaned] || raw.trim();
-}
-
-// ---------- MODERN TABLE PARSER ----------
 
 function parseModernTable($, team) {
   const athletes = [];
@@ -78,32 +62,25 @@ function parseModernTable($, team) {
         const href = link.attr("href") || "";
         const id = href.split("/").filter(Boolean).pop() || "";
 
-        const classYear = $(cells[1]).text().trim();
         const hometownRaw = $(cells[2]).text().trim();
         const [hometown, highSchool] = hometownRaw
           .split("/")
           .map((s) => s.trim());
 
-        if (!name) return;
+        if (!name || !id) return;
 
         athletes.push({
           id,
           name,
           team,
-          year: normalizeClassYear(classYear),
           hometown: hometown || "",
           highSchool: highSchool || "",
-          profileUrl: href.startsWith("http")
-            ? href
-            : `https://go-knights.net${href}`,
         });
       });
   });
 
   return athletes;
 }
-
-// ---------- LEGACY CARD PARSER (older seasons, e.g. 2014-style pages) ----------
 
 function parseLegacyCards($, team) {
   const athletes = [];
@@ -139,12 +116,8 @@ function parseLegacyCards($, team) {
       id,
       name,
       team,
-      year: normalizeClassYear(classMatch[1]),
       hometown: classMatch[2].trim(),
       highSchool: classMatch[3].trim(),
-      profileUrl: href.startsWith("http")
-        ? href
-        : `https://go-knights.net${href}`,
     });
   });
 
@@ -173,6 +146,8 @@ async function fetchTeamForYear({ baseUrl, team }, year) {
 }
 
 async function main() {
+  const supabase = await getAuthenticatedSupabaseClient();
+
   for (const year of YEARS) {
     console.log(`\n=== Season ${year} ===`);
     const allAthletes = [];
@@ -186,22 +161,49 @@ async function main() {
     }
 
     if (allAthletes.length === 0) {
-      console.warn(`⚠️  No athletes found for ${year} — skipping file write.`);
+      console.warn(`⚠️  No athletes found for ${year} — skipping.`);
       continue;
     }
 
-    const shortYear = String(year % 100).padStart(2, "0");
-    const outPath = path.resolve(`src/data/distance_roster_${shortYear}.json`);
+    // Preserve any existing tfrrs_id already stored for this season.
+    const { data: existing, error: fetchError } = await supabase
+      .from("athletes")
+      .select("id, tfrrs_id")
+      .eq("season", year);
 
-    const output = {
-      generatedAt: new Date().toISOString(),
+    if (fetchError) {
+      console.error(
+        `  Failed to read existing rows for ${year}: ${fetchError.message}`,
+      );
+      continue;
+    }
+
+    const existingTfrrsById = new Map(
+      (existing ?? []).map((a) => [a.id, a.tfrrs_id]),
+    );
+
+    const payload = allAthletes.map((a) => ({
+      id: a.id,
       season: year,
-      sources: TEAMS.map((t) => `${t.baseUrl}/${year}`),
-      athletes: allAthletes,
-    };
+      name: a.name,
+      team: a.team,
+      hometown: a.hometown || null,
+      high_school: a.highSchool || null,
+      tfrrs_id: existingTfrrsById.get(a.id) ?? null,
+    }));
 
-    fs.writeFileSync(outPath, JSON.stringify(output, null, 2), "utf8");
-    console.log(`✅ Wrote ${allAthletes.length} athletes to ${outPath}`);
+    const { error, count } = await supabase
+      .from("athletes")
+      .upsert(payload, { onConflict: "id,season", count: "exact" });
+
+    if (error) {
+      console.error(`  Failed to upsert ${year}: ${error.message}`);
+      continue;
+    }
+
+    console.log(
+      `✅ Upserted ${count ?? payload.length} athletes for season ${year}`,
+    );
   }
 }
 

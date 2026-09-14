@@ -32,6 +32,7 @@ function MileagePage() {
     if (!athlete) return;
 
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEntries(null);
     setError(null);
 
@@ -49,7 +50,7 @@ function MileagePage() {
     return () => {
       cancelled = true;
     };
-  }, [athlete]);
+  }, [athlete, season]);
 
   if (!athlete) return null;
 
