@@ -67,7 +67,7 @@ function FmsPage() {
 
       {data?.map(({ assignment, exercisesByPhase }) => (
         <div key={assignment.category} className="fms-category-block">
-          <p className="core-intro">
+          <p className="core-intro acme-regular text-outline">
             {assignment.category} ({assignment.variant}) — do these twice a
             week.
           </p>
