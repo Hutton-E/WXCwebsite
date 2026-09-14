@@ -10,6 +10,7 @@ import {
 } from "../lib/nameMatching";
 import { supabase } from "../lib/supabaseClient";
 import { RAW_FMS_ASSIGNMENTS } from "../data/rawFMSassignments";
+import { useNavigate } from "react-router-dom";
 
 const CURRENT_SEASON = 2026;
 
@@ -22,6 +23,7 @@ interface MatchedAssignment {
 
 function AdminFmsAssignments() {
   const { signOut } = useAdminAuth();
+  const navigate = useNavigate();
   const [athletes, setAthletes] = useState<AthleteRecord[]>([]);
   const [matches, setMatches] = useState<MatchedAssignment[] | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -87,6 +89,13 @@ function AdminFmsAssignments() {
     <div className="admin-dashboard">
       <h1 className="admin-title acme-regular text-outline">FMS Assignments</h1>
 
+      <button
+        className="nav-menu-item admin-nav-link"
+        onClick={() => navigate(-1)}
+      >
+        ← Back to Dashboard
+      </button>
+
       {!matches && <p className="admin-status">Loading...</p>}
       {status && <p className="admin-status">{status}</p>}
 
@@ -146,7 +155,7 @@ function AdminFmsAssignments() {
       )}
 
       <button
-        className="switch-identity-link acme-regular text-outline"
+        className="admin-signout-link acme-regular text-outline"
         onClick={signOut}
       >
         Sign Out

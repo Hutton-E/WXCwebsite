@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useAdminAuth } from "../context/AdminAuthContext";
 import { parseMileagePdf, parseWorkoutsPdf } from "../lib/pdfParser";
 import type {
@@ -148,9 +149,6 @@ function AdminDashboard() {
   const intervalUnmatchedCount =
     intervalMatches?.filter((r) => !r.athleteId).length ?? 0;
 
-  // Any row where the parsed name doesn't match the selected athlete's real
-  // name gets remembered as an alias — this is what makes matching
-  // self-healing: fix a spelling once, and it auto-matches every week after.
   async function learnAliasesFrom<T extends { name: string }>(
     rows: MatchedRow<T>[],
   ) {
@@ -272,6 +270,9 @@ function AdminDashboard() {
         >
           Workouts
         </button>
+        <Link to="/admin/fms" className="nav-menu-item admin-nav-link">
+          FMS Correctives
+        </Link>
       </div>
 
       <div className="admin-controls">
@@ -513,7 +514,7 @@ function AdminDashboard() {
       )}
 
       <button
-        className="switch-identity-link acme-regular text-outline"
+        className="admin-signout-link acme-regular text-outline"
         onClick={signOut}
       >
         Sign Out

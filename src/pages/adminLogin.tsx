@@ -1,19 +1,26 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAdminAuth } from "../context/AdminAuthContext";
 
 function AdminLogin() {
-  const { signIn, session } = useAdminAuth();
+  const { signIn, signOut, session } = useAdminAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  if (session) {
-    navigate("/admin/dashboard", { replace: true });
-    return null;
-  }
+  // Landing on this page — whether via a fresh link click, or navigating
+  // back from deeper in the admin section — should always require a new
+  // login. Sign out any lingering in-memory session so the form actually
+  // shows, instead of silently trusting a session from earlier in this
+  // browser tab's lifetime.
+  useEffect(() => {
+    if (session) {
+      signOut();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -26,7 +33,11 @@ function AdminLogin() {
       setError(signInError);
       setSubmitting(false);
     } else {
-      navigate("/admin/dashboard", { replace: true });
+      // No `replace` here — this keeps the login page in browser history,
+      // so pressing back from the dashboard correctly returns to sign-in
+      // (which then forces a fresh login via the effect above) instead of
+      // skipping past it to whatever page came before.
+      navigate("/admin/dashboard");
     }
   }
 

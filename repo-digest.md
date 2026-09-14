@@ -1,6 +1,6 @@
 # Repository Digest
 
-Generated: 2026-09-14T02:36:59.841Z
+Generated: 2026-09-14T17:21:50.096Z
 Root: `WXC_Website`
 
 ## Directory Structure
@@ -8,6 +8,7 @@ Root: `WXC_Website`
 ```
 WXC_Website/
 ├── mileageSheets/
+│   ├── XC 2026 Mileage 9-14.pdf
 │   ├── XC 2026 Mileage 9-7.pdf
 │   ├── XC 2026 Workouts 9-11.pdf
 │   └── XC 2026 Workouts 9-8.pdf
@@ -20,6 +21,8 @@ WXC_Website/
 │   ├── fetch-tfrrs-ids-historical.mjs
 │   ├── fetch-tfrrs-ids.mjs
 │   ├── fetch-tfrrs-stats.mjs
+│   ├── migrate-core-to-supabase.mjs
+│   ├── migrate-fms-to-supabase.mjs
 │   └── migrate-roster-to-supabase.mjs
 ├── src/
 │   ├── assets/
@@ -45,33 +48,30 @@ WXC_Website/
 │   │   ├── AdminAuthContext.tsx
 │   │   └── UserContext.tsx
 │   ├── data/
-│   │   ├── distance_roster_17.json
-│   │   ├── distance_roster_18.json
-│   │   ├── distance_roster_19.json
-│   │   ├── distance_roster_20.json
-│   │   ├── distance_roster_21.json
-│   │   ├── distance_roster_22.json
-│   │   ├── distance_roster_23.json
-│   │   ├── distance_roster_24.json
-│   │   ├── distance_roster_25.json
-│   │   ├── distance_roster_26.json
-│   │   ├── roster_history.json
+│   │   ├── core_routine.json
+│   │   ├── fms_exercises.json
+│   │   ├── rawFMSassignments.ts
 │   │   └── tfrrs_stats.json
 │   ├── lib/
 │   │   ├── adminData.ts
+│   │   ├── aliasData.ts
 │   │   ├── athleteData.ts
+│   │   ├── coreData.ts
+│   │   ├── fmsData.ts
 │   │   ├── mileageData.ts
 │   │   ├── nameMatching.ts
 │   │   ├── pdfParser.ts
+│   │   ├── supabaseAdminClient.mjs
 │   │   ├── supabaseClient.ts
 │   │   └── workoutData.ts
 │   ├── pages/
 │   │   ├── about.tsx
 │   │   ├── adminDashboard.tsx
+│   │   ├── adminFmsAssignments.tsx
 │   │   ├── adminLogin.tsx
 │   │   ├── corePage.tsx
 │   │   ├── error.tsx
-│   │   ├── fms.tsx
+│   │   ├── fmsPage.tsx
 │   │   ├── home.tsx
 │   │   ├── liftingSheet.tsx
 │   │   ├── mileagePage.tsx
@@ -98,6 +98,10 @@ WXC_Website/
 
 ## File Contents
 
+### `mileageSheets/XC 2026 Mileage 9-14.pdf`
+
+_(binary or excluded — contents not inlined)_
+
 ### `mileageSheets/XC 2026 Mileage 9-7.pdf`
 
 _(binary or excluded — contents not inlined)_
@@ -118,19 +122,18 @@ _(binary or excluded — contents not inlined)_
  * fetch-roster-by-year.mjs
  *
  * Fetches men's + women's cross country rosters from go-knights.net for
- * each year listed in YEARS, and writes one file per season:
- *   src/data/distance_roster_{YY}.json   (e.g. distance_roster_25.json for 2025)
+ * each year listed in YEARS and upserts them DIRECTLY into the Supabase
+ * `athletes` table — no local JSON files.
  *
- * These are separate from distance_roster_26.json (the current-season login
- * roster used by identity lookup) — this script is for building out
- * additional selectable seasons.
+ * Handles two page formats:
+ *  - Modern Sidearm: an accessible <table>.
+ *  - Legacy Sidearm (e.g. 2014 and earlier): a card list with no table.
  *
  * Usage: node scripts/fetch-roster-by-year.mjs
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import * as cheerio from "cheerio";
+import { getAuthenticatedSupabaseClient } from "./lib/supabaseAdminClient.mjs";
 
 // Edit this list to add/remove seasons you want generated.
 const YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025];
@@ -148,24 +151,9 @@ const TEAMS = [
 
 const DELAY_MS = 700;
 
-const CLASS_YEAR_MAP = {
-  freshman: "Fr.",
-  sophomore: "So.",
-  junior: "Jr.",
-  senior: "Sr.",
-  graduate: "Gr.",
-};
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
-function normalizeClassYear(raw) {
-  const cleaned = raw.trim().replace(/\.$/, "").toLowerCase();
-  return CLASS_YEAR_MAP[cleaned] || raw.trim();
-}
-
-// ---------- MODERN TABLE PARSER ----------
 
 function parseModernTable($, team) {
   const athletes = [];
@@ -193,32 +181,25 @@ function parseModernTable($, team) {
         const href = link.attr("href") || "";
         const id = href.split("/").filter(Boolean).pop() || "";
 
-        const classYear = $(cells[1]).text().trim();
         const hometownRaw = $(cells[2]).text().trim();
         const [hometown, highSchool] = hometownRaw
           .split("/")
           .map((s) => s.trim());
 
-        if (!name) return;
+        if (!name || !id) return;
 
         athletes.push({
           id,
           name,
           team,
-          year: normalizeClassYear(classYear),
           hometown: hometown || "",
           highSchool: highSchool || "",
-          profileUrl: href.startsWith("http")
-            ? href
-            : `https://go-knights.net${href}`,
         });
       });
   });
 
   return athletes;
 }
-
-// ---------- LEGACY CARD PARSER (older seasons, e.g. 2014-style pages) ----------
 
 function parseLegacyCards($, team) {
   const athletes = [];
@@ -254,12 +235,8 @@ function parseLegacyCards($, team) {
       id,
       name,
       team,
-      year: normalizeClassYear(classMatch[1]),
       hometown: classMatch[2].trim(),
       highSchool: classMatch[3].trim(),
-      profileUrl: href.startsWith("http")
-        ? href
-        : `https://go-knights.net${href}`,
     });
   });
 
@@ -288,6 +265,8 @@ async function fetchTeamForYear({ baseUrl, team }, year) {
 }
 
 async function main() {
+  const supabase = await getAuthenticatedSupabaseClient();
+
   for (const year of YEARS) {
     console.log(`\n=== Season ${year} ===`);
     const allAthletes = [];
@@ -301,22 +280,49 @@ async function main() {
     }
 
     if (allAthletes.length === 0) {
-      console.warn(`⚠️  No athletes found for ${year} — skipping file write.`);
+      console.warn(`⚠️  No athletes found for ${year} — skipping.`);
       continue;
     }
 
-    const shortYear = String(year % 100).padStart(2, "0");
-    const outPath = path.resolve(`src/data/distance_roster_${shortYear}.json`);
+    // Preserve any existing tfrrs_id already stored for this season.
+    const { data: existing, error: fetchError } = await supabase
+      .from("athletes")
+      .select("id, tfrrs_id")
+      .eq("season", year);
 
-    const output = {
-      generatedAt: new Date().toISOString(),
+    if (fetchError) {
+      console.error(
+        `  Failed to read existing rows for ${year}: ${fetchError.message}`,
+      );
+      continue;
+    }
+
+    const existingTfrrsById = new Map(
+      (existing ?? []).map((a) => [a.id, a.tfrrs_id]),
+    );
+
+    const payload = allAthletes.map((a) => ({
+      id: a.id,
       season: year,
-      sources: TEAMS.map((t) => `${t.baseUrl}/${year}`),
-      athletes: allAthletes,
-    };
+      name: a.name,
+      team: a.team,
+      hometown: a.hometown || null,
+      high_school: a.highSchool || null,
+      tfrrs_id: existingTfrrsById.get(a.id) ?? null,
+    }));
 
-    fs.writeFileSync(outPath, JSON.stringify(output, null, 2), "utf8");
-    console.log(`✅ Wrote ${allAthletes.length} athletes to ${outPath}`);
+    const { error, count } = await supabase
+      .from("athletes")
+      .upsert(payload, { onConflict: "id,season", count: "exact" });
+
+    if (error) {
+      console.error(`  Failed to upsert ${year}: ${error.message}`);
+      continue;
+    }
+
+    console.log(
+      `✅ Upserted ${count ?? payload.length} athletes for season ${year}`,
+    );
   }
 }
 
@@ -637,24 +643,20 @@ main().catch((err) => {
  * fetch-roster.mjs
  *
  * Fetches the current-season men's and women's cross country rosters from
- * go-knights.net and writes structured JSON to src/data/distance_roster_26.json.
+ * go-knights.net and upserts them DIRECTLY into the Supabase `athletes`
+ * table — no local JSON file involved.
  *
- * IMPORTANT: go-knights.net's no-year roster URL doesn't always point at the
- * newest season for every team (e.g. it kept showing 2025 for women's after
- * 2026 rosters existed). Explicit year URLs are used below instead of relying
- * on the default, so this always pulls the season you actually specify.
- *
- * Merges into any existing output file rather than overwriting it, so
- * previously-matched `tfrrsId` fields (from fetch-tfrrs-ids.mjs) aren't lost.
+ * Preserves any existing tfrrs_id already stored for an athlete, so
+ * re-running this to pick up new/changed roster entries never wipes out
+ * previously-matched TFRRS IDs.
  *
  * Update CURRENT_SEASON below at the start of each new season.
  *
  * Usage: node scripts/fetch-roster.mjs
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import * as cheerio from "cheerio";
+import { getAuthenticatedSupabaseClient } from "./lib/supabaseAdminClient.mjs";
 
 const CURRENT_SEASON = 2026;
 
@@ -668,8 +670,6 @@ const TEAMS = [
     team: "womens-cross-country",
   },
 ];
-
-const OUT_PATH = path.resolve("src/data/distance_roster_26.json");
 
 async function fetchTeamRoster({ url, team }) {
   const res = await fetch(url, {
@@ -692,7 +692,6 @@ async function fetchTeamRoster({ url, team }) {
     const looksLikeRoster =
       /academic year/i.test(headerText) &&
       /(hometown|high school)/i.test(headerText);
-
     if (!looksLikeRoster) return;
 
     $(table)
@@ -707,25 +706,19 @@ async function fetchTeamRoster({ url, team }) {
         const href = link.attr("href") || "";
         const id = href.split("/").filter(Boolean).pop() || "";
 
-        const year = $(cells[1]).text().trim();
-
         const hometownRaw = $(cells[2]).text().trim();
         const [hometown, highSchool] = hometownRaw
           .split("/")
           .map((s) => s.trim());
 
-        if (!name) return;
+        if (!name || !id) return;
 
         athletes.push({
           id,
           name,
           team,
-          year,
           hometown: hometown || "",
           highSchool: highSchool || "",
-          profileUrl: href.startsWith("http")
-            ? href
-            : `https://go-knights.net${href}`,
         });
       });
   });
@@ -733,20 +726,10 @@ async function fetchTeamRoster({ url, team }) {
   return athletes;
 }
 
-function loadExistingAthletes() {
-  if (!fs.existsSync(OUT_PATH)) return [];
-  try {
-    const existing = JSON.parse(fs.readFileSync(OUT_PATH, "utf8"));
-    return existing.athletes || [];
-  } catch {
-    console.warn("⚠️  Could not parse existing output file — starting fresh.");
-    return [];
-  }
-}
-
 async function main() {
-  const freshAthletes = [];
+  const supabase = await getAuthenticatedSupabaseClient();
 
+  const freshAthletes = [];
   for (const teamConfig of TEAMS) {
     console.log(`Fetching ${teamConfig.team} (${CURRENT_SEASON})...`);
     const athletes = await fetchTeamRoster(teamConfig);
@@ -756,37 +739,47 @@ async function main() {
 
   if (freshAthletes.length === 0) {
     console.error(
-      "⚠️  No athletes found. The site's table structure may have changed — " +
-        "inspect the page HTML and update the selectors in this script.",
+      "⚠️  No athletes found. The site's table structure may have changed — inspect and update selectors.",
     );
     process.exit(1);
   }
 
-  // Merge with existing data so previously-matched tfrrsId fields survive.
-  const existingAthletes = loadExistingAthletes();
-  const existingById = new Map(existingAthletes.map((a) => [a.id, a]));
+  // Preserve existing tfrrs_id for anyone already in Supabase for this season.
+  const { data: existing, error: fetchError } = await supabase
+    .from("athletes")
+    .select("id, tfrrs_id")
+    .eq("season", CURRENT_SEASON);
 
-  const mergedAthletes = freshAthletes.map((fresh) => {
-    const prior = existingById.get(fresh.id);
-    return prior ? { ...fresh, tfrrsId: prior.tfrrsId } : fresh;
-  });
+  if (fetchError) throw new Error(fetchError.message);
 
-  const carriedOverCount = mergedAthletes.filter((a) => a.tfrrsId).length;
+  const existingTfrrsById = new Map(
+    (existing ?? []).map((a) => [a.id, a.tfrrs_id]),
+  );
 
-  const output = {
-    generatedAt: new Date().toISOString(),
+  const payload = freshAthletes.map((a) => ({
+    id: a.id,
     season: CURRENT_SEASON,
-    sources: TEAMS.map((t) => t.url),
-    athletes: mergedAthletes,
-  };
+    name: a.name,
+    team: a.team,
+    hometown: a.hometown || null,
+    high_school: a.highSchool || null,
+    tfrrs_id: existingTfrrsById.get(a.id) ?? null,
+  }));
 
-  fs.mkdirSync(path.dirname(OUT_PATH), { recursive: true });
-  fs.writeFileSync(OUT_PATH, JSON.stringify(output, null, 2), "utf8");
+  const { error, count } = await supabase
+    .from("athletes")
+    .upsert(payload, { onConflict: "id,season", count: "exact" });
 
-  console.log(`\n✅ Wrote ${mergedAthletes.length} athletes to ${OUT_PATH}`);
-  console.log(`   ${carriedOverCount} carried over an existing tfrrsId match.`);
+  if (error) throw new Error(error.message);
+
+  const carriedOver = payload.filter((a) => a.tfrrs_id).length;
+
   console.log(
-    `   ${mergedAthletes.length - carriedOverCount} still need tfrrsId — run fetch-tfrrs-ids.mjs.`,
+    `\n✅ Upserted ${count ?? payload.length} athletes into Supabase (season ${CURRENT_SEASON}).`,
+  );
+  console.log(`   ${carriedOver} carried over an existing tfrrs_id.`);
+  console.log(
+    `   ${payload.length - carriedOver} still need tfrrs_id — run fetch-tfrrs-ids.mjs.`,
   );
 }
 
@@ -1034,25 +1027,16 @@ main().catch((err) => {
 /**
  * fetch-tfrrs-ids-historical.mjs
  *
- * Unlike fetch-tfrrs-ids-all-years.mjs (which only reads the CURRENT TFRRS
- * team roster — limited to currently-eligible athletes), this script reads
- * the season dropdown on the TFRRS team page itself, discovers every
- * available season's `config_hnd` value, and fetches EACH season's roster
- * snapshot. Since TFRRS assigns one permanent ID per athlete across their
- * whole career, this surfaces real tfrrsIds for graduated athletes who
- * don't appear on the current team page at all.
- *
- * Then applies the resulting name -> tfrrsId lookup to every
- * src/data/distance_roster_*.json file.
+ * Reads TFRRS's season dropdown on each team page, fetches every historical
+ * season's roster snapshot (TFRRS assigns one permanent ID per athlete
+ * across their career), and applies the resulting name -> tfrrsId lookup to
+ * EVERY row in Supabase's `athletes` table across ALL seasons.
  *
  * Usage: node scripts/fetch-tfrrs-ids-historical.mjs
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import * as cheerio from "cheerio";
-
-const DATA_DIR = path.resolve("src/data");
+import { getAuthenticatedSupabaseClient } from "./lib/supabaseAdminClient.mjs";
 
 const TFRRS_TEAMS = [
   {
@@ -1067,9 +1051,8 @@ const TFRRS_TEAMS = [
 
 const DELAY_MS = 600;
 
+// IMPORTANT: merge in any additional overrides you've added since this was last synced.
 const MANUAL_OVERRIDES = {
-  "philip dahlen": "9444002",
-  "adam wilke": "9444015",
   "philip dahlen": "9444002",
   "adam wilke": "9444015",
   "cameron noreen": "8271797",
@@ -1091,30 +1074,19 @@ function normalize(name) {
     .trim();
 }
 
-// ---------- Discover every "Cross Country" season option on the page ----------
-
 function findXcSeasonOptions($) {
   const options = [];
-
   $("select option").each((_, el) => {
     const value = $(el).attr("value");
     const text = $(el).text().trim();
     if (!value) return;
-    // Only care about Cross Country seasons — indoor/outdoor track rosters
-    // aren't relevant to your distance-roster identity data.
-    if (/cross country/i.test(text)) {
-      options.push({ value, text });
-    }
+    if (/cross country/i.test(text)) options.push({ value, text });
   });
-
   return options;
 }
 
-// ---------- Parse a roster table (same shape as the current-page parser) ----------
-
 function parseRosterTable($) {
   const entries = [];
-
   $("table").each((_, table) => {
     const headerText = $(table)
       .find("th")
@@ -1129,7 +1101,7 @@ function parseRosterTable($) {
         const cells = $(row).find("td");
         if (cells.length < 1) return;
         const link = $(cells[0]).find("a").first();
-        const rawName = link.text().trim(); // "Last, First"
+        const rawName = link.text().trim();
         const href = link.attr("href") || "";
         const tfrrsId = href.split("/").filter(Boolean)[1] || "";
 
@@ -1144,7 +1116,6 @@ function parseRosterTable($) {
         });
       });
   });
-
   return entries;
 }
 
@@ -1160,56 +1131,28 @@ async function fetchPage(url) {
   return cheerio.load(html);
 }
 
-// ---------- Roster file helpers ----------
-
-function findRosterFiles() {
-  return fs
-    .readdirSync(DATA_DIR)
-    .filter((f) => /^distance_roster_\d+\.json$/.test(f))
-    .map((f) => path.join(DATA_DIR, f));
-}
-
-function loadRoster(filePath) {
-  return JSON.parse(fs.readFileSync(filePath, "utf8"));
-}
-
-function saveRoster(filePath, data) {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
-}
-
 async function main() {
+  const supabase = await getAuthenticatedSupabaseClient();
+
   const nameToId = new Map();
   for (const [name, id] of Object.entries(MANUAL_OVERRIDES)) {
     nameToId.set(name, id);
   }
 
-  // ---------- Step 1: discover + fetch every historical season per team ----------
   for (const { url, team } of TFRRS_TEAMS) {
     console.log(`\n=== ${team} ===`);
-    console.log(`Fetching base page to discover season options: ${url}`);
     const $base = await fetchPage(url);
     if (!$base) continue;
 
     const seasonOptions = findXcSeasonOptions($base);
-    console.log(
-      `Found ${seasonOptions.length} Cross Country season option(s):`,
-    );
-    seasonOptions.forEach((o) =>
-      console.log(`   - ${o.text} (config_hnd=${o.value})`),
-    );
+    console.log(`Found ${seasonOptions.length} Cross Country season option(s)`);
 
-    // Also parse the base page itself (covers the current/default season).
     const baseEntries = parseRosterTable($base);
-    let addedFromBase = 0;
-    for (const e of baseEntries) {
-      if (!nameToId.has(e.normalizedName)) {
+    baseEntries.forEach((e) => {
+      if (!nameToId.has(e.normalizedName))
         nameToId.set(e.normalizedName, e.tfrrsId);
-        addedFromBase++;
-      }
-    }
-    console.log(`Base page: +${addedFromBase} new names`);
+    });
 
-    // Fetch each historical season snapshot.
     const cleanBaseUrl = url.replace(/\.html$/, "");
     for (const { value, text } of seasonOptions) {
       const seasonUrl = `${cleanBaseUrl}?config_hnd=${value}`;
@@ -1219,66 +1162,61 @@ async function main() {
 
       const entries = parseRosterTable($season);
       let added = 0;
-      for (const e of entries) {
+      entries.forEach((e) => {
         if (!nameToId.has(e.normalizedName)) {
           nameToId.set(e.normalizedName, e.tfrrsId);
           added++;
         }
-      }
-      console.log(`  ${text}: ${entries.length} athletes, +${added} new names`);
+      });
+      console.log(`  ${text}: ${entries.length} athletes, +${added} new`);
     }
   }
 
-  console.log(
-    `\nTotal known name -> tfrrsId matches after historical crawl: ${nameToId.size}`,
-  );
+  console.log(`\nTotal known name -> tfrrsId matches: ${nameToId.size}`);
 
-  // ---------- Step 2: apply to every distance_roster_*.json ----------
-  const rosterFiles = findRosterFiles();
-  let grandTotalMatched = 0;
-  let grandTotalAthletes = 0;
+  const { data: allAthletes, error: fetchError } = await supabase
+    .from("athletes")
+    .select("id, season, name, tfrrs_id");
+
+  if (fetchError) throw new Error(fetchError.message);
+
+  let matched = 0;
   const stillUnmatched = new Set();
+  const updates = [];
 
-  console.log(`\nApplying matches to ${rosterFiles.length} roster file(s)...`);
-
-  for (const filePath of rosterFiles) {
-    const data = loadRoster(filePath);
-    let matchedInFile = 0;
-
-    for (const athlete of data.athletes) {
-      grandTotalAthletes++;
-      if (athlete.tfrrsId) {
-        matchedInFile++;
-        continue;
-      }
-      const id = nameToId.get(normalize(athlete.name));
-      if (id) {
-        athlete.tfrrsId = id;
-        matchedInFile++;
-      } else {
-        stillUnmatched.add(athlete.name);
-      }
+  for (const athlete of allAthletes) {
+    if (athlete.tfrrs_id) {
+      matched++;
+      continue;
     }
+    const id = nameToId.get(normalize(athlete.name));
+    if (id) {
+      matched++;
+      updates.push({ id: athlete.id, season: athlete.season, tfrrs_id: id });
+    } else {
+      stillUnmatched.add(athlete.name);
+    }
+  }
 
-    saveRoster(filePath, data);
-    grandTotalMatched += matchedInFile;
-    console.log(
-      `${path.basename(filePath)}: ${matchedInFile}/${data.athletes.length} matched`,
-    );
+  console.log(`\nApplying ${updates.length} updates to Supabase...`);
+  for (const update of updates) {
+    const { error } = await supabase
+      .from("athletes")
+      .update({ tfrrs_id: update.tfrrs_id })
+      .eq("id", update.id)
+      .eq("season", update.season);
+    if (error)
+      console.error(
+        `Failed to update ${update.id}/${update.season}: ${error.message}`,
+      );
   }
 
   console.log(
-    `\n✅ Overall: ${grandTotalMatched}/${grandTotalAthletes} athlete-season entries now have a tfrrsId.`,
+    `\n✅ Overall: ${matched}/${allAthletes.length} rows now have a tfrrs_id.`,
   );
-
   if (stillUnmatched.size > 0) {
     console.log(`\n⚠️  ${stillUnmatched.size} name(s) still unmatched:`);
     [...stillUnmatched].sort().forEach((n) => console.log(`   - ${n}`));
-    console.log(
-      "\nThese may be pre-2010ish athletes (before TFRRS's own data goes back), " +
-        "name-spelling mismatches, or athletes TFRRS never had results for. " +
-        "Add confirmed matches to MANUAL_OVERRIDES.",
-    );
   }
 }
 
@@ -1296,19 +1234,16 @@ main().catch((err) => {
 /**
  * fetch-tfrrs-ids.mjs
  *
- * Matches athletes in src/data/distance_roster.json against TFRRS team
- * roster pages, and adds a `tfrrsId` field to each matched athlete.
- *
- * TFRRS lists names as "Last, First" — this does a normalized match against
- * your "First Last" roster names. Mismatches (nicknames, spelling
- * differences) are logged so you can add manual overrides below.
+ * Matches current-season athletes in Supabase's `athletes` table against
+ * the current TFRRS team roster pages, and writes tfrrs_id back to Supabase.
  *
  * Usage: node scripts/fetch-tfrrs-ids.mjs
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import * as cheerio from "cheerio";
+import { getAuthenticatedSupabaseClient } from "./lib/supabaseAdminClient.mjs";
+
+const CURRENT_SEASON = 2026;
 
 const TFRRS_TEAMS = [
   {
@@ -1321,19 +1256,23 @@ const TFRRS_TEAMS = [
   },
 ];
 
-const ROSTER_PATH = path.resolve("src/data/distance_roster_26.json");
-
-// Add entries here when automatic matching fails due to spelling/nickname
-// differences between go-knights.net and TFRRS. Key = your roster id.
+// Confirmed manual matches from earlier spelling/nickname mismatches.
+// IMPORTANT: if you've added more overrides since, merge them in here.
 const MANUAL_OVERRIDES = {
-  17015: "9444002", // e.g. Philip Dahlen -> TFRRS Phillip Dahlen
-  17028: "9444015", // e.g. Adam Wilke -> TFRRS Adam Wilkie
+  "philip dahlen": "9444002",
+  "adam wilke": "9444015",
+  "cameron noreen": "8271797",
+  "alex childs": "6915220",
+  "maria colette choi lei": "9017626",
+  "benjamin rhodes": "7699569",
+  "madison prier": "8352882",
 };
 
 function normalize(name) {
   return name
     .toLowerCase()
     .replace(/[^a-z\s]/g, "")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -1361,9 +1300,9 @@ async function fetchTfrrsRoster(url) {
         const cells = $(row).find("td");
         if (cells.length < 1) return;
         const link = $(cells[0]).find("a").first();
-        const rawName = link.text().trim(); // "Last, First"
+        const rawName = link.text().trim();
         const href = link.attr("href") || "";
-        const tfrrsId = href.split("/").filter(Boolean)[1] || ""; // /athletes/{id}/...
+        const tfrrsId = href.split("/").filter(Boolean)[1] || "";
 
         if (!rawName || !tfrrsId) return;
 
@@ -1373,7 +1312,6 @@ async function fetchTfrrsRoster(url) {
         entries.push({
           tfrrsId,
           normalizedName: normalize(`${first} ${last}`),
-          rawName,
         });
       });
   });
@@ -1382,7 +1320,7 @@ async function fetchTfrrsRoster(url) {
 }
 
 async function main() {
-  const roster = JSON.parse(fs.readFileSync(ROSTER_PATH, "utf8"));
+  const supabase = await getAuthenticatedSupabaseClient();
 
   const allTfrrsEntries = [];
   for (const { url, team } of TFRRS_TEAMS) {
@@ -1392,39 +1330,59 @@ async function main() {
     allTfrrsEntries.push(...entries);
   }
 
+  const { data: roster, error: fetchError } = await supabase
+    .from("athletes")
+    .select("id, name, tfrrs_id")
+    .eq("season", CURRENT_SEASON);
+
+  if (fetchError) throw new Error(fetchError.message);
+
   let matched = 0;
   const unmatched = [];
+  const updates = [];
 
-  for (const athlete of roster.athletes) {
-    if (MANUAL_OVERRIDES[athlete.id]) {
-      athlete.tfrrsId = MANUAL_OVERRIDES[athlete.id];
-      matched++;
-      continue;
+  for (const athlete of roster) {
+    let tfrrsId = athlete.tfrrs_id;
+
+    if (!tfrrsId) {
+      if (MANUAL_OVERRIDES[normalize(athlete.name)]) {
+        tfrrsId = MANUAL_OVERRIDES[normalize(athlete.name)];
+      } else {
+        const match = allTfrrsEntries.find(
+          (e) => e.normalizedName === normalize(athlete.name),
+        );
+        if (match) tfrrsId = match.tfrrsId;
+      }
     }
 
-    const target = normalize(athlete.name);
-    const match = allTfrrsEntries.find((e) => e.normalizedName === target);
-
-    if (match) {
-      athlete.tfrrsId = match.tfrrsId;
+    if (tfrrsId) {
       matched++;
+      if (tfrrsId !== athlete.tfrrs_id) {
+        updates.push({ id: athlete.id, tfrrs_id: tfrrsId });
+      }
     } else {
       unmatched.push(athlete.name);
     }
   }
 
-  fs.writeFileSync(ROSTER_PATH, JSON.stringify(roster, null, 2), "utf8");
+  for (const update of updates) {
+    const { error } = await supabase
+      .from("athletes")
+      .update({ tfrrs_id: update.tfrrs_id })
+      .eq("id", update.id)
+      .eq("season", CURRENT_SEASON);
+    if (error) console.error(`Failed to update ${update.id}: ${error.message}`);
+  }
 
-  console.log(`\n✅ Matched ${matched}/${roster.athletes.length} athletes.`);
+  console.log(
+    `\n✅ Matched ${matched}/${roster.length} athletes. Updated ${updates.length} rows in Supabase.`,
+  );
   if (unmatched.length > 0) {
     console.log(
       `\n⚠️  Could not match ${unmatched.length} athletes automatically:`,
     );
     unmatched.forEach((n) => console.log(`   - ${n}`));
-    console.log(
-      "\nFind their TFRRS profile manually (search their name on tfrrs.org), " +
-        "grab the numeric ID from the profile URL, and add it to MANUAL_OVERRIDES in this script.",
-    );
+    console.log("\nAdd confirmed matches to MANUAL_OVERRIDES in this script.");
   }
 }
 
@@ -1442,21 +1400,15 @@ main().catch((err) => {
 /**
  * fetch-tfrrs-stats.mjs
  *
- * Scans EVERY src/data/distance_roster_*.json file, collects every unique
- * tfrrsId across all seasons (the same real person may appear in several
- * yearly files but always shares one tfrrsId — TFRRS IDs are stable across
- * a career, unlike go-knights' per-season roster IDs), and fetches each
- * unique athlete's "College Bests" table exactly once.
+ * Reads every unique tfrrs_id from Supabase's `athletes` table (across all
+ * seasons — the same person may appear multiple times but shares one
+ * tfrrs_id), fetches each unique athlete's "College Bests" table once, and
+ * writes src/data/tfrrs_stats.json keyed by tfrrs_id.
  *
- * Writes src/data/tfrrs_stats.json KEYED BY tfrrsId (not by roster id),
- * so any season's athlete record can look up its own stats via
- * athlete.tfrrsId, regardless of which year's file it came from.
- *
- * Supports two tfrrsId shapes:
- *   - A plain numeric ID (e.g. "8271797") -> builds the standard
- *     tfrrs.org/athletes/{id}/Wartburg/{Name}.html URL.
- *   - A full URL already (for TFRRS's alternate hashed-profile format,
- *     e.g. "https://www.tfrrs.org/athlete/{hash}.html") -> used as-is.
+ * Note: this script's OUTPUT is still a local JSON file, since your live
+ * app (tfrrsStats.tsx) already reads it directly and works correctly.
+ * Only the INPUT (which athletes to fetch) now comes from Supabase instead
+ * of scanning local roster files.
  *
  * Usage: node scripts/fetch-tfrrs-stats.mjs
  */
@@ -1464,8 +1416,8 @@ main().catch((err) => {
 import fs from "node:fs";
 import path from "node:path";
 import * as cheerio from "cheerio";
+import { getAuthenticatedSupabaseClient } from "./lib/supabaseAdminClient.mjs";
 
-const DATA_DIR = path.resolve("src/data");
 const OUT_PATH = path.resolve("src/data/tfrrs_stats.json");
 const DELAY_MS = 700;
 
@@ -1473,18 +1425,8 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function findRosterFiles() {
-  return fs
-    .readdirSync(DATA_DIR)
-    .filter((f) => /^distance_roster_\d+\.json$/.test(f))
-    .map((f) => path.join(DATA_DIR, f));
-}
-
 function resolveProfileUrl(tfrrsId, name) {
-  if (tfrrsId.startsWith("http")) {
-    // Hashed-format profile — already a full, usable URL.
-    return tfrrsId;
-  }
+  if (tfrrsId.startsWith("http")) return tfrrsId;
   const slug = name.replace(/\s+/g, "_");
   return `https://www.tfrrs.org/athletes/${tfrrsId}/Wartburg/${slug}.html`;
 }
@@ -1537,30 +1479,24 @@ async function fetchAthleteBests(tfrrsId, name) {
 }
 
 async function main() {
-  const rosterFiles = findRosterFiles();
-  if (rosterFiles.length === 0) {
-    console.error(`No distance_roster_*.json files found in ${DATA_DIR}`);
-    process.exit(1);
-  }
+  const supabase = await getAuthenticatedSupabaseClient();
 
-  console.log(
-    `Scanning ${rosterFiles.length} roster file(s) for unique tfrrsIds...`,
-  );
+  const { data: rows, error } = await supabase
+    .from("athletes")
+    .select("tfrrs_id, name")
+    .not("tfrrs_id", "is", null);
 
-  // Map keyed by tfrrsId -> a representative display name (whichever we see first).
+  if (error) throw new Error(error.message);
+
   const uniqueAthletes = new Map();
-
-  for (const filePath of rosterFiles) {
-    const data = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    for (const athlete of data.athletes) {
-      if (athlete.tfrrsId && !uniqueAthletes.has(athlete.tfrrsId)) {
-        uniqueAthletes.set(athlete.tfrrsId, athlete.name);
-      }
+  for (const row of rows) {
+    if (!uniqueAthletes.has(row.tfrrs_id)) {
+      uniqueAthletes.set(row.tfrrs_id, row.name);
     }
   }
 
   console.log(
-    `Found ${uniqueAthletes.size} unique athletes (by tfrrsId) across all seasons.\n`,
+    `Found ${uniqueAthletes.size} unique athletes (by tfrrs_id) in Supabase.\n`,
   );
 
   const stats = {};
@@ -1594,15 +1530,152 @@ async function main() {
   fs.writeFileSync(OUT_PATH, JSON.stringify(stats, null, 2), "utf8");
 
   console.log(`\n✅ Wrote stats for ${success} athletes to ${OUT_PATH}`);
-  if (failed > 0) {
-    console.log(
-      `⚠️  ${failed} athletes had no data — check their tfrrsId manually.`,
-    );
-  }
+  if (failed > 0) console.log(`⚠️  ${failed} athletes had no data.`);
 }
 
 main().catch((err) => {
   console.error("Failed to fetch TFRRS stats:", err);
+  process.exit(1);
+});
+
+```
+
+### `scripts/migrate-core-to-supabase.mjs`
+
+```javascript
+#!/usr/bin/env node
+/**
+ * migrate-core-to-supabase.mjs
+ *
+ * One-time migration: pushes src/data/core_routine.json into Supabase
+ * (core_exercises + site_content tables). Run once, then corePage.tsx
+ * reads from Supabase instead of the local JSON file.
+ *
+ * Usage: node scripts/migrate-core-to-supabase.mjs
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import { getAuthenticatedSupabaseClient } from "../src/lib/supabaseAdminClient.mjs";
+
+const JSON_PATH = path.resolve("src/data/core_routine.json");
+
+async function main() {
+  const supabase = await getAuthenticatedSupabaseClient();
+  const routine = JSON.parse(fs.readFileSync(JSON_PATH, "utf8"));
+
+  const { error: introError } = await supabase
+    .from("site_content")
+    .upsert({ key: "core_intro", value: routine.intro }, { onConflict: "key" });
+
+  if (introError)
+    throw new Error(`Failed to write intro: ${introError.message}`);
+  console.log("✅ Wrote core_intro to site_content");
+
+  const rows = [];
+  let dayOrder = 0;
+
+  for (const [day, { note, exercises }] of Object.entries(routine.days)) {
+    dayOrder++;
+    exercises.forEach((ex, position) => {
+      rows.push({
+        day,
+        day_order: dayOrder,
+        day_note: note,
+        position,
+        name: ex.name,
+        url: ex.url,
+      });
+    });
+  }
+
+  // Wipe and re-insert rather than upsert — there's no natural unique key
+  // per exercise row (names repeat across days), so a clean replace is safer.
+  const { error: deleteError } = await supabase
+    .from("core_exercises")
+    .delete()
+    .neq("id", "00000000-0000-0000-0000-000000000000"); // matches all rows
+
+  if (deleteError)
+    throw new Error(`Failed to clear existing rows: ${deleteError.message}`);
+
+  const { error: insertError, count } = await supabase
+    .from("core_exercises")
+    .insert(rows, { count: "exact" });
+
+  if (insertError)
+    throw new Error(`Failed to insert exercises: ${insertError.message}`);
+
+  console.log(
+    `✅ Inserted ${count ?? rows.length} exercise rows across ${dayOrder} days.`,
+  );
+}
+
+main().catch((err) => {
+  console.error("Failed to migrate core routine:", err);
+  process.exit(1);
+});
+
+```
+
+### `scripts/migrate-fms-to-supabase.mjs`
+
+```javascript
+#!/usr/bin/env node
+/**
+ * migrate-fms-to-supabase.mjs
+ *
+ * One-time migration: pushes src/data/fms_exercises.json into Supabase's
+ * fms_exercises table.
+ *
+ * Usage: node scripts/migrate-fms-to-supabase.mjs
+ */
+
+import fs from "node:fs";
+import path from "node:path";
+import { getAuthenticatedSupabaseClient } from "../src/lib/supabaseAdminClient.mjs";
+
+const JSON_PATH = path.resolve("src/data/fms_exercises.json");
+
+async function main() {
+  const supabase = await getAuthenticatedSupabaseClient();
+  const data = JSON.parse(fs.readFileSync(JSON_PATH, "utf8"));
+
+  const rows = [];
+  for (const [category, phases] of Object.entries(data)) {
+    for (const [phase, exercises] of Object.entries(phases)) {
+      exercises.forEach((ex, position) => {
+        rows.push({
+          category,
+          phase,
+          position,
+          name: ex.name,
+          reps: ex.reps || null,
+          url: ex.url || null,
+        });
+      });
+    }
+  }
+
+  const { error: deleteError } = await supabase
+    .from("fms_exercises")
+    .delete()
+    .neq("id", "00000000-0000-0000-0000-000000000000");
+
+  if (deleteError)
+    throw new Error(`Failed to clear existing rows: ${deleteError.message}`);
+
+  const { error, count } = await supabase
+    .from("fms_exercises")
+    .insert(rows, { count: "exact" });
+
+  if (error) throw new Error(error.message);
+
+  console.log(`✅ Inserted ${count ?? rows.length} exercise rows.`);
+}
+
+main().catch((err) => {
+  console.error("Failed to migrate FMS exercises:", err);
   process.exit(1);
 });
 
@@ -1684,6 +1757,7 @@ async function main() {
       team: a.team,
       hometown: a.hometown || null,
       high_school: a.highSchool || null,
+      tfrrs_id: a.tfrrsId || null,
     }));
 
     const { error, count } = await supabase
@@ -2186,6 +2260,7 @@ export interface Athlete {
   team: string;
   hometown: string | null;
   highSchool: string | null;
+  tfrrsId: string | null;
 }
 
 interface UserContextValue {
@@ -2215,7 +2290,6 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [athleteLoading, setAthleteLoading] = useState(false);
   const [availableSeasons, setAvailableSeasons] = useState<number[]>([]);
 
-  // Fetch the list of seasons that exist in the athletes table, once on mount.
   useEffect(() => {
     let cancelled = false;
 
@@ -2235,12 +2309,9 @@ export function UserProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Fetch the specific athlete record whenever the selected id/season changes.
-  // This runs on every page load if a session is already stored, which is
-  // why athleteLoading exists — consumers need to know "still checking" vs
-  // "confirmed nobody's selected" so they don't redirect/flash prematurely.
   useEffect(() => {
     if (!athleteId || !season) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAthlete(null);
       return;
     }
@@ -2250,7 +2321,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
     supabase
       .from("athletes")
-      .select("id, season, name, team, hometown, high_school")
+      .select("id, season, name, team, hometown, high_school, tfrrs_id")
       .eq("id", athleteId)
       .eq("season", season)
       .maybeSingle()
@@ -2266,6 +2337,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
             team: data.team,
             hometown: data.hometown,
             highSchool: data.high_school,
+            tfrrsId: data.tfrrs_id,
           });
         }
         setAthleteLoading(false);
@@ -2319,49 +2391,199 @@ export function useUser() {
 
 ```
 
-### `src/data/distance_roster_17.json`
+### `src/data/core_routine.json`
 
 _(binary or excluded — contents not inlined)_
 
-### `src/data/distance_roster_18.json`
+### `src/data/fms_exercises.json`
 
 _(binary or excluded — contents not inlined)_
 
-### `src/data/distance_roster_19.json`
+### `src/data/rawFMSassignments.ts`
 
-_(binary or excluded — contents not inlined)_
+```typescript
+export interface RawFmsAssignment {
+  rawName: string;
+  category: string;
+  variant: "All" | "6";
+}
 
-### `src/data/distance_roster_20.json`
+export const RAW_FMS_ASSIGNMENTS: RawFmsAssignment[] = [
+  { rawName: "Philip Dahlen", category: "Trunk Stability", variant: "All" },
+  { rawName: "Leah McDonald", category: "Trunk Stability", variant: "All" },
+  { rawName: "Grace Vortherms", category: "Trunk Stability", variant: "All" },
+  { rawName: "Julia Burney", category: "Trunk Stability", variant: "All" },
+  { rawName: "Peyton Morey", category: "Trunk Stability", variant: "All" },
+  { rawName: "Maya Zopel", category: "Trunk Stability", variant: "All" },
+  { rawName: "Alyssa Higgins", category: "Trunk Stability", variant: "All" },
+  { rawName: "Makenna Hetrick", category: "Trunk Stability", variant: "All" },
+  { rawName: "Zoe Cordes", category: "Trunk Stability", variant: "All" },
+  { rawName: "Stella Rose", category: "Trunk Stability", variant: "All" },
+  { rawName: "Jillian Borgelt", category: "Trunk Stability", variant: "All" },
+  { rawName: "Zaya Peirce", category: "Trunk Stability", variant: "All" },
+  { rawName: "Ava Vanderheyden", category: "Trunk Stability", variant: "All" },
+  { rawName: "Dax Duffy", category: "Trunk Stability", variant: "All" },
 
-_(binary or excluded — contents not inlined)_
+  { rawName: "Lily Cooper", category: "Trunk Stability", variant: "6" },
+  { rawName: "Ava Vance", category: "Trunk Stability", variant: "6" },
+  { rawName: "Mason Coulter", category: "Trunk Stability", variant: "6" },
+  { rawName: "Janae Hansen", category: "Trunk Stability", variant: "6" },
+  { rawName: "Lydia Maas", category: "Trunk Stability", variant: "6" },
 
-### `src/data/distance_roster_21.json`
+  {
+    rawName: "Addie Thompson",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
+  {
+    rawName: "Adam Wilke",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
+  {
+    rawName: "Kasey Levinsohn",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
+  {
+    rawName: "Abbey Angus",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
+  {
+    rawName: "Jackson Cicchinelli",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
+  {
+    rawName: "Henry Nichols",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
+  {
+    rawName: "Toben Edney",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
+  {
+    rawName: "Austin Soldwisch",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
+  {
+    rawName: "Reagan Cogdill",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
+  {
+    rawName: "James Maso",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
+  {
+    rawName: "Caleb Olson",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
+  {
+    rawName: "Ben Neville",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
+  {
+    rawName: "Myles Matthias",
+    category: "Active Straight-Leg Raise",
+    variant: "All",
+  },
 
-_(binary or excluded — contents not inlined)_
+  {
+    rawName: "Lillyan Kiehne",
+    category: "Active Straight-Leg Raise",
+    variant: "6",
+  },
+  {
+    rawName: "Solomon Zaugg",
+    category: "Active Straight-Leg Raise",
+    variant: "6",
+  },
+  {
+    rawName: "Jonathan Meyer",
+    category: "Active Straight-Leg Raise",
+    variant: "6",
+  },
+  {
+    rawName: "Claire Hoyer",
+    category: "Active Straight-Leg Raise",
+    variant: "6",
+  },
+  {
+    rawName: "Alex Horstman",
+    category: "Active Straight-Leg Raise",
+    variant: "6",
+  },
+  {
+    rawName: "Cooper Cook",
+    category: "Active Straight-Leg Raise",
+    variant: "6",
+  },
+  {
+    rawName: "AJ Schermerhorn",
+    category: "Active Straight-Leg Raise",
+    variant: "6",
+  },
+  {
+    rawName: "Wes Hulseberg",
+    category: "Active Straight-Leg Raise",
+    variant: "6",
+  },
+  {
+    rawName: "Sawyer Schmidt",
+    category: "Active Straight-Leg Raise",
+    variant: "6",
+  },
 
-### `src/data/distance_roster_22.json`
+  { rawName: "Jade Anderson", category: "Rotary Stability", variant: "All" },
+  { rawName: "Silas Gann", category: "Rotary Stability", variant: "All" },
+  { rawName: "Jack Behrens", category: "Rotary Stability", variant: "All" },
 
-_(binary or excluded — contents not inlined)_
+  { rawName: "Riley Kuhn", category: "Rotary Stability", variant: "6" },
+  { rawName: "Connor Martin", category: "Rotary Stability", variant: "6" },
+  { rawName: "Hutton Edney", category: "Rotary Stability", variant: "6" },
 
-### `src/data/distance_roster_23.json`
+  {
+    rawName: "Joel Ramirez-Parra",
+    category: "Shoulder Mobility",
+    variant: "All",
+  },
+  { rawName: "Rylan Martin", category: "Shoulder Mobility", variant: "All" },
+  { rawName: "Dawson Fricke", category: "Shoulder Mobility", variant: "All" },
+  { rawName: "Carter Mulford", category: "Shoulder Mobility", variant: "All" },
+  { rawName: "Camden Kilker", category: "Shoulder Mobility", variant: "All" },
+  { rawName: "Evan Cook", category: "Shoulder Mobility", variant: "All" },
 
-_(binary or excluded — contents not inlined)_
+  { rawName: "Gage Heyne", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Drew Moser", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "AJ Angus", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Ava Vance", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Aaron Lursen", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Morgan Engel", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Anna Quillin", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Jakob Regennitter", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Caden Kueker", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Cali Trygstad", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Ryan Heden", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Hannah Ramsey", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Isaiah Hammerand", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Cooper Bankston", category: "Shoulder Mobility", variant: "6" },
+  { rawName: "Derek Coulter", category: "Shoulder Mobility", variant: "6" },
 
-### `src/data/distance_roster_24.json`
+  { rawName: "Bryn Wright", category: "Hurdle Step", variant: "6" },
+  { rawName: "Alex Pries", category: "Hurdle Step", variant: "6" },
 
-_(binary or excluded — contents not inlined)_
+  { rawName: "Nathan Kinzer", category: "Incline Lunge", variant: "6" },
+];
 
-### `src/data/distance_roster_25.json`
-
-_(binary or excluded — contents not inlined)_
-
-### `src/data/distance_roster_26.json`
-
-_(binary or excluded — contents not inlined)_
-
-### `src/data/roster_history.json`
-
-_(binary or excluded — contents not inlined)_
+```
 
 ### `src/data/tfrrs_stats.json`
 
@@ -2514,6 +2736,45 @@ export async function upsertWorkoutIntervals(
 
 ```
 
+### `src/lib/aliasData.ts`
+
+```typescript
+import { supabase } from "./supabaseClient";
+
+export interface NameAlias {
+  alias_name: string;
+  athlete_id: string;
+}
+
+export async function fetchAliasesForSeason(
+  season: number,
+): Promise<NameAlias[]> {
+  const { data, error } = await supabase
+    .from("name_aliases")
+    .select("alias_name, athlete_id")
+    .eq("season", season);
+
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+export async function upsertAlias(
+  season: number,
+  aliasName: string,
+  athleteId: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from("name_aliases")
+    .upsert(
+      { season, alias_name: aliasName, athlete_id: athleteId },
+      { onConflict: "season,alias_name" },
+    );
+
+  if (error) throw new Error(error.message);
+}
+
+```
+
 ### `src/lib/athleteData.ts`
 
 ```typescript
@@ -2535,6 +2796,116 @@ export async function fetchAthletesForSeason(
     .from("athletes")
     .select("id, season, name, team, hometown, high_school")
     .eq("season", season);
+
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+```
+
+### `src/lib/coreData.ts`
+
+```typescript
+import { supabase } from "./supabaseClient";
+
+export interface CoreExerciseRow {
+  day: string;
+  day_order: number;
+  day_note: string | null;
+  position: number;
+  name: string;
+  url: string | null;
+}
+
+export interface DayRoutine {
+  note: string | null;
+  exercises: { name: string; url: string | null }[];
+}
+
+export interface CoreRoutine {
+  intro: string;
+  days: { day: string; routine: DayRoutine }[];
+}
+
+export async function fetchCoreRoutine(): Promise<CoreRoutine> {
+  const [introResult, exercisesResult] = await Promise.all([
+    supabase
+      .from("site_content")
+      .select("value")
+      .eq("key", "core_intro")
+      .maybeSingle(),
+    supabase
+      .from("core_exercises")
+      .select("day, day_order, day_note, position, name, url")
+      .order("day_order", { ascending: true })
+      .order("position", { ascending: true }),
+  ]);
+
+  if (introResult.error) throw new Error(introResult.error.message);
+  if (exercisesResult.error) throw new Error(exercisesResult.error.message);
+
+  const rows = exercisesResult.data ?? [];
+  const dayMap = new Map<string, DayRoutine>();
+
+  for (const row of rows as CoreExerciseRow[]) {
+    if (!dayMap.has(row.day)) {
+      dayMap.set(row.day, { note: row.day_note, exercises: [] });
+    }
+    dayMap.get(row.day)!.exercises.push({ name: row.name, url: row.url });
+  }
+
+  return {
+    intro: introResult.data?.value ?? "",
+    days: Array.from(dayMap.entries()).map(([day, routine]) => ({
+      day,
+      routine,
+    })),
+  };
+}
+
+```
+
+### `src/lib/fmsData.ts`
+
+```typescript
+import { supabase } from "../lib/supabaseClient";
+
+export interface FmsExercise {
+  phase: string;
+  position: number;
+  name: string;
+  reps: string | null;
+  url: string | null;
+}
+
+export interface FmsAssignment {
+  category: string;
+  variant: string;
+}
+
+export async function fetchFmsAssignments(
+  athleteId: string,
+  season: number,
+): Promise<FmsAssignment[]> {
+  const { data, error } = await supabase
+    .from("fms_assignments")
+    .select("category, variant")
+    .eq("athlete_id", athleteId)
+    .eq("season", season);
+
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+export async function fetchFmsExercises(
+  category: string,
+): Promise<FmsExercise[]> {
+  const { data, error } = await supabase
+    .from("fms_exercises")
+    .select("phase, position, name, reps, url")
+    .eq("category", category)
+    .order("phase", { ascending: true })
+    .order("position", { ascending: true });
 
   if (error) throw new Error(error.message);
   return data ?? [];
@@ -2596,11 +2967,29 @@ export function buildNameLookup(
   return map;
 }
 
+export function buildAliasLookup(
+  aliases: { alias_name: string; athlete_id: string }[],
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const a of aliases) {
+    map.set(normalizeName(a.alias_name), a.athlete_id);
+  }
+  return map;
+}
+
 export function matchName(
   parsedName: string,
-  lookup: Map<string, { id: string; name: string }>,
+  nameLookup: Map<string, { id: string; name: string }>,
+  aliasLookup?: Map<string, string>,
 ): string | null {
-  const match = lookup.get(normalizeName(parsedName));
+  const normalized = normalizeName(parsedName);
+
+  // Check learned aliases first — this is what makes matching self-healing.
+  if (aliasLookup?.has(normalized)) {
+    return aliasLookup.get(normalized)!;
+  }
+
+  const match = nameLookup.get(normalized);
   return match ? match.id : null;
 }
 
@@ -3015,6 +3404,36 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
 
 ```
 
+### `src/lib/supabaseAdminClient.mjs`
+
+```javascript
+import "dotenv/config";
+import { createClient } from "@supabase/supabase-js";
+
+export async function getAuthenticatedSupabaseClient() {
+  const url = process.env.VITE_SUPABASE_URL;
+  const key = process.env.VITE_SUPABASE_KEY;
+  const email = process.env.ADMIN_EMAIL;
+  const password = process.env.ADMIN_PASSWORD;
+
+  if (!url || !key) {
+    throw new Error("Missing VITE_SUPABASE_URL / VITE_SUPABASE_KEY in .env");
+  }
+  if (!email || !password) {
+    throw new Error("Missing ADMIN_EMAIL / ADMIN_PASSWORD in .env");
+  }
+
+  const supabase = createClient(url, key);
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    throw new Error(`Failed to authenticate as admin: ${error.message}`);
+  }
+
+  return supabase;
+}
+
+```
+
 ### `src/lib/supabaseClient.ts`
 
 ```typescript
@@ -3156,7 +3575,13 @@ import {
 import type { MatchedRow } from "../lib/adminData";
 import { fetchAthletesForSeason } from "../lib/athleteData";
 import type { AthleteRecord } from "../lib/athleteData";
-import { buildNameLookup, matchName } from "../lib/nameMatching";
+import { fetchAliasesForSeason, upsertAlias } from "../lib/aliasData";
+import {
+  buildNameLookup,
+  buildAliasLookup,
+  matchName,
+  normalizeName,
+} from "../lib/nameMatching";
 
 const CURRENT_SEASON = 2026;
 
@@ -3169,6 +3594,9 @@ function AdminDashboard() {
   const [day, setDay] = useState<"tuesday" | "friday">("tuesday");
 
   const [athletes, setAthletes] = useState<AthleteRecord[]>([]);
+  const [aliases, setAliases] = useState<
+    { alias_name: string; athlete_id: string }[]
+  >([]);
   const [athletesLoaded, setAthletesLoaded] = useState(false);
 
   const [mileageMatches, setMileageMatches] = useState<
@@ -3188,9 +3616,13 @@ function AdminDashboard() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    fetchAthletesForSeason(CURRENT_SEASON)
-      .then((data) => {
-        setAthletes(data);
+    Promise.all([
+      fetchAthletesForSeason(CURRENT_SEASON),
+      fetchAliasesForSeason(CURRENT_SEASON),
+    ])
+      .then(([athleteData, aliasData]) => {
+        setAthletes(athleteData);
+        setAliases(aliasData);
         setAthletesLoaded(true);
       })
       .catch((err) =>
@@ -3199,10 +3631,11 @@ function AdminDashboard() {
   }, []);
 
   function runMatching<T extends { name: string }>(rows: T[]): MatchedRow<T>[] {
-    const lookup = buildNameLookup(athletes);
+    const nameLookup = buildNameLookup(athletes);
+    const aliasLookup = buildAliasLookup(aliases);
     return rows.map((data) => ({
       data,
-      athleteId: matchName(data.name, lookup) ?? "",
+      athleteId: matchName(data.name, nameLookup, aliasLookup) ?? "",
     }));
   }
 
@@ -3275,6 +3708,29 @@ function AdminDashboard() {
   const intervalUnmatchedCount =
     intervalMatches?.filter((r) => !r.athleteId).length ?? 0;
 
+  // Any row where the parsed name doesn't match the selected athlete's real
+  // name gets remembered as an alias — this is what makes matching
+  // self-healing: fix a spelling once, and it auto-matches every week after.
+  async function learnAliasesFrom<T extends { name: string }>(
+    rows: MatchedRow<T>[],
+  ) {
+    const athleteById = new Map(athletes.map((a) => [a.id, a.name]));
+
+    for (const row of rows) {
+      if (!row.athleteId) continue;
+      const realName = athleteById.get(row.athleteId);
+      if (!realName) continue;
+
+      if (normalizeName(row.data.name) !== normalizeName(realName)) {
+        try {
+          await upsertAlias(CURRENT_SEASON, row.data.name, row.athleteId);
+        } catch (err) {
+          console.warn(`Failed to save alias for "${row.data.name}":`, err);
+        }
+      }
+    }
+  }
+
   async function handleSubmit() {
     if (!weekOf) {
       setStatus("Please select the week's date first.");
@@ -3287,6 +3743,7 @@ function AdminDashboard() {
       if (mode === "mileage" && mileageMatches) {
         const resolved = mileageMatches.filter((r) => r.athleteId);
         const count = await upsertMileageRows(resolved, weekOf, CURRENT_SEASON);
+        await learnAliasesFrom(resolved);
         setStatus(`✅ Saved ${count} mileage rows for week of ${weekOf}.`);
       } else if (mode === "workouts") {
         const resolvedAssignments = (assignmentMatches ?? []).filter(
@@ -3309,6 +3766,9 @@ function AdminDashboard() {
           day,
           CURRENT_SEASON,
         );
+        await learnAliasesFrom(resolvedAssignments);
+        await learnAliasesFrom(resolvedIntervals);
+
         setStatus(
           `✅ Saved ${groupCount} group assignments and ${intervalCount} interval entries for ${day}, week of ${weekOf}.`,
         );
@@ -3626,6 +4086,170 @@ export default AdminDashboard;
 
 ```
 
+### `src/pages/adminFmsAssignments.tsx`
+
+```tsx
+import { useEffect, useState } from "react";
+import { useAdminAuth } from "../context/AdminAuthContext";
+import { fetchAthletesForSeason } from "../lib/athleteData";
+import type { AthleteRecord } from "../lib/athleteData";
+import { fetchAliasesForSeason } from "../lib/aliasData";
+import {
+  buildNameLookup,
+  buildAliasLookup,
+  matchName,
+} from "../lib/nameMatching";
+import { supabase } from "../lib/supabaseClient";
+import { RAW_FMS_ASSIGNMENTS } from "../data/rawFMSassignments";
+
+const CURRENT_SEASON = 2026;
+
+interface MatchedAssignment {
+  rawName: string;
+  category: string;
+  variant: string;
+  athleteId: string;
+}
+
+function AdminFmsAssignments() {
+  const { signOut } = useAdminAuth();
+  const [athletes, setAthletes] = useState<AthleteRecord[]>([]);
+  const [matches, setMatches] = useState<MatchedAssignment[] | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    Promise.all([
+      fetchAthletesForSeason(CURRENT_SEASON),
+      fetchAliasesForSeason(CURRENT_SEASON),
+    ]).then(([athleteData, aliasData]) => {
+      setAthletes(athleteData);
+
+      const nameLookup = buildNameLookup(athleteData);
+      const aliasLookup = buildAliasLookup(aliasData);
+
+      const matched = RAW_FMS_ASSIGNMENTS.map((a) => ({
+        rawName: a.rawName,
+        category: a.category,
+        variant: a.variant,
+        athleteId: matchName(a.rawName, nameLookup, aliasLookup) ?? "",
+      }));
+      setMatches(matched);
+    });
+  }, []);
+
+  function updateMatch(index: number, athleteId: string) {
+    setMatches((prev) =>
+      prev ? prev.map((r, i) => (i === index ? { ...r, athleteId } : r)) : prev,
+    );
+  }
+
+  const unmatchedCount = matches?.filter((m) => !m.athleteId).length ?? 0;
+
+  async function handleSubmit() {
+    if (!matches) return;
+    setBusy(true);
+    setStatus(null);
+
+    const resolved = matches.filter((m) => m.athleteId);
+    const payload = resolved.map((m) => ({
+      athlete_id: m.athleteId,
+      season: CURRENT_SEASON,
+      category: m.category,
+      variant: m.variant,
+    }));
+
+    const { error, count } = await supabase
+      .from("fms_assignments")
+      .upsert(payload, {
+        onConflict: "athlete_id,season,category",
+        count: "exact",
+      });
+
+    setBusy(false);
+    if (error) {
+      setStatus(`❌ Failed to save: ${error.message}`);
+    } else {
+      setStatus(`✅ Saved ${count ?? payload.length} FMS assignments.`);
+    }
+  }
+
+  return (
+    <div className="admin-dashboard">
+      <h1 className="admin-title acme-regular text-outline">FMS Assignments</h1>
+
+      {!matches && <p className="admin-status">Loading...</p>}
+      {status && <p className="admin-status">{status}</p>}
+
+      {matches && (
+        <div className="admin-preview">
+          <p className="admin-preview-count">
+            {matches.length} assignments
+            {unmatchedCount > 0 &&
+              ` — ${unmatchedCount} unmatched, resolve before saving`}
+          </p>
+          <div className="admin-table-wrapper">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Match</th>
+                  <th>Raw Name</th>
+                  <th>Category</th>
+                  <th>Variant</th>
+                </tr>
+              </thead>
+              <tbody>
+                {matches.map((m, i) => (
+                  <tr
+                    key={i}
+                    className={!m.athleteId ? "admin-row-unmatched" : ""}
+                  >
+                    <td>
+                      <select
+                        className="admin-match-select"
+                        value={m.athleteId}
+                        onChange={(e) => updateMatch(i, e.target.value)}
+                      >
+                        <option value="">-- Select athlete --</option>
+                        {athletes.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>{m.rawName}</td>
+                    <td>{m.category}</td>
+                    <td>{m.variant}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <button
+            className="nav-menu-trigger"
+            onClick={handleSubmit}
+            disabled={busy}
+          >
+            Save to Database
+          </button>
+        </div>
+      )}
+
+      <button
+        className="switch-identity-link acme-regular text-outline"
+        onClick={signOut}
+      >
+        Sign Out
+      </button>
+    </div>
+  );
+}
+
+export default AdminFmsAssignments;
+
+```
+
 ### `src/pages/adminLogin.tsx`
 
 ```tsx
@@ -3701,14 +4325,82 @@ export default AdminLogin;
 ### `src/pages/corePage.tsx`
 
 ```tsx
+import { useEffect, useState } from "react";
+import { fetchCoreRoutine } from "../lib/coreData";
+import type { CoreRoutine } from "../lib/coreData";
+
 function CorePage() {
+  const [routine, setRoutine] = useState<CoreRoutine | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchCoreRoutine()
+      .then((data) => {
+        if (!cancelled) setRoutine(data);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
-    <div>
-      {" "}
-      <h1> Core </h1>
+    <div className="core-page">
+      <h1 className="core-title acme-regular text-outline">Core Routine</h1>
+
+      {error && (
+        <p className="core-intro">
+          Something went wrong loading the routine: {error}
+        </p>
+      )}
+
+      {!error && !routine && <p className="core-intro">Loading...</p>}
+
+      {routine && (
+        <>
+          <p className="core-intro">{routine.intro}</p>
+
+          <div className="core-days-wrapper">
+            {routine.days.map(({ day, routine: dayRoutine }) => (
+              <div key={day} className="core-day-card">
+                <div className="core-day-header">
+                  <span className="core-day-name">{day}</span>
+                  {dayRoutine.note && (
+                    <span className="core-day-note">{dayRoutine.note}</span>
+                  )}
+                </div>
+                <ul className="core-exercise-list">
+                  {dayRoutine.exercises.map((ex, i) => (
+                    <li key={`${ex.name}-${i}`} className="core-exercise-item">
+                      {ex.url ? (
+                        <a
+                          className="core-exercise-link"
+                          href={ex.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {ex.name}
+                        </a>
+                      ) : (
+                        <span className="core-exercise-plain">{ex.name}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
+
 export default CorePage;
 
 ```
@@ -3740,17 +4432,118 @@ export default ErrorPage;
 
 ```
 
-### `src/pages/fms.tsx`
+### `src/pages/fmsPage.tsx`
 
 ```tsx
-function FMS() {
+import { useEffect, useState } from "react";
+import { useUser } from "../context/UserContext";
+import { fetchFmsAssignments, fetchFmsExercises } from "../lib/fmsData";
+import type { FmsAssignment, FmsExercise } from "../lib/fmsData";
+
+const PHASE_ORDER = ["Weeks 1-3", "Weeks 4-6", "Weeks 7-9"];
+
+interface AssignmentWithExercises {
+  assignment: FmsAssignment;
+  exercisesByPhase: Map<string, FmsExercise[]>;
+}
+
+function FmsPage() {
+  const { athlete, season } = useUser();
+  const [data, setData] = useState<AssignmentWithExercises[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!athlete || !season) return;
+
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setData(null);
+    setError(null);
+
+    fetchFmsAssignments(athlete.id, season)
+      .then(async (assignments) => {
+        if (cancelled) return;
+        const results: AssignmentWithExercises[] = [];
+        for (const assignment of assignments) {
+          const exercises = await fetchFmsExercises(assignment.category);
+          const byPhase = new Map<string, FmsExercise[]>();
+          exercises.forEach((ex) => {
+            if (!byPhase.has(ex.phase)) byPhase.set(ex.phase, []);
+            byPhase.get(ex.phase)!.push(ex);
+          });
+          results.push({ assignment, exercisesByPhase: byPhase });
+        }
+        if (!cancelled) setData(results);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [athlete, season]);
+
+  if (!athlete) return null;
+
   return (
-    <div>
-      <h1>FMS</h1>
+    <div className="core-page">
+      <h1 className="core-title acme-regular text-outline">
+        {athlete.name}&apos;s FMS Correctives
+      </h1>
+
+      {error && <p className="core-intro">Something went wrong: {error}</p>}
+      {!error && data === null && <p className="core-intro">Loading...</p>}
+
+      {!error && data !== null && data.length === 0 && (
+        <p className="core-intro">
+          No FMS corrective has been assigned to you yet — check with your
+          coach.
+        </p>
+      )}
+
+      {data?.map(({ assignment, exercisesByPhase }) => (
+        <div key={assignment.category} className="fms-category-block">
+          <p className="core-intro">
+            {assignment.category} ({assignment.variant}) — do these twice a
+            week.
+          </p>
+
+          <div className="core-days-wrapper">
+            {PHASE_ORDER.filter((p) => exercisesByPhase.has(p)).map((phase) => (
+              <div key={phase} className="core-day-card">
+                <div className="core-day-header">
+                  <span className="core-day-name">{phase}</span>
+                </div>
+                <ul className="core-exercise-list">
+                  {exercisesByPhase.get(phase)!.map((ex, i) => (
+                    <li key={i} className="core-exercise-item">
+                      {ex.url ? (
+                        <a
+                          className="core-exercise-link"
+                          href={ex.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {ex.name}
+                        </a>
+                      ) : (
+                        <span className="core-exercise-plain">{ex.name}</span>
+                      )}
+                      {ex.reps && <span> — {ex.reps}</span>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
-export default FMS;
+
+export default FmsPage;
 
 ```
 
@@ -3765,6 +4558,7 @@ import { useUser } from "../context/UserContext";
 
 const resourceLinks = [
   { label: "View Mileage", path: "/mileage" },
+  { label: "View Workouts", path: "/workouts" },
   { label: "View Core", path: "/core" },
   { label: "View FMS", path: "/fms" },
   { label: "View Lifting Sheet", path: "/lifting_sheet" },
@@ -3868,6 +4662,7 @@ function MileagePage() {
     if (!athlete) return;
 
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEntries(null);
     setError(null);
 
@@ -4140,6 +4935,7 @@ function WorkoutsPage() {
     if (!athlete || !season) return;
 
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setWeeks(null);
     setError(null);
 
@@ -5068,6 +5864,110 @@ export default WorkoutsPage;
   color: rgba(0, 0, 0, 0.75);
 }
 
+.core-page {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-lg) var(--space-md);
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+.core-title {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 48px);
+  text-align: center;
+}
+
+.core-intro {
+  max-width: 1000px;
+  text-align: center;
+  color: rgb(0, 0, 0);
+  -webkit-text-stroke: 2px black;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  font-size: clamp(14px, 1.8vw, 20px);
+  line-height: 1;
+  margin: 0 auto;
+}
+
+.core-days-wrapper {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  width: 100%;
+  max-width: 1100px;
+}
+
+.core-day-card {
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.core-day-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+  padding-bottom: 8px;
+}
+
+.core-day-name {
+  font-weight: 700;
+  font-size: clamp(15px, 1.8vw, 18px);
+  color: black;
+}
+
+.core-day-note {
+  font-size: 12px;
+  font-style: italic;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.core-exercise-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.core-exercise-item {
+  font-size: clamp(13px, 1.5vw, 14px);
+}
+
+.core-exercise-link {
+  color: black;
+  text-decoration: underline;
+  transition: opacity 0.15s ease;
+}
+
+.core-exercise-link:hover {
+  opacity: 0.6;
+}
+
+.core-exercise-plain {
+  color: black;
+}
+
+.fms-category-block {
+  width: 100%;
+  max-width: 1100px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+}
+
 ```
 
 ### `src/App.tsx`
@@ -5088,6 +5988,9 @@ import AdminLogin from "./pages/adminLogin";
 import RequireAdmin from "./components/requireAdmin";
 import AdminDashboard from "./pages/adminDashboard";
 import MileagePage from "./pages/mileagePage";
+import CorePage from "./pages/corePage";
+import AdminFmsAssignments from "./pages/adminFmsAssignments";
+import FmsPage from "./pages/fmsPage";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -5110,6 +6013,7 @@ function AppContent() {
     "/workouts",
     "/admin",
     "/admin/dashboard",
+    "/admin/fms",
   ].includes(location.pathname);
   const showBackButton =
     isKnownRoute && !BACK_BUTTON_ROUTES.has(location.pathname);
@@ -5141,7 +6045,7 @@ function AppContent() {
           path="/core"
           element={
             <RequireIdentity>
-              <ComingSoon />
+              <CorePage />
             </RequireIdentity>
           }
         />
@@ -5157,15 +6061,7 @@ function AppContent() {
           path="/fms"
           element={
             <RequireIdentity>
-              <ComingSoon />
-            </RequireIdentity>
-          }
-        />
-        <Route
-          path="/lifting_sheet"
-          element={
-            <RequireIdentity>
-              <ComingSoon />
+              <FmsPage />
             </RequireIdentity>
           }
         />
@@ -5207,6 +6103,14 @@ function AppContent() {
           element={
             <RequireAdmin>
               <AdminDashboard />
+            </RequireAdmin>
+          }
+        />
+        <Route
+          path="/admin/fms"
+          element={
+            <RequireAdmin>
+              <AdminFmsAssignments />
             </RequireAdmin>
           }
         />
@@ -5851,4 +6755,4 @@ export default defineConfig({
 
 
 ---
-_Digest complete: 47 files inlined, 27 skipped (binary/excluded)._
+_Digest complete: 55 files inlined, 19 skipped (binary/excluded)._

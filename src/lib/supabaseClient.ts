@@ -9,4 +9,11 @@ if (!supabaseUrl || !supabaseKey) {
   );
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+export const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: {
+    // Don't persist the admin session across page loads — every fresh
+    // load of the site should require logging in again, rather than
+    // silently staying authenticated from a previous visit.
+    persistSession: false,
+  },
+});

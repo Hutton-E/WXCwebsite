@@ -900,3 +900,33 @@
   align-items: center;
   gap: var(--space-md);
 }
+
+.admin-nav-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.admin-signout-link {
+  position: fixed;
+  top: var(--space-sm);
+  right: var(--space-sm);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  font-size: 35px;
+  cursor: pointer;
+  z-index: 15;
+  transition: opacity 0.15s ease;
+}
+
+.admin-signout-link:hover {
+  opacity: 0.8;
+}
+
+button.admin-nav-link {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font: inherit;
+}

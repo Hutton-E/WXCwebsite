@@ -8,7 +8,7 @@ const resourceLinks = [
   { label: "View Mileage", path: "/mileage" },
   { label: "View Workouts", path: "/workouts" },
   { label: "View Core", path: "/core" },
-  { label: "View FMS", path: "/fms" },
+  { label: "View FMS Correctives", path: "/fms" },
   { label: "View Lifting Sheet", path: "/lifting_sheet" },
 ];
 
