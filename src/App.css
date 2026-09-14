@@ -796,3 +796,97 @@
   font-style: italic;
   color: rgba(0, 0, 0, 0.75);
 }
+
+.core-page {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-lg) var(--space-md);
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+.core-title {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 60px);
+  text-align: center;
+}
+
+.core-intro {
+  max-width: 1000px;
+  text-align: center;
+  color: white;
+  -webkit-text-stroke: 1px black;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  font-size: clamp(13px, 1.6vw, 45px);
+  margin: 0;
+}
+
+.core-days-wrapper {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  width: 100%;
+  max-width: 1100px;
+}
+
+.core-day-card {
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.core-day-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+  padding-bottom: 8px;
+}
+
+.core-day-name {
+  font-weight: 700;
+  font-size: clamp(15px, 1.8vw, 18px);
+  color: black;
+}
+
+.core-day-note {
+  font-size: 12px;
+  font-style: italic;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.core-exercise-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.core-exercise-item {
+  font-size: clamp(13px, 1.5vw, 14px);
+}
+
+.core-exercise-link {
+  color: black;
+  text-decoration: underline;
+  transition: opacity 0.15s ease;
+}
+
+.core-exercise-link:hover {
+  opacity: 0.6;
+}
+
+.core-exercise-plain {
+  color: black;
+}

@@ -13,6 +13,7 @@ import AdminLogin from "./pages/adminLogin";
 import RequireAdmin from "./components/requireAdmin";
 import AdminDashboard from "./pages/adminDashboard";
 import MileagePage from "./pages/mileagePage";
+import CorePage from "./pages/corePage";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -66,7 +67,7 @@ function AppContent() {
           path="/core"
           element={
             <RequireIdentity>
-              <ComingSoon />
+              <CorePage />
             </RequireIdentity>
           }
         />
