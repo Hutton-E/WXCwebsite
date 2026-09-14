@@ -15,11 +15,23 @@ import {
 import type { MatchedRow } from "../lib/adminData";
 import { fetchAthletesForSeason } from "../lib/athleteData";
 import type { AthleteRecord } from "../lib/athleteData";
-import { buildNameLookup, matchName } from "../lib/nameMatching";
+import { fetchAliasesForSeason, upsertAlias } from "../lib/aliasData";
+import {
+  buildNameLookup,
+  buildAliasLookup,
+  matchName,
+  normalizeName,
+} from "../lib/nameMatching";
 
 const CURRENT_SEASON = 2026;
 
 type Mode = "mileage" | "workouts";
+
+interface WorkoutData {
+  assignments: WorkoutAssignment[];
+  groupDefinitions: WorkoutGroupDefinition[];
+  intervalRows: WorkoutIntervalRow[];
+}
 
 function AdminDashboard() {
   const { signOut } = useAdminAuth();
@@ -28,6 +40,9 @@ function AdminDashboard() {
   const [day, setDay] = useState<"tuesday" | "friday">("tuesday");
 
   const [athletes, setAthletes] = useState<AthleteRecord[]>([]);
+  const [aliases, setAliases] = useState<
+    { alias_name: string; athlete_id: string }[]
+  >([]);
   const [athletesLoaded, setAthletesLoaded] = useState(false);
 
   const [mileageMatches, setMileageMatches] = useState<
@@ -47,9 +62,13 @@ function AdminDashboard() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    fetchAthletesForSeason(CURRENT_SEASON)
-      .then((data) => {
-        setAthletes(data);
+    Promise.all([
+      fetchAthletesForSeason(CURRENT_SEASON),
+      fetchAliasesForSeason(CURRENT_SEASON),
+    ])
+      .then(([athleteData, aliasData]) => {
+        setAthletes(athleteData);
+        setAliases(aliasData);
         setAthletesLoaded(true);
       })
       .catch((err) =>
@@ -58,10 +77,11 @@ function AdminDashboard() {
   }, []);
 
   function runMatching<T extends { name: string }>(rows: T[]): MatchedRow<T>[] {
-    const lookup = buildNameLookup(athletes);
+    const nameLookup = buildNameLookup(athletes);
+    const aliasLookup = buildAliasLookup(aliases);
     return rows.map((data) => ({
       data,
-      athleteId: matchName(data.name, lookup) ?? "",
+      athleteId: matchName(data.name, nameLookup, aliasLookup) ?? "",
     }));
   }
 
@@ -134,6 +154,29 @@ function AdminDashboard() {
   const intervalUnmatchedCount =
     intervalMatches?.filter((r) => !r.athleteId).length ?? 0;
 
+  // Any row where the parsed name doesn't match the selected athlete's real
+  // name gets remembered as an alias — this is what makes matching
+  // self-healing: fix a spelling once, and it auto-matches every week after.
+  async function learnAliasesFrom<T extends { name: string }>(
+    rows: MatchedRow<T>[],
+  ) {
+    const athleteById = new Map(athletes.map((a) => [a.id, a.name]));
+
+    for (const row of rows) {
+      if (!row.athleteId) continue;
+      const realName = athleteById.get(row.athleteId);
+      if (!realName) continue;
+
+      if (normalizeName(row.data.name) !== normalizeName(realName)) {
+        try {
+          await upsertAlias(CURRENT_SEASON, row.data.name, row.athleteId);
+        } catch (err) {
+          console.warn(`Failed to save alias for "${row.data.name}":`, err);
+        }
+      }
+    }
+  }
+
   async function handleSubmit() {
     if (!weekOf) {
       setStatus("Please select the week's date first.");
@@ -146,6 +189,7 @@ function AdminDashboard() {
       if (mode === "mileage" && mileageMatches) {
         const resolved = mileageMatches.filter((r) => r.athleteId);
         const count = await upsertMileageRows(resolved, weekOf, CURRENT_SEASON);
+        await learnAliasesFrom(resolved);
         setStatus(`✅ Saved ${count} mileage rows for week of ${weekOf}.`);
       } else if (mode === "workouts") {
         const resolvedAssignments = (assignmentMatches ?? []).filter(
@@ -168,6 +212,9 @@ function AdminDashboard() {
           day,
           CURRENT_SEASON,
         );
+        await learnAliasesFrom(resolvedAssignments);
+        await learnAliasesFrom(resolvedIntervals);
+
         setStatus(
           `✅ Saved ${groupCount} group assignments and ${intervalCount} interval entries for ${day}, week of ${weekOf}.`,
         );
