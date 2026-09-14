@@ -5,10 +5,21 @@ import type {
   MileageRow,
   WorkoutAssignment,
   WorkoutGroupDefinition,
+  WorkoutIntervalRow,
 } from "../lib/pdfParser";
-import { upsertMileageRows, upsertWorkoutData } from "../lib/adminData";
+import {
+  upsertMileageRows,
+  upsertWorkoutData,
+  upsertWorkoutIntervals,
+} from "../lib/adminData";
 
 type Mode = "mileage" | "workouts";
+
+interface WorkoutData {
+  assignments: WorkoutAssignment[];
+  groupDefinitions: WorkoutGroupDefinition[];
+  intervalRows: WorkoutIntervalRow[];
+}
 
 function AdminDashboard() {
   const { signOut } = useAdminAuth();
@@ -17,10 +28,7 @@ function AdminDashboard() {
   const [day, setDay] = useState<"tuesday" | "friday">("tuesday");
 
   const [mileageRows, setMileageRows] = useState<MileageRow[] | null>(null);
-  const [workoutData, setWorkoutData] = useState<{
-    assignments: WorkoutAssignment[];
-    groupDefinitions: WorkoutGroupDefinition[];
-  } | null>(null);
+  const [workoutData, setWorkoutData] = useState<WorkoutData | null>(null);
 
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -61,14 +69,19 @@ function AdminDashboard() {
         const count = await upsertMileageRows(mileageRows, weekOf);
         setStatus(`✅ Saved ${count} mileage rows for week of ${weekOf}.`);
       } else if (mode === "workouts" && workoutData) {
-        const count = await upsertWorkoutData(
+        const groupCount = await upsertWorkoutData(
           workoutData.assignments,
           workoutData.groupDefinitions,
           weekOf,
           day,
         );
+        const intervalCount = await upsertWorkoutIntervals(
+          workoutData.intervalRows,
+          weekOf,
+          day,
+        );
         setStatus(
-          `✅ Saved ${count} workout assignments for ${day}, week of ${weekOf}.`,
+          `✅ Saved ${groupCount} group assignments and ${intervalCount} interval entries for ${day}, week of ${weekOf}.`,
         );
       }
     } catch (err) {
@@ -132,12 +145,7 @@ function AdminDashboard() {
           </label>
         )}
 
-        <input
-          type="file"
-          accept="application/pdf"
-          onChange={handleFileChange}
-          disabled={busy}
-        />
+        <input type="file" accept="application/pdf" onChange={handleFileChange} disabled={busy} />
       </div>
 
       {busy && <p className="admin-status">Working...</p>}
@@ -184,11 +192,7 @@ function AdminDashboard() {
               </tbody>
             </table>
           </div>
-          <button
-            className="nav-menu-trigger"
-            onClick={handleSubmit}
-            disabled={busy}
-          >
+          <button className="nav-menu-trigger" onClick={handleSubmit} disabled={busy}>
             Save to Database
           </button>
         </div>
@@ -197,63 +201,85 @@ function AdminDashboard() {
       {mode === "workouts" && workoutData && (
         <div className="admin-preview">
           <p className="admin-preview-count">
-            {workoutData.assignments.length} athletes,{" "}
-            {workoutData.groupDefinitions.length} group definitions parsed —
+            {workoutData.assignments.length} grouped athletes, {workoutData.intervalRows.length}{" "}
+            interval athletes, {workoutData.groupDefinitions.length} group definitions parsed —
             review before saving:
           </p>
 
-          <div className="admin-table-wrapper">
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>Group</th>
-                  <th>Description</th>
-                </tr>
-              </thead>
-              <tbody>
-                {workoutData.groupDefinitions.map((g) => (
-                  <tr key={g.groupLetter}>
-                    <td>{g.groupLetter}</td>
-                    <td>{g.description}</td>
+          {workoutData.groupDefinitions.length > 0 && (
+            <div className="admin-table-wrapper">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Group</th>
+                    <th>Description</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {workoutData.groupDefinitions.map((g) => (
+                    <tr key={g.groupLetter}>
+                      <td>{g.groupLetter}</td>
+                      <td>{g.description}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
-          <div className="admin-table-wrapper">
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Group</th>
-                </tr>
-              </thead>
-              <tbody>
-                {workoutData.assignments.map((a) => (
-                  <tr key={a.name}>
-                    <td>{a.name}</td>
-                    <td>{a.groupLetter}</td>
+          {workoutData.assignments.length > 0 && (
+            <div className="admin-table-wrapper">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Group</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {workoutData.assignments.map((a) => (
+                    <tr key={a.name}>
+                      <td>{a.name}</td>
+                      <td>{a.groupLetter}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
-          <button
-            className="nav-menu-trigger"
-            onClick={handleSubmit}
-            disabled={busy}
-          >
+          {workoutData.intervalRows.length > 0 && (
+            <div className="admin-table-wrapper">
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Intervals</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workoutData.intervalRows.map((r) => (
+                    <tr key={r.name}>
+                      <td>{r.name}</td>
+                      <td>
+                        {Object.entries(r.intervals)
+                          .map(([label, value]) => `${label}: ${value}`)
+                          .join(" | ")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <button className="nav-menu-trigger" onClick={handleSubmit} disabled={busy}>
             Save to Database
           </button>
         </div>
       )}
 
-      <button
-        className="switch-identity-link acme-regular text-outline"
-        onClick={signOut}
-      >
+      <button className="switch-identity-link acme-regular text-outline" onClick={signOut}>
         Sign Out
       </button>
     </div>

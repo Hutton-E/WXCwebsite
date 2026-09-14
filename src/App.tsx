@@ -8,7 +8,7 @@ import BackButton from "./components/backButton";
 import RequireIdentity from "./components/requireIdentity";
 import ComingSoon from "./components/comingSoon";
 import TfrrsStats from "./pages/tfrrsStats";
-import TuesdayWorkout from "./pages/tuesdayWorkout";
+import Workouts from "./pages/workoutPages";
 import AdminLogin from "./pages/adminLogin";
 import RequireAdmin from "./components/requireAdmin";
 import AdminDashboard from "./pages/adminDashboard";
@@ -21,6 +21,7 @@ function AppContent() {
 
   const isKnownRoute = [
     "/",
+    "/home",
     "/lookup",
     "/about",
     "/mileage",
@@ -31,7 +32,7 @@ function AppContent() {
     "/tfrrs-stats",
     "/personal-records",
     "/season-bests",
-    "/tuesday_workout",
+    "/workouts",
     "/admin",
     "/admin/dashboard",
   ].includes(location.pathname);
@@ -118,10 +119,10 @@ function AppContent() {
           }
         />
         <Route
-          path="/tuesday_workout"
+          path="/workouts"
           element={
             <RequireIdentity>
-              <TuesdayWorkout />
+              <Workouts />
             </RequireIdentity>
           }
         />

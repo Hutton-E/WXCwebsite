@@ -33,14 +33,58 @@ export interface WorkoutGroupDefinition {
   description: string;
 }
 
+export interface WorkoutIntervalRow {
+  name: string;
+  intervals: Record<string, string>; // e.g. { "T (400)": "01:43.1", "800 CV": "03:26.3" }
+}
+
 export interface ParsedWorkouts {
   assignments: WorkoutAssignment[];
   groupDefinitions: WorkoutGroupDefinition[];
+  intervalRows: WorkoutIntervalRow[];
 }
 
 const ROW_TOLERANCE = 10; // px — words within this vertical distance are "the same row"
+const COLUMN_GAP_THRESHOLD = 25; // px gap that separates two header column labels
+
+// Matches only alphabetic name-like tokens (letters, apostrophes, hyphens,
+// an optional trailing comma). Anything else — digits, times like "01:18.5",
+// decorative dots/ellipses — fails this and stops name extraction immediately.
+const NAME_TOKEN_RE = /^[A-Za-z'.-]+,?$/;
+const DATE_TOKEN_RE = /^\d{1,2}\/\d{1,2}\/\d{4}$/;
 
 // ---------- Core: extract positioned words from a PDF page ----------
+
+// pdfjs-dist reports text in whatever runs the PDF itself was drawn with —
+// NOT one word per item. A cell like "Maas, Lydia" can arrive as ONE item
+// containing a space. Split every item's string on whitespace into
+// individual word-tokens, estimating each token's x-position proportionally
+// across the item's width, so all downstream logic can work on a
+// one-word-per-token basis (matching how the parsing rules below are
+// designed and were validated).
+function splitIntoWordTokens(
+  str: string,
+  x: number,
+  top: number,
+  width: number,
+): PositionedWord[] {
+  const parts = str.split(/\s+/).filter(Boolean);
+  if (parts.length <= 1) {
+    return [{ text: str, x, top }];
+  }
+
+  const totalChars = parts.reduce((sum, p) => sum + p.length, 0) || 1;
+  let cursor = x;
+  const results: PositionedWord[] = [];
+
+  for (const part of parts) {
+    results.push({ text: part, x: cursor, top });
+    const partWidth = (width * part.length) / totalChars;
+    cursor += partWidth + width * 0.02; // small gap approximation between words
+  }
+
+  return results;
+}
 
 async function extractPageWords(
   page: pdfjsLib.PDFPageProxy,
@@ -48,19 +92,21 @@ async function extractPageWords(
   const viewport = page.getViewport({ scale: 1 });
   const content = await page.getTextContent();
 
-  return content.items
-    .filter(
-      (item): item is pdfjsLib.TextItem =>
-        "str" in item && item.str.trim().length > 0,
-    )
-    .map((item) => {
-      const x = item.transform[4];
-      const y = item.transform[5];
-      // pdfjs y is measured from the BOTTOM of the page — flip so smaller = higher,
-      // matching the "top" convention used throughout this parser.
-      const top = viewport.height - y;
-      return { text: item.str.trim(), x, top };
-    });
+  const words: PositionedWord[] = [];
+
+  for (const item of content.items) {
+    if (!("str" in item) || item.str.trim().length === 0) continue;
+    const x = item.transform[4];
+    const y = item.transform[5];
+    // pdfjs y is measured from the BOTTOM of the page — flip so smaller = higher,
+    // matching the "top" convention used throughout this parser.
+    const top = viewport.height - y;
+    const width = "width" in item ? (item.width as number) : 0;
+
+    words.push(...splitIntoWordTokens(item.str.trim(), x, top, width));
+  }
+
+  return words;
 }
 
 // ---------- Row clustering ----------
@@ -81,6 +127,32 @@ function clusterIntoRows(words: PositionedWord[]): PositionedWord[][] {
   // Sort words left-to-right within each row
   rows.forEach((row) => row.sort((a, b) => a.x - b.x));
   return rows;
+}
+
+// ---------- Name extraction: take up to N leading name-like tokens, no more ----------
+
+function extractLeadingName(
+  sortedRowWords: PositionedWord[],
+  maxTokens = 2,
+): PositionedWord[] {
+  const result: PositionedWord[] = [];
+  for (const w of sortedRowWords) {
+    if (result.length >= maxTokens) break;
+    if (!NAME_TOKEN_RE.test(w.text)) break; // stop at the FIRST non-name-like token
+    result.push(w);
+  }
+  return result;
+}
+
+function toDisplayName(nameWords: PositionedWord[]): string | null {
+  if (nameWords.length < 2) return null;
+  const raw = nameWords
+    .map((w) => w.text)
+    .join(" ")
+    .replace(/,$/, "");
+  const [last, first] = raw.split(",").map((s) => s.trim());
+  if (!first) return null;
+  return `${first} ${last}`;
 }
 
 // ---------- Nearest-anchor column assignment ----------
@@ -113,6 +185,34 @@ function assignToNearestColumn(
       .join(" ");
   }
   return result;
+}
+
+// ---------- Interval-format header detection: cluster header words into columns by x-gap ----------
+
+function clusterHeaderIntoColumns(
+  headerWords: PositionedWord[],
+): { key: string; x: number }[] {
+  const relevant = headerWords
+    .filter((w) => w.text !== "WO" && !DATE_TOKEN_RE.test(w.text))
+    .sort((a, b) => a.x - b.x);
+
+  if (relevant.length === 0) return [];
+
+  const groups: PositionedWord[][] = [[relevant[0]]];
+  for (let i = 1; i < relevant.length; i++) {
+    const prev = relevant[i - 1];
+    const curr = relevant[i];
+    if (curr.x - prev.x <= COLUMN_GAP_THRESHOLD) {
+      groups[groups.length - 1].push(curr);
+    } else {
+      groups.push([curr]);
+    }
+  }
+
+  return groups.map((group) => ({
+    key: group.map((w) => w.text).join(" "),
+    x: group.reduce((sum, w) => sum + w.x, 0) / group.length,
+  }));
 }
 
 // ---------- Mileage PDF parsing ----------
@@ -173,32 +273,15 @@ export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
     const anchors = findHeaderAnchors(rows);
     if (!anchors) continue; // page has no roster table (e.g. a legend/notes-only page)
 
-    const nameColumnMaxX = Math.min(...anchors.map((a) => a.x)) - 20;
-
     for (const row of rows) {
       // Skip the header row itself
       if (row.some((w) => w.text === "Mon")) continue;
 
-      const rawNameWords = row.filter((w) => w.x < nameColumnMaxX);
+      const nameWords = extractLeadingName(row, 2);
+      const displayName = toDisplayName(nameWords);
+      if (!displayName) continue; // not a real name row (e.g. a lone marker)
 
-      // Drop stray single-character marker tokens (1, 2, 4, L, *) that sit in
-      // the unlabeled marker column between Name and FMS — these aren't part
-      // of anyone's actual name, they're coaching shorthand we're ignoring.
-      const nameWords = rawNameWords.filter((w) => !/^[0-9A-Z*]$/.test(w.text));
-
-      if (nameWords.length === 0) continue; // this "row" was just a lone marker
-
-      const name = nameWords
-        .map((w) => w.text)
-        .join(" ")
-        .replace(/,$/, "");
-      const [last, first] = name.split(",").map((s) => s.trim());
-      const displayName = first ? `${first} ${last}` : name;
-
-      // Anything that still doesn't look like a real "First Last" name — skip it
-      if (!first || displayName.length < 3) continue;
-
-      const dataWords = row.filter((w) => w.x >= nameColumnMaxX);
+      const dataWords = row.filter((w) => !nameWords.includes(w));
       const assigned = assignToNearestColumn(dataWords, anchors);
 
       results.push({
@@ -228,52 +311,78 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
 
   const assignments: WorkoutAssignment[] = [];
   const definitionsByLetter = new Map<string, string>();
+  const intervalRows: WorkoutIntervalRow[] = [];
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const words = await extractPageWords(page);
-
-    const groupHeaderWord = words.find((w) => w.text === "G");
-    if (!groupHeaderWord) continue; // not a roster/group page
-
-    const groupColumnX = groupHeaderWord.x;
-    const nameColumnMaxX = groupColumnX - 200; // names sit far left; dot-columns fill the middle
-    const descriptionMinX = groupColumnX + 15; // description text sits just right of the letter
-
     const rows = clusterIntoRows(words);
 
-    for (const row of rows) {
-      const nameWords = row.filter((w) => w.x < nameColumnMaxX);
-      const groupWord = row.find(
-        (w) => Math.abs(w.x - groupColumnX) < 10 && /^[A-Z]{1,2}$/.test(w.text),
-      );
+    const groupHeaderWord = words.find((w) => w.text === "G" && w.top < 30);
 
-      if (nameWords.length > 0 && groupWord) {
-        const rawName = nameWords
-          .map((w) => w.text)
-          .join(" ")
-          .replace(/,$/, "");
-        const [last, first] = rawName.split(",").map((s) => s.trim());
-        const displayName = first ? `${first} ${last}` : rawName;
+    if (groupHeaderWord) {
+      // ---- Lettered-group format ----
+      const groupColumnX = groupHeaderWord.x;
+      const descriptionMinX = groupColumnX + 15;
+
+      for (const row of rows) {
+        const nameWords = extractLeadingName(row, 2);
+        const displayName = toDisplayName(nameWords);
+        if (!displayName) continue;
+
+        const groupWord = row.find(
+          (w) =>
+            Math.abs(w.x - groupColumnX) < 10 && /^[A-Z]{1,2}$/.test(w.text),
+        );
+        if (!groupWord) continue;
 
         assignments.push({ name: displayName, groupLetter: groupWord.text });
       }
-    }
 
-    // Reconstruct group definitions from the description text block,
-    // read in top-to-bottom, left-to-right order, then split on "X:" labels.
-    const descWords = words
-      .filter((w) => w.x > descriptionMinX)
-      .sort((a, b) => a.top - b.top || a.x - b.x);
+      // Reconstruct group definitions from the description text block,
+      // read in top-to-bottom, left-to-right order, then split on "X:" labels.
+      const descWords = words
+        .filter((w) => w.x > descriptionMinX)
+        .sort((a, b) => a.top - b.top || a.x - b.x);
 
-    const fullText = descWords.map((w) => w.text).join(" ");
-    const segments = fullText.split(/(?=\b(?:[A-Z]{1,2}|XT|M):)/);
+      const fullText = descWords.map((w) => w.text).join(" ");
+      const segments = fullText.split(/(?=\b(?:[A-Z]{1,2}|XT|M):)/);
 
-    for (const segment of segments) {
-      const trimmed = segment.trim();
-      const match = trimmed.match(/^([A-Z]{1,2}|XT|M):\s*(.+)$/);
-      if (match) {
-        definitionsByLetter.set(match[1], match[2].trim());
+      for (const segment of segments) {
+        const trimmed = segment.trim();
+        const match = trimmed.match(/^([A-Z]{1,2}|XT|M):\s*(.+)$/);
+        if (match) {
+          definitionsByLetter.set(match[1], match[2].trim());
+        }
+      }
+    } else {
+      // ---- Interval/pace-table format (no group letter on this page) ----
+      const headerRow = rows.find((row) => row.some((w) => w.text === "WO"));
+      if (!headerRow) continue; // not a recognizable table page (e.g. blank/legend)
+
+      const columnAnchors = clusterHeaderIntoColumns(headerRow);
+      if (columnAnchors.length === 0) continue;
+
+      for (const row of rows) {
+        if (row === headerRow) continue;
+
+        const nameWords = extractLeadingName(row, 2);
+        const displayName = toDisplayName(nameWords);
+        if (!displayName) continue;
+
+        const dataWords = row.filter((w) => !nameWords.includes(w));
+        const assigned = assignToNearestColumn(dataWords, columnAnchors);
+
+        // Only keep columns that actually have a value for this athlete —
+        // not everyone runs every interval.
+        const intervals: Record<string, string> = {};
+        for (const [label, value] of Object.entries(assigned)) {
+          if (value.trim().length > 0) intervals[label] = value.trim();
+        }
+
+        if (Object.keys(intervals).length > 0) {
+          intervalRows.push({ name: displayName, intervals });
+        }
       }
     }
   }
@@ -282,5 +391,5 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
     definitionsByLetter.entries(),
   ).map(([groupLetter, description]) => ({ groupLetter, description }));
 
-  return { assignments, groupDefinitions };
+  return { assignments, groupDefinitions, intervalRows };
 }

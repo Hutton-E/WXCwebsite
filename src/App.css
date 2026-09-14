@@ -661,3 +661,112 @@
   color: black;
   font-size: 14px;
 }
+
+.workouts-page {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+.workouts-title {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 48px);
+  text-align: center;
+}
+
+.workouts-no-data {
+  margin: 0;
+  font-size: clamp(16px, 2vw, 24px);
+  text-align: center;
+}
+
+.workouts-card {
+  width: min(90vw, 520px);
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.workouts-week-label {
+  font-weight: 700;
+  font-size: clamp(16px, 2vw, 20px);
+  color: black;
+  text-align: center;
+}
+
+.workouts-day-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.workouts-day-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.workouts-day-name {
+  font-weight: 700;
+  font-size: clamp(15px, 1.8vw, 18px);
+  color: black;
+}
+
+.workouts-group-badge {
+  background: rgba(0, 0, 0, 0.75);
+  color: white;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+
+.workouts-description {
+  margin: 0;
+  color: black;
+  font-size: clamp(14px, 1.6vw, 16px);
+  line-height: 1.4;
+}
+
+.workouts-interval-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.workouts-interval-item {
+  display: flex;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.4);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: clamp(13px, 1.5vw, 15px);
+}
+
+.workouts-interval-label {
+  font-weight: 700;
+  color: black;
+}
+
+.workouts-interval-value {
+  color: black;
+}

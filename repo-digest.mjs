@@ -58,7 +58,8 @@ const BINARY_EXTENSIONS = new Set([
   ".pdf",
   ".zip",
   ".gz",
-  ".lock", // package-lock.json is text but huge/noisy; still skip contents
+  ".lock",
+  ".json", // package-lock.json is text but huge/noisy; still skip contents
 ]);
 
 // Specific filenames to skip contents for (still shown in tree)

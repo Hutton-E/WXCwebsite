@@ -3,12 +3,12 @@ import type {
   MileageRow,
   WorkoutAssignment,
   WorkoutGroupDefinition,
+  WorkoutIntervalRow,
 } from "./pdfParser";
 
 export async function upsertMileageRows(rows: MileageRow[], weekOf: string) {
   // Defensive dedupe: if two parsed rows somehow share a name, keep the last
-  // one rather than sending Postgres a batch with a duplicate conflict key,
-  // which raises "ON CONFLICT DO UPDATE command cannot affect row a second time."
+  // one rather than sending Postgres a batch with a duplicate conflict key.
   const dedupedByName = new Map<string, MileageRow>();
   for (const row of rows) {
     dedupedByName.set(row.name, row);
@@ -57,7 +57,7 @@ export async function upsertWorkoutData(
 
   if (groupError) throw new Error(groupError.message);
 
-  // Same defensive dedupe as mileage — protects against duplicate
+  // Defensive dedupe — protects against duplicate
   // (athlete_name, week_of, day) keys in a single batch.
   const dedupedByName = new Map<string, WorkoutAssignment>();
   for (const a of assignments) {
@@ -81,4 +81,42 @@ export async function upsertWorkoutData(
 
   if (assignError) throw new Error(assignError.message);
   return count ?? assignmentPayload.length;
+}
+
+export async function upsertWorkoutIntervals(
+  intervalRows: WorkoutIntervalRow[],
+  weekOf: string,
+  day: "tuesday" | "friday",
+) {
+  const payload: {
+    athlete_name: string;
+    week_of: string;
+    day: string;
+    interval_label: string;
+    time_value: string;
+  }[] = [];
+
+  for (const row of intervalRows) {
+    for (const [label, value] of Object.entries(row.intervals)) {
+      payload.push({
+        athlete_name: row.name,
+        week_of: weekOf,
+        day,
+        interval_label: label,
+        time_value: value,
+      });
+    }
+  }
+
+  if (payload.length === 0) return 0;
+
+  const { error, count } = await supabase
+    .from("workout_intervals")
+    .upsert(payload, {
+      onConflict: "athlete_name,week_of,day,interval_label",
+      count: "exact",
+    });
+
+  if (error) throw new Error(error.message);
+  return count ?? payload.length;
 }
