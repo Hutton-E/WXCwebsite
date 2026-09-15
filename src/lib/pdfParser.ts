@@ -1,12 +1,37 @@
 import * as pdfjsLib from "pdfjs-dist";
-import pdfjsWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
+import pdfjsWorker from "pdfjs-dist/legacy/build/pdf.worker.mjs?url";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
+// Safari (even recent versions) can lack async iteration support on
+// ReadableStream (`for await (const chunk of stream)`), which pdf.js relies
+// on internally. Patch it in manually if missing, before any PDF parsing
+// happens.
+if (
+  typeof ReadableStream !== "undefined" &&
+  !(ReadableStream.prototype as any)[Symbol.asyncIterator]
+) {
+  (ReadableStream.prototype as any)[Symbol.asyncIterator] = function (
+    this: ReadableStream,
+  ) {
+    const reader = this.getReader();
+    return {
+      next: () => reader.read(),
+      return: (value: unknown) => {
+        reader.releaseLock();
+        return Promise.resolve({ done: true, value });
+      },
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    };
+  };
+}
 
 interface PositionedWord {
   text: string;
   x: number;
-  top: number;
+  top: number; // distance from top of page — smaller = higher up
 }
 
 export interface MileageRow {
@@ -36,7 +61,7 @@ export interface WorkoutGroupDefinition {
 
 export interface WorkoutIntervalRow {
   name: string;
-  intervals: Record<string, string>;
+  intervals: Record<string, string>; // e.g. { "T (400)": "01:43.1", "800 CV": "03:26.3" }
 }
 
 export interface ParsedWorkouts {
@@ -45,9 +70,13 @@ export interface ParsedWorkouts {
   intervalRows: WorkoutIntervalRow[];
 }
 
-const ROW_TOLERANCE = 10;
-const COLUMN_GAP_THRESHOLD = 25;
+const ROW_TOLERANCE = 10; // px — words within this vertical distance are "the same row"
+const COLUMN_GAP_THRESHOLD = 25; // px gap that separates two header column labels
+const PDF_LOAD_TIMEOUT_MS = 30000;
 
+// Matches only alphabetic name-like tokens (letters, apostrophes, hyphens,
+// an optional trailing comma). Anything else — digits, times like "01:18.5",
+// decorative dots/ellipses — fails this and stops name extraction immediately.
 const NAME_TOKEN_RE = /^[A-Za-z'.-]+,?$/;
 const DATE_TOKEN_RE = /^\d{1,2}\/\d{1,2}\/\d{4}$/;
 
@@ -55,8 +84,27 @@ const DATE_TOKEN_RE = /^\d{1,2}\/\d{1,2}\/\d{4}$/;
 // ellipsis character. These are visual filler, never a real coach note.
 const DECORATIVE_DOTS_RE = /^[.\u2026]+$/;
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`${label} timed out after ${ms / 1000}s — try again or check your connection.`)),
+        ms,
+      ),
+    ),
+  ]);
+}
+
 // ---------- Core: extract positioned words from a PDF page ----------
 
+// pdfjs-dist reports text in whatever runs the PDF itself was drawn with —
+// NOT one word per item. A cell like "Maas, Lydia" can arrive as ONE item
+// containing a space. Split every item's string on whitespace into
+// individual word-tokens, estimating each token's x-position proportionally
+// across the item's width, so all downstream logic can work on a
+// one-word-per-token basis (matching how the parsing rules below are
+// designed and were validated).
 function splitIntoWordTokens(
   str: string,
   x: number,
@@ -75,7 +123,7 @@ function splitIntoWordTokens(
   for (const part of parts) {
     results.push({ text: part, x: cursor, top });
     const partWidth = (width * part.length) / totalChars;
-    cursor += partWidth + width * 0.02;
+    cursor += partWidth + width * 0.02; // small gap approximation between words
   }
 
   return results;
@@ -93,6 +141,8 @@ async function extractPageWords(
     if (!("str" in item) || item.str.trim().length === 0) continue;
     const x = item.transform[4];
     const y = item.transform[5];
+    // pdfjs y is measured from the BOTTOM of the page — flip so smaller = higher,
+    // matching the "top" convention used throughout this parser.
     const top = viewport.height - y;
     const width = "width" in item ? (item.width as number) : 0;
 
@@ -117,11 +167,12 @@ function clusterIntoRows(words: PositionedWord[]): PositionedWord[][] {
     }
   }
 
+  // Sort words left-to-right within each row
   rows.forEach((row) => row.sort((a, b) => a.x - b.x));
   return rows;
 }
 
-// ---------- Name extraction ----------
+// ---------- Name extraction: take up to N leading name-like tokens, no more ----------
 
 function extractLeadingName(
   sortedRowWords: PositionedWord[],
@@ -130,7 +181,7 @@ function extractLeadingName(
   const result: PositionedWord[] = [];
   for (const w of sortedRowWords) {
     if (result.length >= maxTokens) break;
-    if (!NAME_TOKEN_RE.test(w.text)) break;
+    if (!NAME_TOKEN_RE.test(w.text)) break; // stop at the FIRST non-name-like token
     result.push(w);
   }
   return result;
@@ -138,10 +189,7 @@ function extractLeadingName(
 
 function toDisplayName(nameWords: PositionedWord[]): string | null {
   if (nameWords.length < 2) return null;
-  const raw = nameWords
-    .map((w) => w.text)
-    .join(" ")
-    .replace(/,$/, "");
+  const raw = nameWords.map((w) => w.text).join(" ").replace(/,$/, "");
   const [last, first] = raw.split(",").map((s) => s.trim());
   if (!first) return null;
   return `${first} ${last}`;
@@ -179,7 +227,7 @@ function assignToNearestColumn(
   return result;
 }
 
-// ---------- Interval header column detection ----------
+// ---------- Interval-format header detection: cluster header words into columns by x-gap ----------
 
 function clusterHeaderIntoColumns(
   headerWords: PositionedWord[],
@@ -248,7 +296,11 @@ function findHeaderAnchors(
 
 export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pdf = await withTimeout(
+    pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true }).promise,
+    PDF_LOAD_TIMEOUT_MS,
+    "PDF loading",
+  );
 
   const results: MileageRow[] = [];
 
@@ -263,14 +315,15 @@ export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
       : "mens-cross-country";
 
     const anchors = findHeaderAnchors(rows);
-    if (!anchors) continue;
+    if (!anchors) continue; // page has no roster table (e.g. a legend/notes-only page)
 
     for (const row of rows) {
+      // Skip the header row itself
       if (row.some((w) => w.text === "Mon")) continue;
 
       const nameWords = extractLeadingName(row, 2);
       const displayName = toDisplayName(nameWords);
-      if (!displayName) continue;
+      if (!displayName) continue; // not a real name row (e.g. a lone marker)
 
       const dataWords = row.filter((w) => !nameWords.includes(w));
       const assigned = assignToNearestColumn(dataWords, anchors);
@@ -298,7 +351,11 @@ export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
 
 export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pdf = await withTimeout(
+    pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true }).promise,
+    PDF_LOAD_TIMEOUT_MS,
+    "PDF loading",
+  );
 
   const assignments: WorkoutAssignment[] = [];
   const definitionsByLetter = new Map<string, string>();
@@ -322,8 +379,7 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
         if (!displayName) continue;
 
         const groupWord = row.find(
-          (w) =>
-            Math.abs(w.x - groupColumnX) < 10 && /^[A-Z]{1,2}$/.test(w.text),
+          (w) => Math.abs(w.x - groupColumnX) < 10 && /^[A-Z]{1,2}$/.test(w.text),
         );
         if (!groupWord) continue;
 
@@ -336,21 +392,15 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
           .filter((w) => !DECORATIVE_DOTS_RE.test(w.text))
           .sort((a, b) => a.x - b.x);
 
-        const note =
-          noteWords.length > 0
-            ? noteWords
-                .map((w) => w.text)
-                .join(" ")
-                .trim()
-            : null;
+        const note = noteWords.length > 0
+          ? noteWords.map((w) => w.text).join(" ").trim()
+          : null;
 
-        assignments.push({
-          name: displayName,
-          groupLetter: groupWord.text,
-          note,
-        });
+        assignments.push({ name: displayName, groupLetter: groupWord.text, note });
       }
 
+      // Reconstruct group definitions from the description text block,
+      // read in top-to-bottom, left-to-right order, then split on "X:" labels.
       const descWords = words
         .filter((w) => w.x > descriptionMinX)
         .sort((a, b) => a.top - b.top || a.x - b.x);
@@ -366,9 +416,9 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
         }
       }
     } else {
-      // ---- Interval/pace-table format ----
+      // ---- Interval/pace-table format (no group letter on this page) ----
       const headerRow = rows.find((row) => row.some((w) => w.text === "WO"));
-      if (!headerRow) continue;
+      if (!headerRow) continue; // not a recognizable table page (e.g. blank/legend)
 
       const columnAnchors = clusterHeaderIntoColumns(headerRow);
       if (columnAnchors.length === 0) continue;
@@ -383,6 +433,8 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
         const dataWords = row.filter((w) => !nameWords.includes(w));
         const assigned = assignToNearestColumn(dataWords, columnAnchors);
 
+        // Only keep columns that actually have a value for this athlete —
+        // not everyone runs every interval.
         const intervals: Record<string, string> = {};
         for (const [label, value] of Object.entries(assigned)) {
           if (value.trim().length > 0) intervals[label] = value.trim();
