@@ -23,12 +23,6 @@ const CURRENT_SEASON = 2026;
 
 type Mode = "mileage" | "workouts";
 
-interface WorkoutData {
-  assignments: WorkoutAssignment[];
-  groupDefinitions: WorkoutGroupDefinition[];
-  intervalRows: WorkoutIntervalRow[];
-}
-
 // Determines which team(s) each parsed group letter actually belongs to,
 // based on the real team of the athletes matched to that letter ON THE
 // SAME PAGE — since the same letter (e.g. "A") can mean a different
@@ -168,22 +162,25 @@ function AdminDashboard() {
   const assignmentUnmatchedCount = assignmentMatches?.filter((r) => !r.athleteId).length ?? 0;
   const intervalUnmatchedCount = intervalMatches?.filter((r) => !r.athleteId).length ?? 0;
 
+  // Fires all alias-saving requests in parallel instead of one-at-a-time —
+  // with up to ~100 rows on a busy week, sequential awaits could take
+  // 15-20+ seconds with zero visible progress, which read as a hang.
   async function learnAliasesFrom<T extends { name: string }>(rows: MatchedRow<T>[]) {
     const athleteById = new Map(athletes.map((a) => [a.id, a.name]));
 
-    for (const row of rows) {
-      if (!row.athleteId) continue;
+    const aliasesToLearn = rows.filter((row) => {
+      if (!row.athleteId) return false;
       const realName = athleteById.get(row.athleteId);
-      if (!realName) continue;
+      return realName && normalizeName(row.data.name) !== normalizeName(realName);
+    });
 
-      if (normalizeName(row.data.name) !== normalizeName(realName)) {
-        try {
-          await upsertAlias(CURRENT_SEASON, row.data.name, row.athleteId);
-        } catch (err) {
-          console.warn(`Failed to save alias for "${row.data.name}":`, err);
-        }
-      }
-    }
+    await Promise.all(
+      aliasesToLearn.map((row) =>
+        upsertAlias(CURRENT_SEASON, row.data.name, row.athleteId).catch((err) =>
+          console.warn(`Failed to save alias for "${row.data.name}":`, err),
+        ),
+      ),
+    );
   }
 
   async function handleSubmit() {

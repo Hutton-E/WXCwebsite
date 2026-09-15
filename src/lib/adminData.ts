@@ -16,6 +16,20 @@ export interface TeamScopedGroupDefinition {
   team: string;
 }
 
+const SAVE_TIMEOUT_MS = 20000;
+
+function withTimeout<T>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`${label} timed out after ${ms / 1000}s — check your connection and try again.`)),
+        ms,
+      ),
+    ),
+  ]);
+}
+
 export async function upsertMileageRows(
   rows: MatchedRow<MileageRow>[],
   weekOf: string,
@@ -44,9 +58,13 @@ export async function upsertMileageRows(
     notes: r.notes,
   }));
 
-  const { error, count } = await supabase
-    .from("mileage_entries")
-    .upsert(payload, { onConflict: "athlete_id,season,week_of", count: "exact" });
+  const { error, count } = await withTimeout(
+    supabase
+      .from("mileage_entries")
+      .upsert(payload, { onConflict: "athlete_id,season,week_of", count: "exact" }),
+    SAVE_TIMEOUT_MS,
+    "Mileage save",
+  );
 
   if (error) throw new Error(error.message);
   return count ?? payload.length;
@@ -59,9 +77,9 @@ export async function upsertWorkoutData(
   day: "tuesday" | "friday",
   season: number,
 ) {
-  // Groups are now scoped by team, since the same letter (e.g. "A") can
-  // mean a completely different workout for the men's team vs. the
-  // women's team on the same day.
+  // Groups are scoped by team, since the same letter (e.g. "A") can mean a
+  // completely different workout for the men's team vs. the women's team
+  // on the same day.
   const groupPayload = groupDefinitions.map((g) => ({
     week_of: weekOf,
     day,
@@ -71,9 +89,13 @@ export async function upsertWorkoutData(
   }));
 
   if (groupPayload.length > 0) {
-    const { error: groupError } = await supabase
-      .from("workout_groups")
-      .upsert(groupPayload, { onConflict: "week_of,day,team,group_letter" });
+    const { error: groupError } = await withTimeout(
+      supabase
+        .from("workout_groups")
+        .upsert(groupPayload, { onConflict: "week_of,day,team,group_letter" }),
+      SAVE_TIMEOUT_MS,
+      "Workout group definitions save",
+    );
 
     if (groupError) throw new Error(groupError.message);
   }
@@ -94,9 +116,13 @@ export async function upsertWorkoutData(
     note: a.note,
   }));
 
-  const { error: assignError, count } = await supabase
-    .from("workout_assignments")
-    .upsert(assignmentPayload, { onConflict: "athlete_id,season,week_of,day", count: "exact" });
+  const { error: assignError, count } = await withTimeout(
+    supabase
+      .from("workout_assignments")
+      .upsert(assignmentPayload, { onConflict: "athlete_id,season,week_of,day", count: "exact" }),
+    SAVE_TIMEOUT_MS,
+    "Workout assignments save",
+  );
 
   if (assignError) throw new Error(assignError.message);
   return count ?? assignmentPayload.length;
@@ -134,12 +160,16 @@ export async function upsertWorkoutIntervals(
 
   if (payload.length === 0) return 0;
 
-  const { error, count } = await supabase
-    .from("workout_intervals")
-    .upsert(payload, {
-      onConflict: "athlete_id,season,week_of,day,interval_label",
-      count: "exact",
-    });
+  const { error, count } = await withTimeout(
+    supabase
+      .from("workout_intervals")
+      .upsert(payload, {
+        onConflict: "athlete_id,season,week_of,day,interval_label",
+        count: "exact",
+      }),
+    SAVE_TIMEOUT_MS,
+    "Workout intervals save",
+  );
 
   if (error) throw new Error(error.message);
   return count ?? payload.length;
