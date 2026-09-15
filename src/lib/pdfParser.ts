@@ -52,11 +52,13 @@ export interface WorkoutAssignment {
   name: string;
   groupLetter: string;
   note: string | null;
+  pageIndex: number;
 }
 
 export interface WorkoutGroupDefinition {
   groupLetter: string;
   description: string;
+  pageIndex: number;
 }
 
 export interface WorkoutIntervalRow {
@@ -73,6 +75,12 @@ export interface ParsedWorkouts {
 const ROW_TOLERANCE = 10; // px — words within this vertical distance are "the same row"
 const COLUMN_GAP_THRESHOLD = 25; // px gap that separates two header column labels
 const PDF_LOAD_TIMEOUT_MS = 30000;
+
+// Description/legend text consistently lives in a dedicated right-hand
+// column (x > ~600pt) across every observed page layout — confirmed on
+// both short one-line descriptions and longer wrapped ones that would
+// otherwise interleave with table rows sharing the same vertical space.
+const LEGEND_MIN_X = 580;
 
 // Matches only alphabetic name-like tokens (letters, apostrophes, hyphens,
 // an optional trailing comma). Anything else — digits, times like "01:18.5",
@@ -348,6 +356,20 @@ export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
 }
 
 // ---------- Workouts PDF parsing ----------
+//
+// This format varies week to week — whether a "G" column exists, where
+// legend/description text sits, and whether men's/women's rosters share a
+// page all differ. What DOES stay consistent: description/legend text
+// always lives in a dedicated right-hand column (x > LEGEND_MIN_X),
+// distinctly separate from the table content on every observed layout.
+// Filtering by that x-boundary FIRST — before any reading-order sorting —
+// is what prevents legend text and table rows from interleaving into
+// garbled output, regardless of how they overlap vertically.
+//
+// Every group letter and assignment is also tagged with the PAGE it came
+// from, so downstream code (team-scoping in the admin dashboard) can
+// correctly separate e.g. a men's-page "C" from a women's-page "C" instead
+// of merging them.
 
 export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
   const arrayBuffer = await file.arrayBuffer();
@@ -358,7 +380,7 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
   );
 
   const assignments: WorkoutAssignment[] = [];
-  const definitionsByLetter = new Map<string, string>();
+  const groupDefinitions: WorkoutGroupDefinition[] = [];
   const intervalRows: WorkoutIntervalRow[] = [];
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
@@ -367,11 +389,35 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
     const rows = clusterIntoRows(words);
 
     const groupHeaderWord = words.find((w) => w.text === "G" && w.top < 30);
+    const seenLettersThisPage = new Set<string>();
+
+    // Description/legend text always lives at x > LEGEND_MIN_X on every
+    // observed layout. Filtering by x FIRST means this never mixes with
+    // table content, regardless of vertical overlap — this runs
+    // unconditionally, once per page, before branching on page format.
+    const legendWords = words
+      .filter((w) => w.x > LEGEND_MIN_X)
+      .sort((a, b) => a.top - b.top || a.x - b.x);
+
+    const fullLegendText = legendWords.map((w) => w.text).join(" ");
+    const legendSegments = fullLegendText.split(/(?=\b(?:[A-Z]{1,2}|XT|M):)/);
+
+    for (const segment of legendSegments) {
+      const trimmed = segment.trim();
+      const match = trimmed.match(/^([A-Z]{1,2}|XT|M):\s*(.+)$/);
+      if (match && !seenLettersThisPage.has(match[1])) {
+        seenLettersThisPage.add(match[1]);
+        groupDefinitions.push({
+          groupLetter: match[1],
+          description: match[2].trim(),
+          pageIndex: pageNum,
+        });
+      }
+    }
 
     if (groupHeaderWord) {
       // ---- Lettered-group format ----
       const groupColumnX = groupHeaderWord.x;
-      const descriptionMinX = groupColumnX + 15;
 
       for (const row of rows) {
         const nameWords = extractLeadingName(row, 2);
@@ -396,32 +442,23 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
           ? noteWords.map((w) => w.text).join(" ").trim()
           : null;
 
-        assignments.push({ name: displayName, groupLetter: groupWord.text, note });
-      }
-
-      // Reconstruct group definitions from the description text block,
-      // read in top-to-bottom, left-to-right order, then split on "X:" labels.
-      const descWords = words
-        .filter((w) => w.x > descriptionMinX)
-        .sort((a, b) => a.top - b.top || a.x - b.x);
-
-      const fullText = descWords.map((w) => w.text).join(" ");
-      const segments = fullText.split(/(?=\b(?:[A-Z]{1,2}|XT|M):)/);
-
-      for (const segment of segments) {
-        const trimmed = segment.trim();
-        const match = trimmed.match(/^([A-Z]{1,2}|XT|M):\s*(.+)$/);
-        if (match) {
-          definitionsByLetter.set(match[1], match[2].trim());
-        }
+        assignments.push({
+          name: displayName,
+          groupLetter: groupWord.text,
+          note,
+          pageIndex: pageNum,
+        });
       }
     } else {
-      // ---- Interval/pace-table format (no group letter on this page) ----
+      // ---- Interval/pace-table format, possibly with an unlabeled
+      // trailing group-letter column ----
       const headerRow = rows.find((row) => row.some((w) => w.text === "WO"));
-      if (!headerRow) continue; // not a recognizable table page (e.g. blank/legend)
+      if (!headerRow) continue; // not a recognizable table page (e.g. blank/legend-only)
 
       const columnAnchors = clusterHeaderIntoColumns(headerRow);
       if (columnAnchors.length === 0) continue;
+
+      const hasGroupColumn = columnAnchors.some((c) => c.key === "G");
 
       for (const row of rows) {
         if (row === headerRow) continue;
@@ -430,13 +467,46 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
         const displayName = toDisplayName(nameWords);
         if (!displayName) continue;
 
-        const dataWords = row.filter((w) => !nameWords.includes(w));
+        // Exclude legend-column words from ever being treated as table
+        // data for this row.
+        const dataWords = row.filter(
+          (w) => !nameWords.includes(w) && w.x <= LEGEND_MIN_X,
+        );
         const assigned = assignToNearestColumn(dataWords, columnAnchors);
 
+        if (hasGroupColumn && assigned["G"] && /^[A-Za-z]{1,2}$/.test(assigned["G"].trim())) {
+          assignments.push({
+            name: displayName,
+            groupLetter: assigned["G"].trim(),
+            note: null,
+            pageIndex: pageNum,
+          });
+        } else {
+          // No explicit "G" header — check if the LAST table-side word in
+          // the row is a bare 1-2 letter token, which some weeks use as an
+          // unlabeled trailing group column (e.g. "... 01:12.1 B").
+          const trailingWord = [...row].reverse().find((w) => w.x <= LEGEND_MIN_X);
+          if (
+            trailingWord &&
+            !nameWords.includes(trailingWord) &&
+            /^[A-Za-z]{1,2}$/.test(trailingWord.text) &&
+            !Object.values(assigned).some((v) => v.includes(trailingWord.text))
+          ) {
+            assignments.push({
+              name: displayName,
+              groupLetter: trailingWord.text,
+              note: null,
+              pageIndex: pageNum,
+            });
+          }
+        }
+
         // Only keep columns that actually have a value for this athlete —
-        // not everyone runs every interval.
+        // not everyone runs every interval — and never treat the "G"
+        // column itself as an interval.
         const intervals: Record<string, string> = {};
         for (const [label, value] of Object.entries(assigned)) {
+          if (label === "G") continue;
           if (value.trim().length > 0) intervals[label] = value.trim();
         }
 
@@ -446,10 +516,6 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
       }
     }
   }
-
-  const groupDefinitions: WorkoutGroupDefinition[] = Array.from(
-    definitionsByLetter.entries(),
-  ).map(([groupLetter, description]) => ({ groupLetter, description }));
 
   return { assignments, groupDefinitions, intervalRows };
 }

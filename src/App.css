@@ -943,6 +943,18 @@ button.admin-nav-link {
   font: inherit;
 }
 
+.admin-description-edit {
+  width: 100%;
+  min-width: 300px;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.3);
+  resize: vertical;
+  box-sizing: border-box;
+}
+
 @media (max-width: 700px) {
   .home-content {
     display: flex;

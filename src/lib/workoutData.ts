@@ -32,6 +32,7 @@ export interface WorkoutIntervalEntry {
 export async function fetchWorkoutsForAthlete(
   athleteId: string,
   season: number,
+  team: string,
 ): Promise<WorkoutForDay[]> {
   const { data: assignments, error: assignError } = await supabase
     .from("workout_assignments")
@@ -48,6 +49,7 @@ export async function fetchWorkoutsForAthlete(
   const { data: groups, error: groupError } = await supabase
     .from("workout_groups")
     .select("week_of, day, group_letter, description")
+    .eq("team", team)
     .in("week_of", weeksOf);
 
   if (groupError) throw new Error(groupError.message);
@@ -61,8 +63,7 @@ export async function fetchWorkoutsForAthlete(
     weekOf: a.week_of,
     day: a.day,
     groupLetter: a.group_letter,
-    description:
-      groupLookup.get(`${a.week_of}|${a.day}|${a.group_letter}`) ?? null,
+    description: groupLookup.get(`${a.week_of}|${a.day}|${a.group_letter}`) ?? null,
     note: a.note ?? null,
   }));
 }

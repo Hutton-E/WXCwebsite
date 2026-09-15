@@ -87,7 +87,7 @@ function WorkoutsPage() {
     setError(null);
 
     Promise.all([
-      fetchWorkoutsForAthlete(athlete.id, season),
+      fetchWorkoutsForAthlete(athlete.id, season, athlete.team),
       fetchIntervalsForAthlete(athlete.id, season),
     ])
       .then(([groupData, intervalData]) => {

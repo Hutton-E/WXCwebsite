@@ -13,20 +13,54 @@ import {
   upsertWorkoutData,
   upsertWorkoutIntervals,
 } from "../lib/adminData";
-import type { MatchedRow } from "../lib/adminData";
+import type { MatchedRow, TeamScopedGroupDefinition } from "../lib/adminData";
 import { fetchAthletesForSeason } from "../lib/athleteData";
 import type { AthleteRecord } from "../lib/athleteData";
 import { fetchAliasesForSeason, upsertAlias } from "../lib/aliasData";
-import {
-  buildNameLookup,
-  buildAliasLookup,
-  matchName,
-  normalizeName,
-} from "../lib/nameMatching";
+import { buildNameLookup, buildAliasLookup, matchName, normalizeName } from "../lib/nameMatching";
 
 const CURRENT_SEASON = 2026;
 
 type Mode = "mileage" | "workouts";
+
+interface WorkoutData {
+  assignments: WorkoutAssignment[];
+  groupDefinitions: WorkoutGroupDefinition[];
+  intervalRows: WorkoutIntervalRow[];
+}
+
+// Determines which team(s) each parsed group letter actually belongs to,
+// based on the real team of the athletes matched to that letter ON THE
+// SAME PAGE — since the same letter (e.g. "A") can mean a different
+// workout for the men's team vs. the women's team on the same day.
+function buildTeamScopedGroupDefinitions(
+  groupDefinitions: WorkoutGroupDefinition[],
+  assignments: MatchedRow<WorkoutAssignment>[],
+  athletes: AthleteRecord[],
+): TeamScopedGroupDefinition[] {
+  const athleteById = new Map(athletes.map((a) => [a.id, a]));
+  const result: TeamScopedGroupDefinition[] = [];
+
+  for (const def of groupDefinitions) {
+    const teamsForThisDefinition = new Set(
+      assignments
+        .filter(
+          (a) =>
+            a.data.groupLetter === def.groupLetter &&
+            a.data.pageIndex === def.pageIndex &&
+            a.athleteId,
+        )
+        .map((a) => athleteById.get(a.athleteId)?.team)
+        .filter((t): t is string => !!t),
+    );
+
+    for (const team of teamsForThisDefinition) {
+      result.push({ groupLetter: def.groupLetter, description: def.description, team });
+    }
+  }
+
+  return result;
+}
 
 function AdminDashboard() {
   const { signOut } = useAdminAuth();
@@ -35,23 +69,13 @@ function AdminDashboard() {
   const [day, setDay] = useState<"tuesday" | "friday">("tuesday");
 
   const [athletes, setAthletes] = useState<AthleteRecord[]>([]);
-  const [aliases, setAliases] = useState<
-    { alias_name: string; athlete_id: string }[]
-  >([]);
+  const [aliases, setAliases] = useState<{ alias_name: string; athlete_id: string }[]>([]);
   const [athletesLoaded, setAthletesLoaded] = useState(false);
 
-  const [mileageMatches, setMileageMatches] = useState<
-    MatchedRow<MileageRow>[] | null
-  >(null);
-  const [assignmentMatches, setAssignmentMatches] = useState<
-    MatchedRow<WorkoutAssignment>[] | null
-  >(null);
-  const [intervalMatches, setIntervalMatches] = useState<
-    MatchedRow<WorkoutIntervalRow>[] | null
-  >(null);
-  const [groupDefinitions, setGroupDefinitions] = useState<
-    WorkoutGroupDefinition[]
-  >([]);
+  const [mileageMatches, setMileageMatches] = useState<MatchedRow<MileageRow>[] | null>(null);
+  const [assignmentMatches, setAssignmentMatches] = useState<MatchedRow<WorkoutAssignment>[] | null>(null);
+  const [intervalMatches, setIntervalMatches] = useState<MatchedRow<WorkoutIntervalRow>[] | null>(null);
+  const [groupDefinitions, setGroupDefinitions] = useState<WorkoutGroupDefinition[]>([]);
 
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -66,9 +90,7 @@ function AdminDashboard() {
         setAliases(aliasData);
         setAthletesLoaded(true);
       })
-      .catch((err) =>
-        setStatus(`Failed to load athlete roster: ${err.message}`),
-      );
+      .catch((err) => setStatus(`Failed to load athlete roster: ${err.message}`));
   }, []);
 
   function runMatching<T extends { name: string }>(rows: T[]): MatchedRow<T>[] {
@@ -124,34 +146,29 @@ function AdminDashboard() {
     );
   }
 
-  function removeMileageRow(index: number) {
-    setMileageMatches((prev) =>
-      prev ? prev.filter((_, i) => i !== index) : prev,
+  function updateGroupDescription(index: number, description: string) {
+    setGroupDefinitions((prev) =>
+      prev.map((g, i) => (i === index ? { ...g, description } : g)),
     );
+  }
+
+  function removeMileageRow(index: number) {
+    setMileageMatches((prev) => (prev ? prev.filter((_, i) => i !== index) : prev));
   }
 
   function removeAssignmentRow(index: number) {
-    setAssignmentMatches((prev) =>
-      prev ? prev.filter((_, i) => i !== index) : prev,
-    );
+    setAssignmentMatches((prev) => (prev ? prev.filter((_, i) => i !== index) : prev));
   }
 
   function removeIntervalRow(index: number) {
-    setIntervalMatches((prev) =>
-      prev ? prev.filter((_, i) => i !== index) : prev,
-    );
+    setIntervalMatches((prev) => (prev ? prev.filter((_, i) => i !== index) : prev));
   }
 
-  const mileageUnmatchedCount =
-    mileageMatches?.filter((r) => !r.athleteId).length ?? 0;
-  const assignmentUnmatchedCount =
-    assignmentMatches?.filter((r) => !r.athleteId).length ?? 0;
-  const intervalUnmatchedCount =
-    intervalMatches?.filter((r) => !r.athleteId).length ?? 0;
+  const mileageUnmatchedCount = mileageMatches?.filter((r) => !r.athleteId).length ?? 0;
+  const assignmentUnmatchedCount = assignmentMatches?.filter((r) => !r.athleteId).length ?? 0;
+  const intervalUnmatchedCount = intervalMatches?.filter((r) => !r.athleteId).length ?? 0;
 
-  async function learnAliasesFrom<T extends { name: string }>(
-    rows: MatchedRow<T>[],
-  ) {
+  async function learnAliasesFrom<T extends { name: string }>(rows: MatchedRow<T>[]) {
     const athleteById = new Map(athletes.map((a) => [a.id, a.name]));
 
     for (const row of rows) {
@@ -184,16 +201,18 @@ function AdminDashboard() {
         await learnAliasesFrom(resolved);
         setStatus(`✅ Saved ${count} mileage rows for week of ${weekOf}.`);
       } else if (mode === "workouts") {
-        const resolvedAssignments = (assignmentMatches ?? []).filter(
-          (r) => r.athleteId,
-        );
-        const resolvedIntervals = (intervalMatches ?? []).filter(
-          (r) => r.athleteId,
+        const resolvedAssignments = (assignmentMatches ?? []).filter((r) => r.athleteId);
+        const resolvedIntervals = (intervalMatches ?? []).filter((r) => r.athleteId);
+
+        const teamScopedGroups = buildTeamScopedGroupDefinitions(
+          groupDefinitions,
+          resolvedAssignments,
+          athletes,
         );
 
         const groupCount = await upsertWorkoutData(
           resolvedAssignments,
-          groupDefinitions,
+          teamScopedGroups,
           weekOf,
           day,
           CURRENT_SEASON,
@@ -208,7 +227,7 @@ function AdminDashboard() {
         await learnAliasesFrom(resolvedIntervals);
 
         setStatus(
-          `✅ Saved ${groupCount} group assignments and ${intervalCount} interval entries for ${day}, week of ${weekOf}.`,
+          `✅ Saved ${groupCount} group assignments (${teamScopedGroups.length} team-scoped group definitions) and ${intervalCount} interval entries for ${day}, week of ${weekOf}.`,
         );
       }
     } catch (err) {
@@ -270,7 +289,7 @@ function AdminDashboard() {
         >
           Workouts
         </button>
-        <Link to="/admin/fms" className="nav-menu-trigger">
+        <Link to="/admin/fms" className="nav-menu-item admin-nav-link">
           FMS Correctives
         </Link>
       </div>
@@ -308,9 +327,7 @@ function AdminDashboard() {
         />
       </div>
 
-      {!athletesLoaded && (
-        <p className="admin-status">Loading athlete roster...</p>
-      )}
+      {!athletesLoaded && <p className="admin-status">Loading athlete roster...</p>}
       {busy && <p className="admin-status">Working...</p>}
       {status && <p className="admin-status">{status}</p>}
 
@@ -340,10 +357,7 @@ function AdminDashboard() {
               </thead>
               <tbody>
                 {mileageMatches.map((r, i) => (
-                  <tr
-                    key={i}
-                    className={!r.athleteId ? "admin-row-unmatched" : ""}
-                  >
+                  <tr key={i} className={!r.athleteId ? "admin-row-unmatched" : ""}>
                     <td>
                       <AthleteSelect
                         value={r.athleteId}
@@ -360,10 +374,7 @@ function AdminDashboard() {
                     <td>{r.data.sunday}</td>
                     <td>{r.data.weeklyTotal}</td>
                     <td>
-                      <button
-                        className="admin-remove-btn"
-                        onClick={() => removeMileageRow(i)}
-                      >
+                      <button className="admin-remove-btn" onClick={() => removeMileageRow(i)}>
                         ✕
                       </button>
                     </td>
@@ -372,11 +383,7 @@ function AdminDashboard() {
               </tbody>
             </table>
           </div>
-          <button
-            className="nav-menu-trigger"
-            onClick={handleSubmit}
-            disabled={busy}
-          >
+          <button className="nav-menu-trigger" onClick={handleSubmit} disabled={busy}>
             Save to Database
           </button>
         </div>
@@ -390,14 +397,21 @@ function AdminDashboard() {
                 <thead>
                   <tr>
                     <th>Group</th>
-                    <th>Description</th>
+                    <th>Description (edit if garbled)</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {groupDefinitions.map((g) => (
-                    <tr key={g.groupLetter}>
+                  {groupDefinitions.map((g, i) => (
+                    <tr key={`${g.pageIndex}-${g.groupLetter}`}>
                       <td>{g.groupLetter}</td>
-                      <td>{g.description}</td>
+                      <td>
+                        <textarea
+                          className="admin-description-edit"
+                          value={g.description}
+                          onChange={(e) => updateGroupDescription(i, e.target.value)}
+                          rows={2}
+                        />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -409,8 +423,7 @@ function AdminDashboard() {
             <>
               <p className="admin-preview-count">
                 {assignmentMatches.length} group assignments
-                {assignmentUnmatchedCount > 0 &&
-                  ` — ${assignmentUnmatchedCount} unmatched`}
+                {assignmentUnmatchedCount > 0 && ` — ${assignmentUnmatchedCount} unmatched`}
               </p>
               <div className="admin-table-wrapper">
                 <table className="admin-table">
@@ -424,10 +437,7 @@ function AdminDashboard() {
                   </thead>
                   <tbody>
                     {assignmentMatches.map((r, i) => (
-                      <tr
-                        key={i}
-                        className={!r.athleteId ? "admin-row-unmatched" : ""}
-                      >
+                      <tr key={i} className={!r.athleteId ? "admin-row-unmatched" : ""}>
                         <td>
                           <AthleteSelect
                             value={r.athleteId}
@@ -456,8 +466,7 @@ function AdminDashboard() {
             <>
               <p className="admin-preview-count">
                 {intervalMatches.length} interval rows
-                {intervalUnmatchedCount > 0 &&
-                  ` — ${intervalUnmatchedCount} unmatched`}
+                {intervalUnmatchedCount > 0 && ` — ${intervalUnmatchedCount} unmatched`}
               </p>
               <div className="admin-table-wrapper">
                 <table className="admin-table">
@@ -471,10 +480,7 @@ function AdminDashboard() {
                   </thead>
                   <tbody>
                     {intervalMatches.map((r, i) => (
-                      <tr
-                        key={i}
-                        className={!r.athleteId ? "admin-row-unmatched" : ""}
-                      >
+                      <tr key={i} className={!r.athleteId ? "admin-row-unmatched" : ""}>
                         <td>
                           <AthleteSelect
                             value={r.athleteId}
@@ -488,10 +494,7 @@ function AdminDashboard() {
                             .join(" | ")}
                         </td>
                         <td>
-                          <button
-                            className="admin-remove-btn"
-                            onClick={() => removeIntervalRow(i)}
-                          >
+                          <button className="admin-remove-btn" onClick={() => removeIntervalRow(i)}>
                             ✕
                           </button>
                         </td>
@@ -503,20 +506,13 @@ function AdminDashboard() {
             </>
           )}
 
-          <button
-            className="nav-menu-trigger"
-            onClick={handleSubmit}
-            disabled={busy}
-          >
+          <button className="nav-menu-trigger" onClick={handleSubmit} disabled={busy}>
             Save to Database
           </button>
         </div>
       )}
 
-      <button
-        className="admin-signout-link acme-regular text-outline"
-        onClick={signOut}
-      >
+      <button className="admin-signout-link acme-regular text-outline" onClick={signOut}>
         Sign Out
       </button>
     </div>

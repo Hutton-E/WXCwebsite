@@ -2,13 +2,18 @@ import { supabase } from "./supabaseClient";
 import type {
   MileageRow,
   WorkoutAssignment,
-  WorkoutGroupDefinition,
   WorkoutIntervalRow,
 } from "./pdfParser";
 
 export interface MatchedRow<T> {
   data: T;
   athleteId: string;
+}
+
+export interface TeamScopedGroupDefinition {
+  groupLetter: string;
+  description: string;
+  team: string;
 }
 
 export async function upsertMileageRows(
@@ -41,10 +46,7 @@ export async function upsertMileageRows(
 
   const { error, count } = await supabase
     .from("mileage_entries")
-    .upsert(payload, {
-      onConflict: "athlete_id,season,week_of",
-      count: "exact",
-    });
+    .upsert(payload, { onConflict: "athlete_id,season,week_of", count: "exact" });
 
   if (error) throw new Error(error.message);
   return count ?? payload.length;
@@ -52,23 +54,29 @@ export async function upsertMileageRows(
 
 export async function upsertWorkoutData(
   assignments: MatchedRow<WorkoutAssignment>[],
-  groupDefinitions: WorkoutGroupDefinition[],
+  groupDefinitions: TeamScopedGroupDefinition[],
   weekOf: string,
   day: "tuesday" | "friday",
   season: number,
 ) {
+  // Groups are now scoped by team, since the same letter (e.g. "A") can
+  // mean a completely different workout for the men's team vs. the
+  // women's team on the same day.
   const groupPayload = groupDefinitions.map((g) => ({
     week_of: weekOf,
     day,
+    team: g.team,
     group_letter: g.groupLetter,
     description: g.description,
   }));
 
-  const { error: groupError } = await supabase
-    .from("workout_groups")
-    .upsert(groupPayload, { onConflict: "week_of,day,group_letter" });
+  if (groupPayload.length > 0) {
+    const { error: groupError } = await supabase
+      .from("workout_groups")
+      .upsert(groupPayload, { onConflict: "week_of,day,team,group_letter" });
 
-  if (groupError) throw new Error(groupError.message);
+    if (groupError) throw new Error(groupError.message);
+  }
 
   const dedupedById = new Map<string, MatchedRow<WorkoutAssignment>>();
   for (const a of assignments) {
@@ -88,10 +96,7 @@ export async function upsertWorkoutData(
 
   const { error: assignError, count } = await supabase
     .from("workout_assignments")
-    .upsert(assignmentPayload, {
-      onConflict: "athlete_id,season,week_of,day",
-      count: "exact",
-    });
+    .upsert(assignmentPayload, { onConflict: "athlete_id,season,week_of,day", count: "exact" });
 
   if (assignError) throw new Error(assignError.message);
   return count ?? assignmentPayload.length;
