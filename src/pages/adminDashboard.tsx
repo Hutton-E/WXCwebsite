@@ -270,7 +270,7 @@ function AdminDashboard() {
         >
           Workouts
         </button>
-        <Link to="/admin/fms" className="nav-menu-item admin-nav-link">
+        <Link to="/admin/fms" className="nav-menu-trigger">
           FMS Correctives
         </Link>
       </div>

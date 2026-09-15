@@ -89,10 +89,7 @@ function AdminFmsAssignments() {
     <div className="admin-dashboard">
       <h1 className="admin-title acme-regular text-outline">FMS Assignments</h1>
 
-      <button
-        className="nav-menu-item admin-nav-link"
-        onClick={() => navigate(-1)}
-      >
+      <button className="nav-menu-trigger" onClick={() => navigate(-1)}>
         ← Back to Dashboard
       </button>
 

@@ -12,23 +12,17 @@ const resourceLinks = [
   { label: "View Lifting Sheet", path: "/lifting_sheet" },
 ];
 
-const statsLinks = [
-  { label: "View TFRRS Stats", path: "/tfrrs-stats" },
-  { label: "View Personal Records", path: "/personal-records" },
-  { label: "View Season Bests", path: "/season-bests" },
-];
+const statsLinks = [{ label: "View TFRRS Stats", path: "/tfrrs-stats" }];
 
 function Home() {
   const { athlete, athleteId, athleteLoading } = useUser();
 
-  // A session is stored and still resolving — avoid flashing the
-  // identity-lookup screen before we know whether it's valid.
   if (athleteId && athleteLoading) {
     return null;
   }
 
   return (
-    <>
+    <div className="home-content">
       <img src={wartburgLogo} className="framework" alt="Wartburg Logo" />
 
       <h1 className="welcome-text acme-regular text-outline">
@@ -51,7 +45,7 @@ function Home() {
           <SwitchIdentityPrompt />
         </>
       )}
-    </>
+    </div>
   );
 }
 
