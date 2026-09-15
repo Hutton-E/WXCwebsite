@@ -31,7 +31,7 @@ if (
 interface PositionedWord {
   text: string;
   x: number;
-  top: number; // distance from top of page — smaller = higher up
+  top: number;
 }
 
 export interface MileageRow {
@@ -48,9 +48,13 @@ export interface MileageRow {
   notes: string;
 }
 
-export interface WorkoutAssignment {
+// A single unified row per athlete per day — regardless of whether their
+// sheet was the simple lettered-group format, the interval/pace-table
+// format, or both at once.
+export interface WorkoutRow {
   name: string;
-  groupLetter: string;
+  groupLetter: string | null;
+  intervals: Record<string, string>;
   note: string | null;
   pageIndex: number;
 }
@@ -61,38 +65,30 @@ export interface WorkoutGroupDefinition {
   pageIndex: number;
 }
 
-export interface WorkoutIntervalRow {
-  name: string;
-  intervals: Record<string, string>; // e.g. { "T (400)": "01:43.1", "800 CV": "03:26.3" }
-}
-
 export interface ParsedWorkouts {
-  assignments: WorkoutAssignment[];
+  workoutRows: WorkoutRow[];
   groupDefinitions: WorkoutGroupDefinition[];
-  intervalRows: WorkoutIntervalRow[];
 }
 
-const ROW_TOLERANCE = 10; // px — words within this vertical distance are "the same row"
-const COLUMN_GAP_THRESHOLD = 25; // px gap that separates two header column labels
+const ROW_TOLERANCE = 10;
+const COLUMN_GAP_THRESHOLD = 25;
 const PDF_LOAD_TIMEOUT_MS = 30000;
 
 // Description/legend text consistently lives in a dedicated right-hand
-// column (x > ~600pt) across every observed page layout — confirmed on
-// both short one-line descriptions and longer wrapped ones that would
-// otherwise interleave with table rows sharing the same vertical space.
+// column (x > ~600pt) across every observed page layout. Used ONLY for
+// identifying legend TEXT — not for deciding what counts as row data
+// (see dataCutoffX, computed per header-segment instead).
 const LEGEND_MIN_X = 580;
 
-// Matches only alphabetic name-like tokens (letters, apostrophes, hyphens,
-// an optional trailing comma). Anything else — digits, times like "01:18.5",
-// decorative dots/ellipses — fails this and stops name extraction immediately.
 const NAME_TOKEN_RE = /^[A-Za-z'.-]+,?$/;
 const DATE_TOKEN_RE = /^\d{1,2}\/\d{1,2}\/\d{4}$/;
-
-// Decorative dot/ellipsis "columns" — made up entirely of periods or the
-// ellipsis character. These are visual filler, never a real coach note.
 const DECORATIVE_DOTS_RE = /^[.\u2026]+$/;
+// A real interval column label always contains a digit (400, 1k, 800,
+// 200, 600, 1200, ...) — this is how we tell "this segment has real
+// interval columns" apart from "this segment only has a bare G column."
+const INTERVAL_LABEL_RE = /\d/;
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+function withTimeout<T>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) =>
@@ -106,13 +102,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 // ---------- Core: extract positioned words from a PDF page ----------
 
-// pdfjs-dist reports text in whatever runs the PDF itself was drawn with —
-// NOT one word per item. A cell like "Maas, Lydia" can arrive as ONE item
-// containing a space. Split every item's string on whitespace into
-// individual word-tokens, estimating each token's x-position proportionally
-// across the item's width, so all downstream logic can work on a
-// one-word-per-token basis (matching how the parsing rules below are
-// designed and were validated).
 function splitIntoWordTokens(
   str: string,
   x: number,
@@ -131,7 +120,7 @@ function splitIntoWordTokens(
   for (const part of parts) {
     results.push({ text: part, x: cursor, top });
     const partWidth = (width * part.length) / totalChars;
-    cursor += partWidth + width * 0.02; // small gap approximation between words
+    cursor += partWidth + width * 0.02;
   }
 
   return results;
@@ -149,8 +138,6 @@ async function extractPageWords(
     if (!("str" in item) || item.str.trim().length === 0) continue;
     const x = item.transform[4];
     const y = item.transform[5];
-    // pdfjs y is measured from the BOTTOM of the page — flip so smaller = higher,
-    // matching the "top" convention used throughout this parser.
     const top = viewport.height - y;
     const width = "width" in item ? (item.width as number) : 0;
 
@@ -175,12 +162,11 @@ function clusterIntoRows(words: PositionedWord[]): PositionedWord[][] {
     }
   }
 
-  // Sort words left-to-right within each row
   rows.forEach((row) => row.sort((a, b) => a.x - b.x));
   return rows;
 }
 
-// ---------- Name extraction: take up to N leading name-like tokens, no more ----------
+// ---------- Name extraction ----------
 
 function extractLeadingName(
   sortedRowWords: PositionedWord[],
@@ -189,7 +175,7 @@ function extractLeadingName(
   const result: PositionedWord[] = [];
   for (const w of sortedRowWords) {
     if (result.length >= maxTokens) break;
-    if (!NAME_TOKEN_RE.test(w.text)) break; // stop at the FIRST non-name-like token
+    if (!NAME_TOKEN_RE.test(w.text)) break;
     result.push(w);
   }
   return result;
@@ -235,13 +221,18 @@ function assignToNearestColumn(
   return result;
 }
 
-// ---------- Interval-format header detection: cluster header words into columns by x-gap ----------
+// ---------- Header column detection ----------
 
 function clusterHeaderIntoColumns(
   headerWords: PositionedWord[],
 ): { key: string; x: number }[] {
   const relevant = headerWords
-    .filter((w) => w.text !== "WO" && !DATE_TOKEN_RE.test(w.text))
+    .filter(
+      (w) =>
+        w.text !== "WO" &&
+        !DATE_TOKEN_RE.test(w.text) &&
+        !DECORATIVE_DOTS_RE.test(w.text),
+    )
     .sort((a, b) => a.x - b.x);
 
   if (relevant.length === 0) return [];
@@ -263,7 +254,33 @@ function clusterHeaderIntoColumns(
   }));
 }
 
-// ---------- Mileage PDF parsing ----------
+// A header row for one of a page's mini-tables — either the primary row
+// (has "WO" + date) or a secondary one further down the page (no "WO",
+// just column labels like "T (400) 1k T CV (400) 600 CV 400 VO2 200 R" —
+// a DIFFERENT distance group sharing the same page). Detected by: doesn't
+// start with a real name, and has several tokens that look like column
+// labels rather than athlete data.
+function looksLikeHeaderRow(row: PositionedWord[]): boolean {
+  if (row.some((w) => w.text === "WO")) return true;
+
+  const first = row[0]?.text ?? "";
+  const second = row[1]?.text ?? "";
+  const startsWithName =
+    NAME_TOKEN_RE.test(first) && NAME_TOKEN_RE.test(second) && !/^\d/.test(first);
+  if (startsWithName) return false;
+
+  const labelLikeCount = row.filter(
+    (w) =>
+      /^(T|CV|VO2|I|R|G)$/i.test(w.text) ||
+      /^\(\d+\)$/.test(w.text) ||
+      /^\d+k$/i.test(w.text) ||
+      /^\d{2,4}$/.test(w.text),
+  ).length;
+
+  return labelLikeCount >= 3;
+}
+
+// ---------- Mileage PDF parsing (unchanged) ----------
 
 const MILEAGE_DAY_HEADERS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -323,15 +340,14 @@ export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
       : "mens-cross-country";
 
     const anchors = findHeaderAnchors(rows);
-    if (!anchors) continue; // page has no roster table (e.g. a legend/notes-only page)
+    if (!anchors) continue;
 
     for (const row of rows) {
-      // Skip the header row itself
       if (row.some((w) => w.text === "Mon")) continue;
 
       const nameWords = extractLeadingName(row, 2);
       const displayName = toDisplayName(nameWords);
-      if (!displayName) continue; // not a real name row (e.g. a lone marker)
+      if (!displayName) continue;
 
       const dataWords = row.filter((w) => !nameWords.includes(w));
       const assigned = assignToNearestColumn(dataWords, anchors);
@@ -355,21 +371,14 @@ export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
   return results;
 }
 
-// ---------- Workouts PDF parsing ----------
+// ---------- Workouts PDF parsing — UNIFIED, segmented by header row ----------
 //
-// This format varies week to week — whether a "G" column exists, where
-// legend/description text sits, and whether men's/women's rosters share a
-// page all differ. What DOES stay consistent: description/legend text
-// always lives in a dedicated right-hand column (x > LEGEND_MIN_X),
-// distinctly separate from the table content on every observed layout.
-// Filtering by that x-boundary FIRST — before any reading-order sorting —
-// is what prevents legend text and table rows from interleaving into
-// garbled output, regardless of how they overlap vertically.
-//
-// Every group letter and assignment is also tagged with the PAGE it came
-// from, so downstream code (team-scoping in the admin dashboard) can
-// correctly separate e.g. a men's-page "C" from a women's-page "C" instead
-// of merging them.
+// A page can contain MORE THAN ONE mini-table (e.g. different groups
+// running different distances, each with its own column set). Every
+// header row on the page is detected, and each one governs only the rows
+// beneath it up until the next header row — instead of assuming one
+// header applies to the whole page, which silently dropped/misaligned
+// any group whose columns didn't match the first header found.
 
 export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
   const arrayBuffer = await file.arrayBuffer();
@@ -379,22 +388,16 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
     "PDF loading",
   );
 
-  const assignments: WorkoutAssignment[] = [];
+  const workoutRows: WorkoutRow[] = [];
   const groupDefinitions: WorkoutGroupDefinition[] = [];
-  const intervalRows: WorkoutIntervalRow[] = [];
 
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const words = await extractPageWords(page);
     const rows = clusterIntoRows(words);
-
-    const groupHeaderWord = words.find((w) => w.text === "G" && w.top < 30);
     const seenLettersThisPage = new Set<string>();
 
-    // Description/legend text always lives at x > LEGEND_MIN_X on every
-    // observed layout. Filtering by x FIRST means this never mixes with
-    // table content, regardless of vertical overlap — this runs
-    // unconditionally, once per page, before branching on page format.
+    // ---- Legend/description text: always x > LEGEND_MIN_X ----
     const legendWords = words
       .filter((w) => w.x > LEGEND_MIN_X)
       .sort((a, b) => a.top - b.top || a.x - b.x);
@@ -415,107 +418,90 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
       }
     }
 
-    if (groupHeaderWord) {
-      // ---- Lettered-group format ----
-      const groupColumnX = groupHeaderWord.x;
+    // ---- Find EVERY header row on this page ----
+    const headerRowIndices = rows
+      .map((row, idx) => ({ row, idx }))
+      .filter(({ row }) => looksLikeHeaderRow(row))
+      .map(({ idx }) => idx);
 
-      for (const row of rows) {
-        const nameWords = extractLeadingName(row, 2);
-        const displayName = toDisplayName(nameWords);
-        if (!displayName) continue;
+    if (headerRowIndices.length === 0) continue;
 
-        const groupWord = row.find(
-          (w) => Math.abs(w.x - groupColumnX) < 10 && /^[A-Z]{1,2}$/.test(w.text),
-        );
-        if (!groupWord) continue;
-
-        // Anything left between the name and the group letter that ISN'T a
-        // decorative dot/ellipsis filler is a real coach note — e.g. "20 max"
-        // or "20 max or XT" attached to a specific athlete's row.
-        const noteWords = row
-          .filter((w) => w !== groupWord && !nameWords.includes(w))
-          .filter((w) => w.x < groupColumnX - 5)
-          .filter((w) => !DECORATIVE_DOTS_RE.test(w.text))
-          .sort((a, b) => a.x - b.x);
-
-        const note = noteWords.length > 0
-          ? noteWords.map((w) => w.text).join(" ").trim()
-          : null;
-
-        assignments.push({
-          name: displayName,
-          groupLetter: groupWord.text,
-          note,
-          pageIndex: pageNum,
-        });
-      }
-    } else {
-      // ---- Interval/pace-table format, possibly with an unlabeled
-      // trailing group-letter column ----
-      const headerRow = rows.find((row) => row.some((w) => w.text === "WO"));
-      if (!headerRow) continue; // not a recognizable table page (e.g. blank/legend-only)
+    for (let h = 0; h < headerRowIndices.length; h++) {
+      const headerIdx = headerRowIndices[h];
+      const nextHeaderIdx = headerRowIndices[h + 1] ?? rows.length;
+      const headerRow = rows[headerIdx];
+      const segmentRows = rows.slice(headerIdx + 1, nextHeaderIdx);
 
       const columnAnchors = clusterHeaderIntoColumns(headerRow);
       if (columnAnchors.length === 0) continue;
 
-      const hasGroupColumn = columnAnchors.some((c) => c.key === "G");
+      // Per-segment cutoff — derived from THIS segment's own columns
+      // (correctly includes "G" when present, whatever its x position).
+      const maxAnchorX = Math.max(...columnAnchors.map((c) => c.x));
+      const dataCutoffX = maxAnchorX + 40;
 
-      for (const row of rows) {
-        if (row === headerRow) continue;
+      const hasIntervalColumns = columnAnchors.some(
+        (c) => c.key !== "G" && INTERVAL_LABEL_RE.test(c.key),
+      );
 
+      for (const row of segmentRows) {
         const nameWords = extractLeadingName(row, 2);
         const displayName = toDisplayName(nameWords);
         if (!displayName) continue;
 
-        // Exclude legend-column words from ever being treated as table
-        // data for this row.
         const dataWords = row.filter(
-          (w) => !nameWords.includes(w) && w.x <= LEGEND_MIN_X,
+          (w) => !nameWords.includes(w) && w.x <= dataCutoffX,
         );
         const assigned = assignToNearestColumn(dataWords, columnAnchors);
 
-        if (hasGroupColumn && assigned["G"] && /^[A-Za-z]{1,2}$/.test(assigned["G"].trim())) {
-          assignments.push({
-            name: displayName,
-            groupLetter: assigned["G"].trim(),
-            note: null,
-            pageIndex: pageNum,
-          });
-        } else {
-          // No explicit "G" header — check if the LAST table-side word in
-          // the row is a bare 1-2 letter token, which some weeks use as an
-          // unlabeled trailing group column (e.g. "... 01:12.1 B").
-          const trailingWord = [...row].reverse().find((w) => w.x <= LEGEND_MIN_X);
+        let groupLetter: string | null = null;
+        if (assigned["G"] && /^[A-Za-z]{1,2}$/.test(assigned["G"].trim())) {
+          groupLetter = assigned["G"].trim();
+        } else if (!columnAnchors.some((c) => c.key === "G")) {
+          const trailingWord = [...row].reverse().find((w) => w.x <= dataCutoffX);
           if (
             trailingWord &&
             !nameWords.includes(trailingWord) &&
             /^[A-Za-z]{1,2}$/.test(trailingWord.text) &&
             !Object.values(assigned).some((v) => v.includes(trailingWord.text))
           ) {
-            assignments.push({
-              name: displayName,
-              groupLetter: trailingWord.text,
-              note: null,
-              pageIndex: pageNum,
-            });
+            groupLetter = trailingWord.text;
           }
         }
 
-        // Only keep columns that actually have a value for this athlete —
-        // not everyone runs every interval — and never treat the "G"
-        // column itself as an interval.
-        const intervals: Record<string, string> = {};
-        for (const [label, value] of Object.entries(assigned)) {
-          if (label === "G") continue;
-          if (value.trim().length > 0) intervals[label] = value.trim();
+        let intervals: Record<string, string> = {};
+        let note: string | null = null;
+
+        if (hasIntervalColumns) {
+          for (const [label, value] of Object.entries(assigned)) {
+            if (label === "G") continue;
+            if (value.trim().length > 0) intervals[label] = value.trim();
+          }
+        } else {
+          const groupWord = row.find(
+            (w) =>
+              /^[A-Z]{1,2}$/.test(w.text) &&
+              Math.abs(w.x - (columnAnchors.find((c) => c.key === "G")?.x ?? -1)) < 10,
+          );
+          const noteWords = row
+            .filter((w) => w !== groupWord && !nameWords.includes(w) && w.x <= dataCutoffX)
+            .filter((w) => !DECORATIVE_DOTS_RE.test(w.text))
+            .sort((a, b) => a.x - b.x);
+          note = noteWords.length > 0 ? noteWords.map((w) => w.text).join(" ").trim() : null;
         }
 
-        if (Object.keys(intervals).length > 0) {
-          intervalRows.push({ name: displayName, intervals });
-        }
+        if (!groupLetter && Object.keys(intervals).length === 0 && !note) continue;
+
+        workoutRows.push({
+          name: displayName,
+          groupLetter,
+          intervals,
+          note,
+          pageIndex: pageNum,
+        });
       }
     }
   }
 
-  return { assignments, groupDefinitions, intervalRows };
+  return { workoutRows, groupDefinitions };
 }

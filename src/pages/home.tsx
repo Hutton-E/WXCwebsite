@@ -1,4 +1,3 @@
-import wartburgLogo from "../assets/still_pictures/wartburg_knights_logo_main.png";
 import NavMenu from "../components/navMenu";
 import IdentityLookup from "../components/identityLookup";
 import SwitchIdentityPrompt from "../components/switchIdentity";
@@ -23,7 +22,6 @@ function Home() {
 
   return (
     <div className="home-content">
-      <img src={wartburgLogo} className="framework" alt="Wartburg Logo" />
 
       <h1 className="welcome-text acme-regular text-outline">
         {athlete

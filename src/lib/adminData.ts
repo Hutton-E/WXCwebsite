@@ -1,9 +1,5 @@
 import { supabase } from "./supabaseClient";
-import type {
-  MileageRow,
-  WorkoutAssignment,
-  WorkoutIntervalRow,
-} from "./pdfParser";
+import type { MileageRow, WorkoutRow } from "./pdfParser";
 
 export interface MatchedRow<T> {
   data: T;
@@ -71,15 +67,12 @@ export async function upsertMileageRows(
 }
 
 export async function upsertWorkoutData(
-  assignments: MatchedRow<WorkoutAssignment>[],
+  workoutRows: MatchedRow<WorkoutRow>[],
   groupDefinitions: TeamScopedGroupDefinition[],
   weekOf: string,
   day: "tuesday" | "friday",
   season: number,
 ) {
-  // Groups are scoped by team, since the same letter (e.g. "A") can mean a
-  // completely different workout for the men's team vs. the women's team
-  // on the same day.
   const groupPayload = groupDefinitions.map((g) => ({
     week_of: weekOf,
     day,
@@ -100,75 +93,31 @@ export async function upsertWorkoutData(
     if (groupError) throw new Error(groupError.message);
   }
 
-  const dedupedById = new Map<string, MatchedRow<WorkoutAssignment>>();
-  for (const a of assignments) {
-    dedupedById.set(a.athleteId, a);
+  const dedupedById = new Map<string, MatchedRow<WorkoutRow>>();
+  for (const r of workoutRows) {
+    dedupedById.set(r.athleteId, r);
   }
   const deduped = Array.from(dedupedById.values());
 
-  const assignmentPayload = deduped.map(({ data: a, athleteId }) => ({
+  const payload = deduped.map(({ data: r, athleteId }) => ({
     athlete_id: athleteId,
     season,
-    athlete_name: a.name,
+    athlete_name: r.name,
     week_of: weekOf,
     day,
-    group_letter: a.groupLetter,
-    note: a.note,
+    // Guard against ever writing an empty string — falsy checks in the
+    // UI expect either a real letter or null, never "".
+    group_letter: r.groupLetter || null,
+    intervals: Object.keys(r.intervals).length > 0 ? r.intervals : null,
+    note: r.note,
   }));
-
-  const { error: assignError, count } = await withTimeout(
-    supabase
-      .from("workout_assignments")
-      .upsert(assignmentPayload, { onConflict: "athlete_id,season,week_of,day", count: "exact" }),
-    SAVE_TIMEOUT_MS,
-    "Workout assignments save",
-  );
-
-  if (assignError) throw new Error(assignError.message);
-  return count ?? assignmentPayload.length;
-}
-
-export async function upsertWorkoutIntervals(
-  intervalRows: MatchedRow<WorkoutIntervalRow>[],
-  weekOf: string,
-  day: "tuesday" | "friday",
-  season: number,
-) {
-  const payload: {
-    athlete_id: string;
-    season: number;
-    athlete_name: string;
-    week_of: string;
-    day: string;
-    interval_label: string;
-    time_value: string;
-  }[] = [];
-
-  for (const { data: row, athleteId } of intervalRows) {
-    for (const [label, value] of Object.entries(row.intervals)) {
-      payload.push({
-        athlete_id: athleteId,
-        season,
-        athlete_name: row.name,
-        week_of: weekOf,
-        day,
-        interval_label: label,
-        time_value: value,
-      });
-    }
-  }
-
-  if (payload.length === 0) return 0;
 
   const { error, count } = await withTimeout(
     supabase
-      .from("workout_intervals")
-      .upsert(payload, {
-        onConflict: "athlete_id,season,week_of,day,interval_label",
-        count: "exact",
-      }),
+      .from("workouts")
+      .upsert(payload, { onConflict: "athlete_id,season,week_of,day", count: "exact" }),
     SAVE_TIMEOUT_MS,
-    "Workout intervals save",
+    "Workouts save",
   );
 
   if (error) throw new Error(error.message);

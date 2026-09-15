@@ -1,12 +1,5 @@
 import { supabase } from "./supabaseClient";
 
-export interface WorkoutAssignmentRow {
-  week_of: string;
-  day: string;
-  group_letter: string;
-  note: string | null;
-}
-
 export interface WorkoutGroupRow {
   week_of: string;
   day: string;
@@ -14,71 +7,59 @@ export interface WorkoutGroupRow {
   description: string;
 }
 
-export interface WorkoutForDay {
+export interface WorkoutDay {
   weekOf: string;
   day: string;
-  groupLetter: string;
+  groupLetter: string | null;
   description: string | null;
+  intervals: Record<string, string> | null;
   note: string | null;
-}
-
-export interface WorkoutIntervalEntry {
-  week_of: string;
-  day: string;
-  interval_label: string;
-  time_value: string;
 }
 
 export async function fetchWorkoutsForAthlete(
   athleteId: string,
   season: number,
   team: string,
-): Promise<WorkoutForDay[]> {
-  const { data: assignments, error: assignError } = await supabase
-    .from("workout_assignments")
-    .select("week_of, day, group_letter, note")
-    .eq("athlete_id", athleteId)
-    .eq("season", season)
-    .order("week_of", { ascending: false });
-
-  if (assignError) throw new Error(assignError.message);
-  if (!assignments || assignments.length === 0) return [];
-
-  const weeksOf = [...new Set(assignments.map((a) => a.week_of))];
-
-  const { data: groups, error: groupError } = await supabase
-    .from("workout_groups")
-    .select("week_of, day, group_letter, description")
-    .eq("team", team)
-    .in("week_of", weeksOf);
-
-  if (groupError) throw new Error(groupError.message);
-
-  const groupLookup = new Map<string, string>();
-  (groups ?? []).forEach((g: WorkoutGroupRow) => {
-    groupLookup.set(`${g.week_of}|${g.day}|${g.group_letter}`, g.description);
-  });
-
-  return assignments.map((a: WorkoutAssignmentRow) => ({
-    weekOf: a.week_of,
-    day: a.day,
-    groupLetter: a.group_letter,
-    description: groupLookup.get(`${a.week_of}|${a.day}|${a.group_letter}`) ?? null,
-    note: a.note ?? null,
-  }));
-}
-
-export async function fetchIntervalsForAthlete(
-  athleteId: string,
-  season: number,
-): Promise<WorkoutIntervalEntry[]> {
-  const { data, error } = await supabase
-    .from("workout_intervals")
-    .select("week_of, day, interval_label, time_value")
+): Promise<WorkoutDay[]> {
+  const { data: rows, error } = await supabase
+    .from("workouts")
+    .select("week_of, day, group_letter, intervals, note")
     .eq("athlete_id", athleteId)
     .eq("season", season)
     .order("week_of", { ascending: false });
 
   if (error) throw new Error(error.message);
-  return data ?? [];
+  if (!rows || rows.length === 0) return [];
+
+  const weeksOf = [...new Set(rows.map((r) => r.week_of))];
+  const letters = [...new Set(rows.map((r) => r.group_letter).filter(Boolean))];
+
+  let groupLookup = new Map<string, string>();
+  if (letters.length > 0) {
+    const { data: groups, error: groupError } = await supabase
+      .from("workout_groups")
+      .select("week_of, day, group_letter, description")
+      .eq("team", team)
+      .in("week_of", weeksOf);
+
+    if (groupError) throw new Error(groupError.message);
+
+    groupLookup = new Map(
+      (groups ?? []).map((g: WorkoutGroupRow) => [
+        `${g.week_of}|${g.day}|${g.group_letter}`,
+        g.description,
+      ]),
+    );
+  }
+
+  return rows.map((r) => ({
+    weekOf: r.week_of,
+    day: r.day,
+    groupLetter: r.group_letter,
+    description: r.group_letter
+      ? groupLookup.get(`${r.week_of}|${r.day}|${r.group_letter}`) ?? null
+      : null,
+    intervals: r.intervals,
+    note: r.note,
+  }));
 }

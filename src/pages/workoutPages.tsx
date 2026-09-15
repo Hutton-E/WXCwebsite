@@ -1,23 +1,7 @@
 import { useEffect, useState } from "react";
 import { useUser } from "../context/UserContext";
-import {
-  fetchWorkoutsForAthlete,
-  fetchIntervalsForAthlete,
-} from "../lib/workoutData";
-import type { WorkoutForDay, WorkoutIntervalEntry } from "../lib/workoutData";
-
-interface DayWorkout {
-  day: string;
-  groupLetter?: string;
-  description?: string;
-  note?: string | null;
-  intervals?: { label: string; value: string }[];
-}
-
-interface WeekWorkouts {
-  weekOf: string;
-  days: DayWorkout[];
-}
+import { fetchWorkoutsForAthlete } from "../lib/workoutData";
+import type { WorkoutDay } from "../lib/workoutData";
 
 function formatWeekOf(dateStr: string) {
   const date = new Date(dateStr + "T00:00:00");
@@ -32,49 +16,29 @@ function capitalize(word: string) {
   return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
-// Merges group-assignment rows and interval rows into one combined
-// per-week, per-day structure, since an athlete's day may have either
-// (or in principle both, though the two source PDF formats are mutually
-// exclusive per page in practice).
-function combineIntoWeeks(
-  groupRows: WorkoutForDay[],
-  intervalRows: WorkoutIntervalEntry[],
-): WeekWorkouts[] {
-  const weekMap = new Map<string, Map<string, DayWorkout>>();
+interface WeekGroup {
+  weekOf: string;
+  days: WorkoutDay[];
+}
 
-  function getDayEntry(weekOf: string, day: string): DayWorkout {
-    if (!weekMap.has(weekOf)) weekMap.set(weekOf, new Map());
-    const dayMap = weekMap.get(weekOf)!;
-    if (!dayMap.has(day)) dayMap.set(day, { day });
-    return dayMap.get(day)!;
+function groupByWeek(rows: WorkoutDay[]): WeekGroup[] {
+  const map = new Map<string, WorkoutDay[]>();
+  for (const row of rows) {
+    const existing = map.get(row.weekOf) ?? [];
+    existing.push(row);
+    map.set(row.weekOf, existing);
   }
-
-  for (const r of groupRows) {
-    const entry = getDayEntry(r.weekOf, r.day);
-    entry.groupLetter = r.groupLetter;
-    entry.description = r.description ?? undefined;
-    entry.note = r.note;
-  }
-
-  for (const r of intervalRows) {
-    const entry = getDayEntry(r.week_of, r.day);
-    if (!entry.intervals) entry.intervals = [];
-    entry.intervals.push({ label: r.interval_label, value: r.time_value });
-  }
-
-  return Array.from(weekMap.entries())
-    .map(([weekOf, dayMap]) => ({
+  return Array.from(map.entries())
+    .map(([weekOf, days]) => ({
       weekOf,
-      days: Array.from(dayMap.values()).sort((a, b) =>
-        a.day.localeCompare(b.day),
-      ),
+      days: days.sort((a, b) => a.day.localeCompare(b.day)),
     }))
     .sort((a, b) => b.weekOf.localeCompare(a.weekOf));
 }
 
 function WorkoutsPage() {
   const { athlete, season } = useUser();
-  const [weeks, setWeeks] = useState<WeekWorkouts[] | null>(null);
+  const [weeks, setWeeks] = useState<WeekGroup[] | null>(null);
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -82,23 +46,18 @@ function WorkoutsPage() {
     if (!athlete || !season) return;
 
     let cancelled = false;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setWeeks(null);
     setError(null);
 
-    Promise.all([
-      fetchWorkoutsForAthlete(athlete.id, season, athlete.team),
-      fetchIntervalsForAthlete(athlete.id, season),
-    ])
-      .then(([groupData, intervalData]) => {
+    fetchWorkoutsForAthlete(athlete.id, season, athlete.team)
+      .then((rows) => {
         if (cancelled) return;
-        const combined = combineIntoWeeks(groupData, intervalData);
-        setWeeks(combined);
-        setSelectedWeek(combined.length > 0 ? combined[0].weekOf : null);
+        const grouped = groupByWeek(rows);
+        setWeeks(grouped);
+        setSelectedWeek(grouped.length > 0 ? grouped[0].weekOf : null);
       })
       .catch((err) => {
-        if (cancelled) return;
-        setError(err.message);
+        if (!cancelled) setError(err.message);
       });
 
     return () => {
@@ -128,8 +87,7 @@ function WorkoutsPage() {
 
       {!error && weeks !== null && weeks.length === 0 && (
         <p className="workouts-no-data acme-regular text-outline">
-          No workouts have been assigned to you yet — check back once this
-          week's sheet is in!
+          No workouts have been assigned to you yet — check back once this week's sheet is in!
         </p>
       )}
 
@@ -158,13 +116,9 @@ function WorkoutsPage() {
               {currentWeek.days.map((d) => (
                 <div key={d.day} className="workouts-day-block">
                   <div className="workouts-day-header">
-                    <span className="workouts-day-name">
-                      {capitalize(d.day)}
-                    </span>
+                    <span className="workouts-day-name">{capitalize(d.day)}</span>
                     {d.groupLetter && (
-                      <span className="workouts-group-badge">
-                        Group {d.groupLetter}
-                      </span>
+                      <span className="workouts-group-badge">Group {d.groupLetter}</span>
                     )}
                   </div>
 
@@ -174,27 +128,22 @@ function WorkoutsPage() {
 
                   {d.note && <p className="workouts-note">{d.note}</p>}
 
-                  {d.intervals && d.intervals.length > 0 && (
+                  {d.intervals && Object.keys(d.intervals).length > 0 && (
                     <ul className="workouts-interval-list">
-                      {d.intervals.map((i) => (
-                        <li key={i.label} className="workouts-interval-item">
-                          <span className="workouts-interval-label">
-                            {i.label}
-                          </span>
-                          <span className="workouts-interval-value">
-                            {i.value}
-                          </span>
+                      {Object.entries(d.intervals).map(([label, value]) => (
+                        <li key={label} className="workouts-interval-item">
+                          <span className="workouts-interval-label">{label}</span>
+                          <span className="workouts-interval-value">{value}</span>
                         </li>
                       ))}
                     </ul>
                   )}
 
-                  {!d.description &&
-                    (!d.intervals || d.intervals.length === 0) && (
-                      <p className="workouts-description">
-                        No workout description found for this day.
-                      </p>
-                    )}
+                  {!d.description && !d.note && (!d.intervals || Object.keys(d.intervals).length === 0) && (
+                    <p className="workouts-description">
+                      No workout description found for this day.
+                    </p>
+                  )}
                 </div>
               ))}
             </div>
