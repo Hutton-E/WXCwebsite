@@ -297,7 +297,7 @@ function findHeaderAnchors(
 export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await withTimeout(
-    pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true }).promise,
+    pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise,
     PDF_LOAD_TIMEOUT_MS,
     "PDF loading",
   );
@@ -352,7 +352,7 @@ export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
 export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await withTimeout(
-    pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true }).promise,
+    pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise,
     PDF_LOAD_TIMEOUT_MS,
     "PDF loading",
   );
