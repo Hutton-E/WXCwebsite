@@ -18,43 +18,54 @@ function capitalize(word: string) {
 
 interface WeekGroup {
   weekOf: string;
+  season: number;
   days: WorkoutDay[];
 }
 
 function groupByWeek(rows: WorkoutDay[]): WeekGroup[] {
   const map = new Map<string, WorkoutDay[]>();
   for (const row of rows) {
-    const existing = map.get(row.weekOf) ?? [];
+    const key = `${row.season}|${row.weekOf}`;
+    const existing = map.get(key) ?? [];
     existing.push(row);
-    map.set(row.weekOf, existing);
+    map.set(key, existing);
   }
   return Array.from(map.entries())
-    .map(([weekOf, days]) => ({
-      weekOf,
-      days: days.sort((a, b) => a.day.localeCompare(b.day)),
-    }))
-    .sort((a, b) => b.weekOf.localeCompare(a.weekOf));
+    .map(([key, days]) => {
+      const [seasonStr, weekOf] = key.split("|");
+      return {
+        weekOf,
+        season: Number(seasonStr),
+        days: days.sort((a, b) => a.day.localeCompare(b.day)),
+      };
+    })
+    .sort((a, b) => b.season - a.season || b.weekOf.localeCompare(a.weekOf));
 }
 
 function WorkoutsPage() {
-  const { athlete, season } = useUser();
+  const { athlete } = useUser();
   const [weeks, setWeeks] = useState<WeekGroup[] | null>(null);
-  const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!athlete || !season) return;
+    if (!athlete) return;
 
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setWeeks(null);
     setError(null);
 
-    fetchWorkoutsForAthlete(athlete.id, season, athlete.team)
+    fetchWorkoutsForAthlete(athlete.name, athlete.team)
       .then((rows) => {
         if (cancelled) return;
         const grouped = groupByWeek(rows);
         setWeeks(grouped);
-        setSelectedWeek(grouped.length > 0 ? grouped[0].weekOf : null);
+        setSelectedKey(
+          grouped.length > 0
+            ? `${grouped[0].season}|${grouped[0].weekOf}`
+            : null,
+        );
       })
       .catch((err) => {
         if (!cancelled) setError(err.message);
@@ -63,11 +74,12 @@ function WorkoutsPage() {
     return () => {
       cancelled = true;
     };
-  }, [athlete, season]);
+  }, [athlete]);
 
   if (!athlete) return null;
 
-  const currentWeek = weeks?.find((w) => w.weekOf === selectedWeek) ?? null;
+  const currentWeek =
+    weeks?.find((w) => `${w.season}|${w.weekOf}` === selectedKey) ?? null;
 
   return (
     <div className="workouts-page">
@@ -87,7 +99,8 @@ function WorkoutsPage() {
 
       {!error && weeks !== null && weeks.length === 0 && (
         <p className="workouts-no-data acme-regular text-outline">
-          No workouts have been assigned to you yet — check back once this week's sheet is in!
+          No workouts have been assigned to you yet — check back once this
+          week's sheet is in!
         </p>
       )}
 
@@ -96,12 +109,15 @@ function WorkoutsPage() {
           {weeks.length > 1 && (
             <select
               className="identity-year-select"
-              value={selectedWeek ?? ""}
-              onChange={(e) => setSelectedWeek(e.target.value)}
+              value={selectedKey ?? ""}
+              onChange={(e) => setSelectedKey(e.target.value)}
             >
               {weeks.map((w) => (
-                <option key={w.weekOf} value={w.weekOf}>
-                  Week of {formatWeekOf(w.weekOf)}
+                <option
+                  key={`${w.season}|${w.weekOf}`}
+                  value={`${w.season}|${w.weekOf}`}
+                >
+                  {w.season} — Week of {formatWeekOf(w.weekOf)}
                 </option>
               ))}
             </select>
@@ -110,15 +126,20 @@ function WorkoutsPage() {
           {currentWeek && (
             <div className="workouts-card">
               <div className="workouts-week-label">
-                Week of {formatWeekOf(currentWeek.weekOf)}
+                {currentWeek.season} — Week of{" "}
+                {formatWeekOf(currentWeek.weekOf)}
               </div>
 
               {currentWeek.days.map((d) => (
                 <div key={d.day} className="workouts-day-block">
                   <div className="workouts-day-header">
-                    <span className="workouts-day-name">{capitalize(d.day)}</span>
+                    <span className="workouts-day-name">
+                      {capitalize(d.day)}
+                    </span>
                     {d.groupLetter && (
-                      <span className="workouts-group-badge">Group {d.groupLetter}</span>
+                      <span className="workouts-group-badge">
+                        Group {d.groupLetter}
+                      </span>
                     )}
                   </div>
 
@@ -132,18 +153,24 @@ function WorkoutsPage() {
                     <ul className="workouts-interval-list">
                       {Object.entries(d.intervals).map(([label, value]) => (
                         <li key={label} className="workouts-interval-item">
-                          <span className="workouts-interval-label">{label}</span>
-                          <span className="workouts-interval-value">{value}</span>
+                          <span className="workouts-interval-label">
+                            {label}
+                          </span>
+                          <span className="workouts-interval-value">
+                            {value}
+                          </span>
                         </li>
                       ))}
                     </ul>
                   )}
 
-                  {!d.description && !d.note && (!d.intervals || Object.keys(d.intervals).length === 0) && (
-                    <p className="workouts-description">
-                      No workout description found for this day.
-                    </p>
-                  )}
+                  {!d.description &&
+                    !d.note &&
+                    (!d.intervals || Object.keys(d.intervals).length === 0) && (
+                      <p className="workouts-description">
+                        No workout description found for this day.
+                      </p>
+                    )}
                 </div>
               ))}
             </div>

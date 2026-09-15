@@ -14,12 +14,21 @@ export interface TeamScopedGroupDefinition {
 
 const SAVE_TIMEOUT_MS = 20000;
 
-function withTimeout<T>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> {
+function withTimeout<T>(
+  promise: PromiseLike<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) =>
       setTimeout(
-        () => reject(new Error(`${label} timed out after ${ms / 1000}s — check your connection and try again.`)),
+        () =>
+          reject(
+            new Error(
+              `${label} timed out after ${ms / 1000}s — check your connection and try again.`,
+            ),
+          ),
         ms,
       ),
     ),
@@ -32,9 +41,11 @@ export async function upsertMileageRows(
   season: number,
 ) {
   const dedupedById = new Map<string, MatchedRow<MileageRow>>();
+
   for (const row of rows) {
     dedupedById.set(row.athleteId, row);
   }
+
   const deduped = Array.from(dedupedById.values());
 
   const payload = deduped.map(({ data: r, athleteId }) => ({
@@ -55,14 +66,16 @@ export async function upsertMileageRows(
   }));
 
   const { error, count } = await withTimeout(
-    supabase
-      .from("mileage_entries")
-      .upsert(payload, { onConflict: "athlete_id,season,week_of", count: "exact" }),
+    supabase.from("mileage_entries").upsert(payload, {
+      onConflict: "athlete_id,season,week_of",
+      count: "exact",
+    }),
     SAVE_TIMEOUT_MS,
     "Mileage save",
   );
 
   if (error) throw new Error(error.message);
+
   return count ?? payload.length;
 }
 
@@ -83,9 +96,9 @@ export async function upsertWorkoutData(
 
   if (groupPayload.length > 0) {
     const { error: groupError } = await withTimeout(
-      supabase
-        .from("workout_groups")
-        .upsert(groupPayload, { onConflict: "week_of,day,team,group_letter" }),
+      supabase.from("workout_groups").upsert(groupPayload, {
+        onConflict: "week_of,day,team,group_letter",
+      }),
       SAVE_TIMEOUT_MS,
       "Workout group definitions save",
     );
@@ -94,9 +107,11 @@ export async function upsertWorkoutData(
   }
 
   const dedupedById = new Map<string, MatchedRow<WorkoutRow>>();
+
   for (const r of workoutRows) {
     dedupedById.set(r.athleteId, r);
   }
+
   const deduped = Array.from(dedupedById.values());
 
   const payload = deduped.map(({ data: r, athleteId }) => ({
@@ -105,21 +120,21 @@ export async function upsertWorkoutData(
     athlete_name: r.name,
     week_of: weekOf,
     day,
-    // Guard against ever writing an empty string — falsy checks in the
-    // UI expect either a real letter or null, never "".
     group_letter: r.groupLetter || null,
     intervals: Object.keys(r.intervals).length > 0 ? r.intervals : null,
     note: r.note,
   }));
 
   const { error, count } = await withTimeout(
-    supabase
-      .from("workouts")
-      .upsert(payload, { onConflict: "athlete_id,season,week_of,day", count: "exact" }),
+    supabase.from("workouts").upsert(payload, {
+      onConflict: "athlete_id,season,week_of,day",
+      count: "exact",
+    }),
     SAVE_TIMEOUT_MS,
     "Workouts save",
   );
 
   if (error) throw new Error(error.message);
+
   return count ?? payload.length;
 }

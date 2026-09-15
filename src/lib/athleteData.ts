@@ -20,3 +20,12 @@ export async function fetchAthletesForSeason(
   if (error) throw new Error(error.message);
   return data ?? [];
 }
+
+export async function fetchAllAthletes(): Promise<AthleteRecord[]> {
+  const { data, error } = await supabase
+    .from("athletes")
+    .select("id, season, name, team, hometown, high_school, tfrrs_id");
+
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}

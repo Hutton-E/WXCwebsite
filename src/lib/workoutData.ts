@@ -10,22 +10,27 @@ export interface WorkoutGroupRow {
 export interface WorkoutDay {
   weekOf: string;
   day: string;
+  season: number;
   groupLetter: string | null;
   description: string | null;
   intervals: Record<string, string> | null;
   note: string | null;
 }
 
+// Queries by NAME, not by the season-scoped athlete_id — a real person's
+// id changes every season (go-knights reissues roster ids yearly), but
+// their name stays constant, so this is what actually surfaces every
+// historical record for them regardless of which season they're
+// currently logged in as.
 export async function fetchWorkoutsForAthlete(
-  athleteId: string,
-  season: number,
+  athleteName: string,
   team: string,
 ): Promise<WorkoutDay[]> {
   const { data: rows, error } = await supabase
     .from("workouts")
-    .select("week_of, day, group_letter, intervals, note")
-    .eq("athlete_id", athleteId)
-    .eq("season", season)
+    .select("week_of, day, season, group_letter, intervals, note")
+    .ilike("athlete_name", athleteName)
+    .order("season", { ascending: false })
     .order("week_of", { ascending: false });
 
   if (error) throw new Error(error.message);
@@ -55,9 +60,10 @@ export async function fetchWorkoutsForAthlete(
   return rows.map((r) => ({
     weekOf: r.week_of,
     day: r.day,
+    season: r.season,
     groupLetter: r.group_letter,
     description: r.group_letter
-      ? groupLookup.get(`${r.week_of}|${r.day}|${r.group_letter}`) ?? null
+      ? (groupLookup.get(`${r.week_of}|${r.day}|${r.group_letter}`) ?? null)
       : null,
     intervals: r.intervals,
     note: r.note,

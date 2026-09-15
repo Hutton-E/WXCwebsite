@@ -1,0 +1,621 @@
+WXC WEBSITE — PROJECT CONTEXT FOR AN LLM
+============================================
+
+PURPOSE
+-------
+This project is a web application for a college cross-country team, specifically the Wartburg College men's and women's cross-country program. The goal is to give athletes a single place to access their individualized training and team-performance resources, while giving authorized administrators/coaches a practical way to maintain the underlying data.
+
+The application is currently called "WXC Website" and the repository root is WXC_Website.
+
+IMPORTANT: Treat the existing codebase as the source of truth for current behavior. Do not assume that a feature is complete simply because a route or filename exists. Several areas are explicitly placeholders or "coming soon."
+
+
+CORE USER EXPERIENCE
+--------------------
+1. An athlete visits the site.
+2. The athlete identifies themselves by selecting their name and season.
+3. The selected athlete/season is stored in sessionStorage and becomes the active identity for the session.
+4. Once identified, the athlete can access personalized resources.
+5. The main athlete-facing resources currently include:
+   - Weekly mileage
+   - Workouts
+   - Core routine
+   - FMS corrective exercises
+   - TFRRS performance statistics
+   - Lifting Sheet (currently only a placeholder page)
+6. Personal Records and Season Bests have routes but are currently marked as not yet tracked.
+7. Some other pages, such as About and Name Lookup, are currently placeholders/coming-soon behavior.
+
+The home page presents a personalized "Welcome, [athlete name]" experience after identity selection. The resource navigation is split between WXC resources and personal statistics.
+
+
+ATHLETE IDENTITY MODEL
+----------------------
+The application does NOT currently use a conventional athlete username/password login for athletes.
+
+Instead, the user selects:
+- an athlete ID
+- a season
+
+The UserContext loads the athlete from the Supabase `athletes` table using both `id` and `season`.
+
+Athlete records contain:
+- id
+- season
+- name
+- team
+- hometown
+- high_school
+- tfrrs_id
+
+The selected athlete ID and season are persisted in sessionStorage using:
+- `wxc_selected_athlete_id`
+- `wxc_selected_season`
+
+This is important: data is intentionally scoped to the selected athlete AND season.
+
+
+TECH STACK
+----------
+Frontend:
+- React
+- TypeScript / TSX
+- Vite
+- React Router
+- CSS
+- pdfjs-dist for client-side PDF parsing
+
+Backend/data:
+- Supabase
+- Supabase Auth for administrator authentication
+- Supabase database tables for core application data
+
+Supporting tooling:
+- Node.js scripts using `.mjs`
+- Cheerio for scraping/parsing HTML from external athletics websites
+- JSON files for some static/cached data
+- PDF files containing team mileage/workout sheets
+- XLSX historical workout data
+
+The repository has a `repo-digest.mjs` utility that generates a single markdown representation of the repository specifically so an LLM/agent can understand the project structure and source code.
+
+
+HIGH-LEVEL ARCHITECTURE
+-----------------------
+The React application is organized roughly as:
+
+src/
+  components/     reusable UI and route guards
+  context/        global athlete/admin state
+  data/           local JSON/static data
+  lib/            data-access, parsing, matching, and Supabase helpers
+  pages/          route-level pages
+  assets/         fonts, icons, background imagery
+
+Important application files:
+
+- `src/App.tsx`
+  Main router and application shell.
+  Adds the Wartburg drone background and defines public, athlete-protected, and admin-protected routes.
+
+- `src/context/UserContext.tsx`
+  Controls selected athlete/season and retrieves athlete data from Supabase.
+
+- `src/context/AdminAuthContext.tsx`
+  Controls administrator authentication state.
+
+- `src/components/requireIdentity.tsx`
+  Protects athlete-facing pages so an athlete must first be identified.
+
+- `src/components/requireAdmin.tsx`
+  Protects administrator pages.
+
+- `src/components/identityLookup.tsx`
+  Athlete name/season selection UI.
+
+- `src/components/switchIdentity.tsx`
+  Allows the user to change the selected athlete identity.
+
+- `src/lib/supabaseClient.ts`
+  Client-side Supabase connection.
+
+- `src/lib/supabaseAdminClient.mjs`
+  Authenticated/admin Supabase helper used by data-management scripts.
+
+- `src/lib/nameMatching.ts`
+  Name normalization/matching logic used to connect names parsed from source files to canonical athlete records.
+
+- `src/lib/aliasData.ts`
+  Athlete alias handling.
+
+- `src/lib/pdfParser.ts`
+  Parses team mileage/workout PDFs into structured rows.
+
+- `src/lib/mileageData.ts`
+  Retrieves mileage data.
+
+- `src/lib/workoutData.ts`
+  Retrieves workout data.
+
+- `src/lib/coreData.ts`
+  Retrieves core routine data.
+
+- `src/lib/fmsData.ts`
+  Retrieves FMS assignments/exercises.
+
+- `src/lib/athleteData.ts`
+  Retrieves athlete records.
+
+- `src/lib/adminData.ts`
+  Administrative data operations.
+
+
+CURRENT ROUTES
+--------------
+`src/App.tsx` currently defines these important routes:
+
+Public:
+- `/` — home
+- `/error` — error page
+- unknown routes → error page
+- `/admin` — admin login
+
+Athlete identity required:
+- `/about`
+- `/mileage`
+- `/core`
+- `/lookup`
+- `/fms`
+- `/tfrrs-stats`
+- `/personal-records`
+- `/season-bests`
+- `/workouts`
+
+Admin required:
+- `/admin/dashboard`
+- `/admin/fms`
+
+The athlete routes use `RequireIdentity`.
+The admin routes use `RequireAdmin`.
+
+
+ATHLETE-FACING FEATURES
+-----------------------
+
+1. MILEAGE
+----------
+The mileage page displays an athlete's weekly mileage by day:
+- Monday
+- Tuesday
+- Wednesday
+- Thursday
+- Friday
+- Saturday
+- Sunday
+- weekly total
+- notes
+
+Mileage is associated with an athlete and week/season.
+
+The source data comes from team mileage PDFs. The PDF parser produces a unified `MileageRow` structure containing:
+- name
+- team
+- monday
+- tuesday
+- wednesday
+- thursday
+- friday
+- saturday
+- sunday
+- weeklyTotal
+- notes
+
+The admin upload workflow parses the PDF, matches names against canonical athletes, previews the rows, allows unmatched rows to be corrected/removed, and then saves the resolved data to the database.
+
+
+2. WORKOUTS
+-----------
+The workouts page is intended to show individualized/team-assigned workouts.
+
+Workout PDF parsing is more complicated than mileage parsing because the source sheets can have different layouts.
+
+The parser produces:
+- one `WorkoutRow` per athlete/day
+- `groupLetter`
+- interval information stored as a `Record<string, string>`
+- optional note
+- source page index
+
+It also produces `WorkoutGroupDefinition` records containing:
+- group letter
+- description
+- source page index
+
+The admin workflow allows the administrator to select:
+- week of
+- Tuesday or Friday
+- PDF upload
+
+The system parses the workout PDF, matches athlete names, previews the results, and saves them to Supabase.
+
+A special part of the workflow creates "team-scoped group definitions": a workout group definition is associated with the team(s) actually represented by the matched rows. This avoids treating a group letter as globally meaningful across both men's and women's teams.
+
+
+3. CORE ROUTINE
+---------------
+The Core page displays the team's core routine.
+
+The repository contains `src/data/core_routine.json`, and there is a migration script that moves this information into Supabase:
+`scripts/migrate-core-to-supabase.mjs`
+
+The migration stores:
+- the introductory content in `site_content`
+- exercise rows in `core_exercises`
+
+The core page ultimately reads the routine through the data layer rather than directly depending on the original JSON.
+
+
+4. FMS CORRECTIVES
+------------------
+FMS means Functional Movement Screen in the context of this application.
+
+The athlete's FMS page retrieves assignments for the selected athlete and season. Each assignment has:
+- category
+- variant
+
+The application then retrieves the exercises for each assigned category and organizes them into phases:
+- Weeks 1-3
+- Weeks 4-6
+- Weeks 7-9
+
+The UI tells the athlete to perform the assigned corrective twice per week.
+
+The repository contains:
+- `src/data/fms_exercises.json`
+- `src/data/rawFMSassignments.ts`
+- `src/lib/fmsData.ts`
+
+There is an admin FMS assignment page that allows raw assignments to be matched to canonical athlete IDs and saved.
+
+
+5. TFRRS STATS
+-------------
+TFRRS is used as an external source for track/cross-country performance data.
+
+The system stores a `tfrrs_id` on athlete records.
+
+The scripts:
+- find/match TFRRS IDs
+- retrieve athlete "College Bests"
+- cache the resulting data in `src/data/tfrrs_stats.json`
+
+Important design choice:
+The application uses Supabase to determine which athletes exist and which TFRRS IDs belong to them, but the current TFRRS stats output remains a local JSON file because `tfrrsStats.tsx` already reads that file.
+
+There are multiple TFRRS scripts for:
+- current-season matching
+- historical matching
+- all-years matching
+- fetching stats
+
+
+ADMIN SYSTEM
+------------
+Administrators use Supabase authentication.
+
+Admin-related files include:
+- `src/pages/adminLogin.tsx`
+- `src/pages/adminDashboard.tsx`
+- `src/pages/adminFmsAssignments.tsx`
+- `src/context/AdminAuthContext.tsx`
+- `src/components/requireAdmin.tsx`
+- `src/lib/adminData.ts`
+
+The Admin Dashboard has two primary upload modes:
+- Mileage
+- Workouts
+
+It also links to:
+- FMS Correctives administration
+
+The administrator selects the week and, for workouts, the day (Tuesday or Friday), then uploads a PDF.
+
+The system:
+1. Loads the current-season athlete roster.
+2. Loads known aliases.
+3. Parses the PDF.
+4. Matches parsed names to canonical athletes.
+5. Shows a preview.
+6. Highlights unmatched names.
+7. Allows manual athlete selection/correction.
+8. Saves resolved records to Supabase.
+9. Learns aliases from resolved matches where appropriate.
+
+The admin UI is intentionally designed around data validation before saving: unmatched rows should be fixed or removed rather than blindly inserted.
+
+
+DATA INGESTION / EXTERNAL SOURCES
+---------------------------------
+The repository contains scripts that scrape and import data from external athletics sources.
+
+1. Wartburg roster source
+   The scripts use `go-knights.net` for men's and women's cross-country rosters.
+
+2. TFRRS
+   The scripts use TFRRS team/athlete pages for performance IDs and statistics.
+
+3. Team PDFs
+   Local mileage/workout PDFs are parsed into structured records.
+
+4. Historical XLSX
+   There is an `XC 2025 Workouts.xlsx` file in the repository, apparently representing historical workout data.
+
+
+ROSTER / ATHLETE DATA MODEL
+----------------------------
+The `athletes` Supabase table is intended to be the canonical source of truth for athlete identity.
+
+Roster ingestion supports:
+- men's cross-country
+- women's cross-country
+- multiple seasons
+
+Current-season roster ingestion upserts directly into Supabase.
+
+Historical roster ingestion has an important complication:
+the numeric ID in Wartburg's roster URL is a per-season roster entry ID and is NOT a stable athlete identifier across seasons.
+
+For historical roster consolidation, the code therefore uses:
+- normalized name
+- hometown
+
+as the merge key, while preserving each season's source-specific ID/profile URL.
+
+This distinction must be preserved when modifying roster/history logic.
+
+
+NAME MATCHING
+-------------
+A major architectural concern is that names from different sources are not guaranteed to match exactly.
+
+Examples of differences that can occur:
+- spelling variations
+- punctuation
+- nicknames
+- source-specific formatting
+- historical roster naming differences
+
+The application therefore has explicit name-matching and alias infrastructure.
+
+Important files:
+- `src/lib/nameMatching.ts`
+- `src/lib/aliasData.ts`
+
+The admin ingestion process builds:
+- a canonical athlete name lookup
+- an alias lookup
+
+and then attempts to resolve source names to an athlete ID.
+
+If automatic matching fails, the UI provides a manual athlete selector.
+
+Do not replace this system with naive string equality without understanding the consequences.
+
+
+DATABASE MIGRATION / SOURCE-OF-TRUTH DIRECTION
+-----------------------------------------------
+The project appears to be moving from local JSON files toward Supabase as the canonical application database.
+
+Examples:
+- athlete roster data → Supabase `athletes`
+- core routine → Supabase `core_exercises` + `site_content`
+- FMS exercise/assignment data → Supabase
+- mileage/workout records → Supabase
+
+Some cached/external-derived data remains local, especially TFRRS stats.
+
+The migration scripts are:
+- `migrate-roster-to-supabase.mjs`
+- `migrate-core-to-supabase.mjs`
+- `migrate-fms-to-supabase.mjs`
+
+The roster migration explicitly describes Supabase's `athletes` table as the single source of truth used for matching PDF-parsed names.
+
+
+CURRENT-SEASON / HISTORICAL DATA
+--------------------------------
+The current code is centered on season 2026.
+
+The current roster fetcher has:
+`CURRENT_SEASON = 2026`
+
+The application nevertheless supports selecting available historical seasons through the athlete identity system.
+
+Historical roster fetching covers multiple men's and women's seasons. The code notes that 2008 is missing from both sets of available roster pages and that older seasons may use a legacy Sidearm page format.
+
+Do not assume that every season has identical source formatting.
+
+
+IMPORTANT SOURCE-FILE LIMITATIONS
+----------------------------------
+The repository digest includes these local source materials:
+- `mileageSheets/XC 2025 Workouts.xlsx`
+- `mileageSheets/XC 2026 Mileage 9-14.pdf`
+- `mileageSheets/XC 2026 Mileage 9-7.pdf`
+- `mileageSheets/XC 2026 Workouts 9-11.pdf`
+- `mileageSheets/XC 2026 Workouts 9-8.pdf`
+
+The PDF/XLSX files are source data, not necessarily application code.
+
+The repository digest may represent binary files as excluded/binary content rather than readable source text. If the actual source document is needed, inspect the original file rather than assuming the digest contains all of its contents.
+
+
+CURRENT INCOMPLETE / FUTURE AREAS
+---------------------------------
+The codebase contains explicit placeholders.
+
+Known incomplete areas include:
+- Lifting Sheet page: currently only displays "Lifting Sheet"
+- Personal Records: route exists but says personal records aren't tracked yet
+- Season Bests: route exists but says season bests aren't tracked yet
+- About: currently uses a coming-soon page
+- Name Lookup: currently uses a coming-soon page
+- Some functionality may still be transitioning from local data to Supabase
+
+When asked to implement a new feature, first determine whether it should extend an existing data model/page or replace placeholder functionality.
+
+
+VISUAL / UX CHARACTER
+---------------------
+The application has a Wartburg-specific visual identity.
+
+It uses:
+- a Wartburg drone image as a background
+- a custom Acme font
+- custom back-button icon
+- large outlined/display-style headings
+- responsive layouts
+- navigation menus/dropdowns
+- athlete-focused resource cards/pages
+
+The CSS contains responsive breakpoints, including special handling for narrow/mobile layouts.
+
+Do not unnecessarily redesign the visual language when making functional changes. Prefer extending the existing patterns.
+
+
+ROUTING / ACCESS RULES
+----------------------
+There are two conceptual access levels:
+
+ATHLETE:
+- Must have an active athlete identity/season.
+- Can access personalized team resources.
+
+ADMIN:
+- Must authenticate through the admin authentication system.
+- Can access data-management pages.
+
+Do not expose admin functionality merely by hiding links. Preserve the route-level `RequireAdmin` guard.
+
+
+IMPORTANT ENGINEERING PRINCIPLES
+---------------------------------
+When modifying this project:
+
+1. Preserve athlete + season scoping.
+   An athlete's data is not simply "their data"; it is tied to a season.
+
+2. Preserve Supabase as the canonical source for core application records where the project has already migrated to it.
+
+3. Preserve name matching and alias handling.
+   External source names are messy and require reconciliation.
+
+4. Preserve the PDF ingestion workflow.
+   Parsing → matching → preview/validation → save is intentional.
+
+5. Preserve admin authentication and route guards.
+
+6. Do not assume group letters are globally unique.
+   Workout groups may be team-specific.
+
+7. Be careful with historical roster IDs.
+   Wartburg roster URL IDs are per-season, not stable person IDs.
+
+8. Do not silently turn placeholders into fake functionality.
+   If a feature is marked coming soon, determine the intended data source and UX before implementing it.
+
+9. Prefer small, targeted changes that fit the existing React/TypeScript architecture.
+
+10. When adding database-backed functionality, follow the existing data-access-layer pattern in `src/lib/` rather than putting large Supabase queries directly into page components.
+
+11. When changing ingestion behavior, consider reruns/idempotency. Several scripts intentionally use Supabase upserts and preserve existing TFRRS IDs.
+
+12. Do not expose environment secrets. Supabase credentials and admin credentials are expected to come from environment configuration.
+
+
+KEY FILE MAP
+------------
+Application shell:
+- `src/App.tsx`
+- `src/main.tsx`
+- `src/App.css`
+- `src/index.css`
+
+Identity/auth:
+- `src/context/UserContext.tsx`
+- `src/context/AdminAuthContext.tsx`
+- `src/components/identityLookup.tsx`
+- `src/components/requireIdentity.tsx`
+- `src/components/requireAdmin.tsx`
+- `src/components/switchIdentity.tsx`
+
+Pages:
+- `src/pages/home.tsx`
+- `src/pages/mileagePage.tsx`
+- `src/pages/workoutPages.tsx`
+- `src/pages/corePage.tsx`
+- `src/pages/fmsPage.tsx`
+- `src/pages/tfrrsStats.tsx`
+- `src/pages/liftingSheet.tsx`
+- `src/pages/adminLogin.tsx`
+- `src/pages/adminDashboard.tsx`
+- `src/pages/adminFmsAssignments.tsx`
+
+Data layer:
+- `src/lib/athleteData.ts`
+- `src/lib/mileageData.ts`
+- `src/lib/workoutData.ts`
+- `src/lib/coreData.ts`
+- `src/lib/fmsData.ts`
+- `src/lib/adminData.ts`
+- `src/lib/aliasData.ts`
+- `src/lib/nameMatching.ts`
+- `src/lib/pdfParser.ts`
+- `src/lib/supabaseClient.ts`
+- `src/lib/supabaseAdminClient.mjs`
+
+Static/cached data:
+- `src/data/core_routine.json`
+- `src/data/fms_exercises.json`
+- `src/data/rawFMSassignments.ts`
+- `src/data/tfrrs_stats.json`
+
+Data scripts:
+- `scripts/fetch-roster.mjs`
+- `scripts/fetch-roster-by-year.mjs`
+- `scripts/fetch-roster-history.mjs`
+- `scripts/fetch-tfrrs-ids.mjs`
+- `scripts/fetch-tfrrs-ids-historical.mjs`
+- `scripts/fetch-tfrrs-ids-all-years.mjs`
+- `scripts/fetch-tfrrs-stats.mjs`
+- `scripts/migrate-roster-to-supabase.mjs`
+- `scripts/migrate-core-to-supabase.mjs`
+- `scripts/migrate-fms-to-supabase.mjs`
+
+
+LLM WORKING INSTRUCTIONS
+------------------------
+You are working on the WXC Website repository.
+
+Before making changes:
+1. Inspect the relevant existing page/component/data-layer code.
+2. Determine the current behavior rather than relying only on this summary.
+3. Follow existing naming, TypeScript, React, Supabase, and CSS patterns.
+4. Identify whether the requested change affects:
+   - athlete identity
+   - season scoping
+   - database schema/data access
+   - PDF parsing
+   - name matching
+   - admin permissions
+   - external roster/TFRRS ingestion
+5. Avoid broad rewrites unless explicitly requested.
+6. If a requirement conflicts with the existing architecture, explain the conflict before making a risky change.
+7. Keep existing functionality working unless the requested feature explicitly changes it.
+8. For data migrations or schema changes, clearly identify what is being migrated and why.
+9. For bugs, trace the full path: source data → parser/ingestion → matching → database → data layer → page/UI.
+10. Treat this document as project orientation, not as a substitute for reading the actual source files.
+
+PROJECT GOAL IN ONE SENTENCE
+----------------------------
+Build a reliable, season-aware Wartburg cross-country athlete portal that centralizes individualized training resources and performance information, while providing coaches/administrators with secure tools to ingest, reconcile, and maintain team data from rosters, PDFs, and external track-performance sources.

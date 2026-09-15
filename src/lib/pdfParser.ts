@@ -9,11 +9,17 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 // happens.
 if (
   typeof ReadableStream !== "undefined" &&
-  !(ReadableStream.prototype as any)[Symbol.asyncIterator]
+  !(
+    ReadableStream.prototype as unknown as {
+      [Symbol.asyncIterator]?: () => AsyncIterator<unknown>;
+    }
+  )[Symbol.asyncIterator]
 ) {
-  (ReadableStream.prototype as any)[Symbol.asyncIterator] = function (
-    this: ReadableStream,
-  ) {
+  (
+    ReadableStream.prototype as unknown as {
+      [Symbol.asyncIterator]?: () => AsyncIterator<unknown>;
+    }
+  )[Symbol.asyncIterator] = function (this: ReadableStream<unknown>) {
     const reader = this.getReader();
     return {
       next: () => reader.read(),
@@ -57,12 +63,16 @@ export interface WorkoutRow {
   intervals: Record<string, string>;
   note: string | null;
   pageIndex: number;
+  // Identifies the mini-table/section this athlete came from. Group letters
+  // such as A/B are reused between sections, so page + letter is not enough.
+  sectionId: string;
 }
 
 export interface WorkoutGroupDefinition {
   groupLetter: string;
   description: string;
   pageIndex: number;
+  sectionId: string;
 }
 
 export interface ParsedWorkouts {
@@ -88,12 +98,21 @@ const DECORATIVE_DOTS_RE = /^[.\u2026]+$/;
 // interval columns" apart from "this segment only has a bare G column."
 const INTERVAL_LABEL_RE = /\d/;
 
-function withTimeout<T>(promise: PromiseLike<T>, ms: number, label: string): Promise<T> {
+function withTimeout<T>(
+  promise: PromiseLike<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) =>
       setTimeout(
-        () => reject(new Error(`${label} timed out after ${ms / 1000}s — try again or check your connection.`)),
+        () =>
+          reject(
+            new Error(
+              `${label} timed out after ${ms / 1000}s — try again or check your connection.`,
+            ),
+          ),
         ms,
       ),
     ),
@@ -183,7 +202,10 @@ function extractLeadingName(
 
 function toDisplayName(nameWords: PositionedWord[]): string | null {
   if (nameWords.length < 2) return null;
-  const raw = nameWords.map((w) => w.text).join(" ").replace(/,$/, "");
+  const raw = nameWords
+    .map((w) => w.text)
+    .join(" ")
+    .replace(/,$/, "");
   const [last, first] = raw.split(",").map((s) => s.trim());
   if (!first) return null;
   return `${first} ${last}`;
@@ -229,6 +251,7 @@ function clusterHeaderIntoColumns(
   const relevant = headerWords
     .filter(
       (w) =>
+        w.x <= LEGEND_MIN_X &&
         w.text !== "WO" &&
         !DATE_TOKEN_RE.test(w.text) &&
         !DECORATIVE_DOTS_RE.test(w.text),
@@ -266,7 +289,9 @@ function looksLikeHeaderRow(row: PositionedWord[]): boolean {
   const first = row[0]?.text ?? "";
   const second = row[1]?.text ?? "";
   const startsWithName =
-    NAME_TOKEN_RE.test(first) && NAME_TOKEN_RE.test(second) && !/^\d/.test(first);
+    NAME_TOKEN_RE.test(first) &&
+    NAME_TOKEN_RE.test(second) &&
+    !/^\d/.test(first);
   if (startsWithName) return false;
 
   const labelLikeCount = row.filter(
@@ -322,7 +347,7 @@ function findHeaderAnchors(
 export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await withTimeout(
-    pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise,
+    pdfjsLib.getDocument({ data: arrayBuffer }).promise,
     PDF_LOAD_TIMEOUT_MS,
     "PDF loading",
   );
@@ -383,7 +408,7 @@ export async function parseMileagePdf(file: File): Promise<MileageRow[]> {
 export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await withTimeout(
-    pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise,
+    pdfjsLib.getDocument({ data: arrayBuffer }).promise,
     PDF_LOAD_TIMEOUT_MS,
     "PDF loading",
   );
@@ -395,30 +420,10 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
     const page = await pdf.getPage(pageNum);
     const words = await extractPageWords(page);
     const rows = clusterIntoRows(words);
-    const seenLettersThisPage = new Set<string>();
 
-    // ---- Legend/description text: always x > LEGEND_MIN_X ----
-    const legendWords = words
-      .filter((w) => w.x > LEGEND_MIN_X)
-      .sort((a, b) => a.top - b.top || a.x - b.x);
-
-    const fullLegendText = legendWords.map((w) => w.text).join(" ");
-    const legendSegments = fullLegendText.split(/(?=\b(?:[A-Z]{1,2}|XT|M):)/);
-
-    for (const segment of legendSegments) {
-      const trimmed = segment.trim();
-      const match = trimmed.match(/^([A-Z]{1,2}|XT|M):\s*(.+)$/);
-      if (match && !seenLettersThisPage.has(match[1])) {
-        seenLettersThisPage.add(match[1]);
-        groupDefinitions.push({
-          groupLetter: match[1],
-          description: match[2].trim(),
-          pageIndex: pageNum,
-        });
-      }
-    }
-
-    // ---- Find EVERY header row on this page ----
+    // A single PDF page can contain several independent mini-tables.
+    // Keep every table/section isolated because the same group letters can
+    // legitimately appear more than once on a page.
     const headerRowIndices = rows
       .map((row, idx) => ({ row, idx }))
       .filter(({ row }) => looksLikeHeaderRow(row))
@@ -431,18 +436,57 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
       const nextHeaderIdx = headerRowIndices[h + 1] ?? rows.length;
       const headerRow = rows[headerIdx];
       const segmentRows = rows.slice(headerIdx + 1, nextHeaderIdx);
+      const sectionId = `${pageNum}-${h}`;
 
       const columnAnchors = clusterHeaderIntoColumns(headerRow);
       if (columnAnchors.length === 0) continue;
 
-      // Per-segment cutoff — derived from THIS segment's own columns
-      // (correctly includes "G" when present, whatever its x position).
+      // Per-section cutoff. The right-hand legend/description area must not
+      // be mistaken for athlete data.
       const maxAnchorX = Math.max(...columnAnchors.map((c) => c.x));
       const dataCutoffX = maxAnchorX + 40;
 
       const hasIntervalColumns = columnAnchors.some(
         (c) => c.key !== "G" && INTERVAL_LABEL_RE.test(c.key),
       );
+
+      // Descriptions in the source sheets/PDF are attached to the section,
+      // often appearing on the same row as the first athlete assigned to a
+      // group. Read them row-by-row instead of concatenating the entire
+      // right-hand side of the page. This preserves duplicate letters such
+      // as A/B when different sections have different workouts.
+      const definitionRows = [headerRow, ...segmentRows];
+      const definitionsInSection = new Map<string, string>();
+
+      for (const row of definitionRows) {
+        const rightWords = row
+          .filter((w) => w.x > LEGEND_MIN_X)
+          .sort((a, b) => a.x - b.x);
+
+        if (rightWords.length === 0) continue;
+
+        const rightText = rightWords
+          .map((w) => w.text)
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        const match = rightText.match(/^([A-Z]{1,2}|XT|M)\s*:\s*(.+)$/i);
+
+        if (match && match[2].trim()) {
+          const letter = match[1].toUpperCase();
+          definitionsInSection.set(letter, match[2].trim());
+        }
+      }
+
+      for (const [groupLetter, description] of definitionsInSection) {
+        groupDefinitions.push({
+          groupLetter,
+          description,
+          pageIndex: pageNum,
+          sectionId,
+        });
+      }
 
       for (const row of segmentRows) {
         const nameWords = extractLeadingName(row, 2);
@@ -455,42 +499,63 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
         const assigned = assignToNearestColumn(dataWords, columnAnchors);
 
         let groupLetter: string | null = null;
+
         if (assigned["G"] && /^[A-Za-z]{1,2}$/.test(assigned["G"].trim())) {
-          groupLetter = assigned["G"].trim();
+          groupLetter = assigned["G"].trim().toUpperCase();
         } else if (!columnAnchors.some((c) => c.key === "G")) {
-          const trailingWord = [...row].reverse().find((w) => w.x <= dataCutoffX);
+          const trailingWord = [...row]
+            .reverse()
+            .find((w) => w.x <= dataCutoffX);
+
           if (
             trailingWord &&
             !nameWords.includes(trailingWord) &&
             /^[A-Za-z]{1,2}$/.test(trailingWord.text) &&
             !Object.values(assigned).some((v) => v.includes(trailingWord.text))
           ) {
-            groupLetter = trailingWord.text;
+            groupLetter = trailingWord.text.toUpperCase();
           }
         }
 
-        let intervals: Record<string, string> = {};
+        const intervals: Record<string, string> = {};
         let note: string | null = null;
 
         if (hasIntervalColumns) {
           for (const [label, value] of Object.entries(assigned)) {
             if (label === "G") continue;
-            if (value.trim().length > 0) intervals[label] = value.trim();
+            if (value.trim().length > 0) {
+              intervals[label] = value.trim();
+            }
           }
         } else {
           const groupWord = row.find(
             (w) =>
               /^[A-Z]{1,2}$/.test(w.text) &&
-              Math.abs(w.x - (columnAnchors.find((c) => c.key === "G")?.x ?? -1)) < 10,
+              Math.abs(
+                w.x - (columnAnchors.find((c) => c.key === "G")?.x ?? -1),
+              ) < 10,
           );
+
           const noteWords = row
-            .filter((w) => w !== groupWord && !nameWords.includes(w) && w.x <= dataCutoffX)
+            .filter(
+              (w) =>
+                w !== groupWord && !nameWords.includes(w) && w.x <= dataCutoffX,
+            )
             .filter((w) => !DECORATIVE_DOTS_RE.test(w.text))
             .sort((a, b) => a.x - b.x);
-          note = noteWords.length > 0 ? noteWords.map((w) => w.text).join(" ").trim() : null;
+
+          note =
+            noteWords.length > 0
+              ? noteWords
+                  .map((w) => w.text)
+                  .join(" ")
+                  .trim()
+              : null;
         }
 
-        if (!groupLetter && Object.keys(intervals).length === 0 && !note) continue;
+        if (!groupLetter && Object.keys(intervals).length === 0 && !note) {
+          continue;
+        }
 
         workoutRows.push({
           name: displayName,
@@ -498,6 +563,7 @@ export async function parseWorkoutsPdf(file: File): Promise<ParsedWorkouts> {
           intervals,
           note,
           pageIndex: pageNum,
+          sectionId,
         });
       }
     }
