@@ -832,7 +832,7 @@
   color: white;
   -webkit-text-stroke: 1px black;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
-  font-size: clamp(15px, 1.9vw, 22px);
+  font-size: clamp(15px, 1.9vw, 40px);
   line-height: 1.5;
   margin: 0 auto;
 }
