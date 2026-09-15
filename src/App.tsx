@@ -16,6 +16,7 @@ import MileagePage from "./pages/mileagePage";
 import CorePage from "./pages/corePage";
 import AdminFmsAssignments from "./pages/adminFmsAssignments";
 import FmsPage from "./pages/fmsPage";
+import LiftingSheet from "./pages/liftingSheet";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -87,6 +88,14 @@ function AppContent() {
           element={
             <RequireIdentity>
               <FmsPage />
+            </RequireIdentity>
+          }
+        />
+        <Route
+          path="/lifting_sheet"
+          element={
+            <RequireIdentity>
+              <LiftingSheet />
             </RequireIdentity>
           }
         />

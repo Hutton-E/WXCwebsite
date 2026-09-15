@@ -955,6 +955,18 @@ button.admin-nav-link {
   box-sizing: border-box;
 }
 
+.lifting-nav {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.lifting-nav-label {
+  font-size: clamp(14px, 1.8vw, 30px);
+}
+
 @media (max-width: 700px) {
   .home-content {
     display: flex;
