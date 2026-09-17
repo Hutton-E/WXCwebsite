@@ -967,6 +967,13 @@ button.admin-nav-link {
   font-size: clamp(14px, 1.8vw, 30px);
 }
 
+.lifting-page .core-exercise-item,
+.lifting-page .core-day-name,
+.lifting-page .core-intro,
+.lifting-page .workouts-description {
+  color: black;
+}
+
 @media (max-width: 700px) {
   .home-content {
     display: flex;

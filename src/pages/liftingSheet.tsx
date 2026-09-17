@@ -88,7 +88,7 @@ function LiftingSheet() {
   const isFriday = current.day === "friday";
 
   return (
-    <div className="core-page">
+    <div className="core-page lifting-page">
       <h1 className="core-title acme-regular text-outline">Lifting Sheet</h1>
 
       <div className="lifting-nav">

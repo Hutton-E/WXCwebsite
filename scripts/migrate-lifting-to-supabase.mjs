@@ -18,8 +18,7 @@ async function main() {
   const wednesday = sheetToRows(workbook, "Wednesday").map((r) => ({
     day: "wednesday",
     week_number: r.Week,
-    week_date:
-      typeof r.Date === "string" ? r.Date : r.Date.toISOString().slice(0, 10),
+    week_date: typeof r.Date === "string" ? r.Date : r.Date.toISOString().slice(0, 10),
     slot: r.Slot,
     exercise: r.Exercise,
     sets_reps: r.SetsReps || null,
@@ -29,13 +28,24 @@ async function main() {
   const friday = sheetToRows(workbook, "Friday").map((r) => ({
     day: "friday",
     week_number: r.Week,
-    week_date:
-      typeof r.Date === "string" ? r.Date : r.Date.toISOString().slice(0, 10),
+    week_date: typeof r.Date === "string" ? r.Date : r.Date.toISOString().slice(0, 10),
     slot: r.Slot,
     exercise: r.Exercise,
     sets_reps: r.SetsReps || null,
     position: r.Position,
   }));
+
+  await supabase
+    .from("lifting_program")
+    .delete()
+    .neq("id", "00000000-0000-0000-0000-000000000000");
+
+  const { error: programError, count: programCount } = await supabase
+    .from("lifting_program")
+    .insert([...wednesday, ...friday], { count: "exact" });
+
+  if (programError) throw new Error(programError.message);
+  console.log(`✅ Inserted ${programCount} lifting_program rows`);
 
   const glossary = sheetToRows(workbook, "Glossary").map((r) => ({
     category: r.Category,
