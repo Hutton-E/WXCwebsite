@@ -14,10 +14,10 @@
  */
 
 import * as cheerio from "cheerio";
-import { getAuthenticatedSupabaseClient } from "./lib/supabaseAdminClient.mjs";
+import { getAuthenticatedSupabaseClient } from "../src/lib/supabaseAdminClient.mjs";
 
 // Edit this list to add/remove seasons you want generated.
-const YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025];
+const YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026];
 
 const TEAMS = [
   {
@@ -32,8 +32,30 @@ const TEAMS = [
 
 const DELAY_MS = 700;
 
+const GRADUATION_OFFSETS = {
+  freshman: 3,
+  sophomore: 2,
+  junior: 1,
+  senior: 0,
+  graduate: 0,
+  fr: 3,
+  so: 2,
+  jr: 1,
+  sr: 0,
+  gr: 0,
+};
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeClassYear(raw) {
+  return raw.trim().replace(/\.$/, "").toLowerCase();
+}
+
+function graduationYear(season, classYear) {
+  const offset = GRADUATION_OFFSETS[normalizeClassYear(classYear)];
+  return offset === undefined ? null : season + offset;
 }
 
 function parseModernTable($, team) {
@@ -61,6 +83,7 @@ function parseModernTable($, team) {
         const name = link.text().trim() || nameCell.text().trim();
         const href = link.attr("href") || "";
         const id = href.split("/").filter(Boolean).pop() || "";
+        const classYear = $(cells[1]).text().trim();
 
         const hometownRaw = $(cells[2]).text().trim();
         const [hometown, highSchool] = hometownRaw
@@ -73,6 +96,7 @@ function parseModernTable($, team) {
           id,
           name,
           team,
+          classYear,
           hometown: hometown || "",
           highSchool: highSchool || "",
         });
@@ -116,6 +140,7 @@ function parseLegacyCards($, team) {
       id,
       name,
       team,
+      classYear: classMatch[1],
       hometown: classMatch[2].trim(),
       highSchool: classMatch[3].trim(),
     });
@@ -168,7 +193,7 @@ async function main() {
     // Preserve any existing tfrrs_id already stored for this season.
     const { data: existing, error: fetchError } = await supabase
       .from("athletes")
-      .select("id, tfrrs_id")
+      .select("id, tfrrs_id, graduation_year")
       .eq("season", year);
 
     if (fetchError) {
@@ -181,6 +206,9 @@ async function main() {
     const existingTfrrsById = new Map(
       (existing ?? []).map((a) => [a.id, a.tfrrs_id]),
     );
+    const existingGraduationYearsById = new Map(
+      (existing ?? []).map((a) => [a.id, a.graduation_year]),
+    );
 
     const payload = allAthletes.map((a) => ({
       id: a.id,
@@ -190,6 +218,10 @@ async function main() {
       hometown: a.hometown || null,
       high_school: a.highSchool || null,
       tfrrs_id: existingTfrrsById.get(a.id) ?? null,
+      graduation_year:
+        graduationYear(year, a.classYear) ??
+        existingGraduationYearsById.get(a.id) ??
+        null,
     }));
 
     const { error, count } = await supabase

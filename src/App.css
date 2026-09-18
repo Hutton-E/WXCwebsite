@@ -584,13 +584,180 @@
   background: none;
   border: none;
   text-decoration: underline;
-  font-size: 40px;
+  font-size: clamp(16px, 2.2vw, 30px);
   cursor: pointer;
   transition: opacity 0.15s ease;
 }
 
 .home-content .admin-login-link:hover {
   opacity: 0.8;
+}
+
+.schedule-page {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-lg) var(--space-md);
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+.schedule-title {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 48px);
+  text-align: center;
+}
+
+.schedule-message {
+  margin: 0;
+  font-size: clamp(16px, 2vw, 24px);
+  text-align: center;
+}
+
+.schedule-list {
+  width: min(94vw, 900px);
+  display: grid;
+  gap: var(--space-md);
+}
+
+.schedule-card {
+  padding: var(--space-md);
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+  color: black;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+.schedule-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  align-items: flex-start;
+}
+
+.schedule-meet-name,
+.schedule-meet-meta,
+.schedule-meet-location,
+.schedule-result-summary {
+  margin: 0;
+}
+
+.schedule-meet-name {
+  font-size: clamp(20px, 2.8vw, 30px);
+  color: black;
+}
+
+.schedule-meet-meta,
+.schedule-meet-location,
+.schedule-result-summary {
+  font-size: clamp(14px, 1.8vw, 20px);
+}
+
+.schedule-meet-location,
+.schedule-result-summary {
+  margin-top: 8px;
+}
+
+.schedule-athlete-result {
+  margin: var(--space-sm) 0 0;
+  font-weight: 700;
+}
+
+.schedule-status {
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.12);
+  font-size: 13px;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.schedule-status.completed {
+  background: rgba(34, 120, 55, 0.2);
+}
+
+.schedule-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: var(--space-sm);
+}
+
+.schedule-links a {
+  color: black;
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.season-schedule-page {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-lg) var(--space-md);
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+.season-schedule-season-select {
+  flex: 0 0 auto;
+}
+
+.season-schedule-columns {
+  width: min(96vw, 1400px);
+  min-height: 0;
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+.season-schedule-column {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.season-schedule-column-title {
+  flex: 0 0 auto;
+  margin: 0;
+  text-align: center;
+  font-size: clamp(22px, 3vw, 36px);
+}
+
+.season-schedule-column-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: var(--space-md);
+  padding: 4px 8px 24px 4px;
+}
+
+@media (max-width: 700px) {
+  .season-schedule-page {
+    overflow-y: auto;
+  }
+
+  .season-schedule-columns {
+    width: min(94vw, 600px);
+    grid-template-columns: 1fr;
+    flex: 0 0 auto;
+  }
+
+  .season-schedule-column-scroll {
+    max-height: 60vh;
+  }
 }
 
 .mileage-page {

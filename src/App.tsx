@@ -18,6 +18,8 @@ import CorePage from "./pages/corePage";
 import AdminFmsAssignments from "./pages/adminFmsAssignments";
 import FmsPage from "./pages/fmsPage";
 import LiftingSheet from "./pages/liftingSheet";
+import SchedulePage from "./pages/schedulePage";
+import SeasonSchedulePage from "./pages/seasonSchedulePage";
 
 const BACK_BUTTON_ROUTES = new Set(["/"]);
 
@@ -31,6 +33,8 @@ function AppContent() {
     "/about",
     "/mileage",
     "/core",
+    "/schedule",
+    "/season-schedule",
     "/error",
     "/fms",
     "/lifting_sheet",
@@ -79,6 +83,20 @@ function AppContent() {
         <Route
           path="/core"
           element={<CorePage />}
+        />
+
+        <Route
+          path="/schedule"
+          element={
+            <RequireIdentity>
+              <SchedulePage />
+            </RequireIdentity>
+          }
+        />
+
+        <Route
+          path="/season-schedule"
+          element={<SeasonSchedulePage />}
         />
 
         <Route

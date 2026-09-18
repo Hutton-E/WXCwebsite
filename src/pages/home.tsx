@@ -13,7 +13,10 @@ const resourceLinks = [
 ];
 
 const statsLinks = [{ label: "View TFRRS Stats", path: "/tfrrs-stats" }];
-const commonLinks = [{ label: "View Core", path: "/core" }];
+const commonLinks = [
+  { label: "View Core", path: "/core" },
+  { label: "View Schedule", path: "/season-schedule" },
+];
 
 function Home() {
   const { athlete, athleteId, athleteLoading } = useUser();

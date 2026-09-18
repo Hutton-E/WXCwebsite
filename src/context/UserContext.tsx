@@ -15,6 +15,7 @@ export interface Athlete {
   hometown: string | null;
   highSchool: string | null;
   tfrrsId: string | null;
+  graduationYear: number | null;
 }
 
 interface UserContextValue {
@@ -75,7 +76,9 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
     supabase
       .from("athletes")
-      .select("id, season, name, team, hometown, high_school, tfrrs_id")
+      .select(
+        "id, season, name, team, hometown, high_school, tfrrs_id, graduation_year",
+      )
       .eq("id", athleteId)
       .eq("season", season)
       .maybeSingle()
@@ -92,6 +95,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
             hometown: data.hometown,
             highSchool: data.high_school,
             tfrrsId: data.tfrrs_id,
+            graduationYear: data.graduation_year,
           });
         }
         setAthleteLoading(false);
