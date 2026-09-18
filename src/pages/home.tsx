@@ -2,6 +2,7 @@ import NavMenu from "../components/navMenu";
 import IdentityLookup from "../components/identityLookup";
 import SwitchIdentityPrompt from "../components/switchIdentity";
 import { useUser } from "../context/UserContext";
+import { Link } from "react-router-dom";
 
 const resourceLinks = [
   { label: "View Mileage", path: "/mileage" },
@@ -12,6 +13,7 @@ const resourceLinks = [
 ];
 
 const statsLinks = [{ label: "View TFRRS Stats", path: "/tfrrs-stats" }];
+const commonLinks = [{ label: "View Core", path: "/core" }];
 
 function Home() {
   const { athlete, athleteId, athleteLoading } = useUser();
@@ -29,7 +31,19 @@ function Home() {
           : "Welcome, please type your name and select it to view resources."}
       </h1>
 
-      {!athlete && <IdentityLookup />}
+      <div className={`home-center-controls${athlete ? " has-athlete" : ""}`}>
+        {!athlete && <IdentityLookup />}
+
+        <nav className="common-links">
+          <NavMenu label="Common Links" items={commonLinks} />
+        </nav>
+      </div>
+
+      <div className="home-admin-login">
+        <Link to="/admin" className="admin-login-link acme-regular text-outline">
+          Admin Login?
+        </Link>
+      </div>
 
       {athlete && (
         <>

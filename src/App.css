@@ -27,7 +27,7 @@
 }
 
 .welcome-text {
-  position: fixed;
+  position: absolute;
   top: 24vh;
   left: 51vw;
   transform: translate(-50%, -50%);
@@ -40,17 +40,52 @@
 }
 
 .left-res-drop {
-  position: fixed;
+  position: absolute;
   top: 35vh;
   left: 10vw;
   z-index: 15;
 }
 
 .mid-res-drop {
-  position: fixed;
+  position: absolute;
   top: 35vh;
   left: 65vw;
   z-index: 15;
+}
+
+.home-center-controls {
+  position: absolute;
+  top: 45vh;
+  left: 50vw;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  z-index: 15;
+}
+
+.home-center-controls.has-athlete {
+  top: 68vh;
+}
+
+.home-center-controls .identity-lookup {
+  position: static;
+  top: auto;
+  left: auto;
+  transform: none;
+}
+
+.home-center-controls .common-links {
+  position: static;
+  transform: none;
+}
+
+.home-content .home-admin-login {
+  position: fixed;
+  top: var(--space-sm);
+  right: var(--space-sm);
+  z-index: 35;
 }
 
 .acme-regular {
@@ -216,7 +251,7 @@
 }
 
 .identity-lookup {
-  position: fixed;
+  position: absolute;
   top: 45vh;
   left: 50vw;
   transform: translateX(-50%);
@@ -283,7 +318,7 @@
 }
 
 .switch-identity-link {
-  position: fixed;
+  position: absolute;
   top: 27vh;
   left: 51vw;
   transform: translateX(-50%);
@@ -304,7 +339,7 @@
 }
 
 .switch-identity-confirm {
-  position: fixed;
+  position: absolute;
   top: 28vh;
   left: 50vw;
   transform: translateX(-50%);
@@ -544,7 +579,7 @@
   background: rgba(240, 233, 233, 0.98);
 }
 
-.admin-login-link {
+.home-content .admin-login-link {
   margin-top: 12px;
   background: none;
   border: none;
@@ -554,7 +589,7 @@
   transition: opacity 0.15s ease;
 }
 
-.admin-login-link:hover {
+.home-content .admin-login-link:hover {
   opacity: 0.8;
 }
 
@@ -1092,6 +1127,7 @@ button.admin-nav-link {
   .welcome-text,
   .left-res-drop,
   .mid-res-drop,
+  .home-center-controls,
   .switch-identity-link,
   .switch-identity-confirm,
   .identity-lookup {
@@ -1103,6 +1139,10 @@ button.admin-nav-link {
     transform: none;
     width: 100%;
     max-width: 90vw;
+  }
+
+  .home-center-controls {
+    gap: 20px;
   }
 
   .mileage-title,

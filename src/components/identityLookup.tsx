@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { useUser } from "../context/UserContext";
 import { fetchAthletesForSeason } from "../lib/athleteData";
 import type { AthleteRecord } from "../lib/athleteData";
@@ -99,10 +98,6 @@ function IdentityLookup() {
           No match found — check your spelling.
         </p>
       )}
-
-      <Link to="/admin" className="admin-login-link acme-regular text-outline">
-        Admin Login?
-      </Link>
     </div>
   );
 }

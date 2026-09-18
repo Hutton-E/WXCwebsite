@@ -78,11 +78,7 @@ function AppContent() {
 
         <Route
           path="/core"
-          element={
-            <RequireIdentity>
-              <CorePage />
-            </RequireIdentity>
-          }
+          element={<CorePage />}
         />
 
         <Route
