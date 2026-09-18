@@ -12,6 +12,7 @@ import Workouts from "./pages/workoutPages";
 import AdminLogin from "./pages/adminLogin";
 import RequireAdmin from "./components/requireAdmin";
 import AdminDashboard from "./pages/adminDashboard";
+import AdminPreview from "./pages/adminPreview";
 import MileagePage from "./pages/mileagePage";
 import CorePage from "./pages/corePage";
 import AdminFmsAssignments from "./pages/adminFmsAssignments";
@@ -39,18 +40,24 @@ function AppContent() {
     "/workouts",
     "/admin",
     "/admin/dashboard",
+    "/admin/preview",
     "/admin/fms",
   ].includes(location.pathname);
+
   const showBackButton =
     isKnownRoute && !BACK_BUTTON_ROUTES.has(location.pathname);
 
   return (
     <>
       {showBackButton && <BackButton />}
+
       <Routes>
         <Route path="/" element={<Home />} />
+
         <Route path="/error" element={<ErrorPage />} />
+
         <Route path="*" element={<ErrorPage />} />
+
         <Route
           path="/about"
           element={
@@ -59,6 +66,7 @@ function AppContent() {
             </RequireIdentity>
           }
         />
+
         <Route
           path="/mileage"
           element={
@@ -67,6 +75,7 @@ function AppContent() {
             </RequireIdentity>
           }
         />
+
         <Route
           path="/core"
           element={
@@ -75,6 +84,7 @@ function AppContent() {
             </RequireIdentity>
           }
         />
+
         <Route
           path="/lookup"
           element={
@@ -83,6 +93,7 @@ function AppContent() {
             </RequireIdentity>
           }
         />
+
         <Route
           path="/fms"
           element={
@@ -91,6 +102,7 @@ function AppContent() {
             </RequireIdentity>
           }
         />
+
         <Route
           path="/lifting_sheet"
           element={
@@ -99,6 +111,7 @@ function AppContent() {
             </RequireIdentity>
           }
         />
+
         <Route
           path="/tfrrs-stats"
           element={
@@ -107,6 +120,7 @@ function AppContent() {
             </RequireIdentity>
           }
         />
+
         <Route
           path="/personal-records"
           element={
@@ -115,6 +129,7 @@ function AppContent() {
             </RequireIdentity>
           }
         />
+
         <Route
           path="/season-bests"
           element={
@@ -123,6 +138,7 @@ function AppContent() {
             </RequireIdentity>
           }
         />
+
         <Route
           path="/workouts"
           element={
@@ -131,7 +147,9 @@ function AppContent() {
             </RequireIdentity>
           }
         />
+
         <Route path="/admin" element={<AdminLogin />} />
+
         <Route
           path="/admin/dashboard"
           element={
@@ -140,6 +158,16 @@ function AppContent() {
             </RequireAdmin>
           }
         />
+
+        <Route
+          path="/admin/preview"
+          element={
+            <RequireAdmin>
+              <AdminPreview />
+            </RequireAdmin>
+          }
+        />
+
         <Route
           path="/admin/fms"
           element={
@@ -157,6 +185,7 @@ function App() {
   return (
     <BrowserRouter>
       <Background imageUrl={wartburgDroneShot} opacity={0.7} />
+
       <AppContent />
     </BrowserRouter>
   );

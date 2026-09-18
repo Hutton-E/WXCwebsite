@@ -16,8 +16,9 @@ export interface MileageEntry {
 export async function fetchMileageForAthlete(
   athleteId: string,
   season: number,
+  preview = false,
 ): Promise<MileageEntry[]> {
-  const { data, error } = await supabase
+  let query = supabase
     .from("mileage_entries")
     .select(
       "week_of, monday, tuesday, wednesday, thursday, friday, saturday, sunday, weekly_total, notes",
@@ -26,6 +27,11 @@ export async function fetchMileageForAthlete(
     .eq("season", season)
     .order("week_of", { ascending: false });
 
+  if (!preview) {
+    query = query.eq("is_draft", false);
+  }
+
+  const { data, error } = await query;
   if (error) throw new Error(error.message);
   return data ?? [];
 }

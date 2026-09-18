@@ -63,16 +63,22 @@ export interface WorkoutRow {
   intervals: Record<string, string>;
   note: string | null;
   pageIndex: number;
-  // Identifies the mini-table/section this athlete came from. Group letters
-  // such as A/B are reused between sections, so page + letter is not enough.
+  // Identifies the mini-table/section this athlete came from.
   sectionId: string;
+  // Excel workout files explicitly identify the team by section.
+  // Optional so existing PDF parsing continues to work unchanged.
+  team?: "mens-cross-country" | "womens-cross-country";
 }
 
 export interface WorkoutGroupDefinition {
   groupLetter: string;
   description: string;
   pageIndex: number;
+  // Identifies the mini-table/section this definition came from.
   sectionId: string;
+  // Excel workout files explicitly identify the team by section.
+  // Optional so existing PDF parsing continues to work unchanged.
+  team?: "mens-cross-country" | "womens-cross-country";
 }
 
 export interface ParsedWorkouts {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useUser } from "../context/UserContext";
 import { fetchMileageForAthlete } from "../lib/mileageData";
 import type { MileageEntry } from "../lib/mileageData";
@@ -24,19 +25,22 @@ function formatWeekOf(dateStr: string) {
 
 function MileagePage() {
   const { athlete, season } = useUser();
+  const [searchParams] = useSearchParams();
+  const preview = searchParams.get("preview") === "1";
+
   const [entries, setEntries] = useState<MileageEntry[] | null>(null);
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!athlete) return;
+    if (!athlete || !season) return;
 
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setEntries(null);
     setError(null);
 
-    fetchMileageForAthlete(athlete.id, season!)
+    fetchMileageForAthlete(athlete.id, season, preview)
       .then((data) => {
         if (cancelled) return;
         setEntries(data);
@@ -50,7 +54,7 @@ function MileagePage() {
     return () => {
       cancelled = true;
     };
-  }, [athlete, season]);
+  }, [athlete, season, preview]);
 
   if (!athlete) return null;
 
@@ -58,6 +62,12 @@ function MileagePage() {
 
   return (
     <div className="mileage-page">
+      {preview && (
+        <div className="preview-banner">
+          PREVIEW MODE — showing draft data, not visible to athletes yet
+        </div>
+      )}
+
       <h1 className="mileage-title acme-regular text-outline">
         {athlete.name}&apos;s Mileage
       </h1>

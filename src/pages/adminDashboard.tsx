@@ -1,16 +1,21 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAdminAuth } from "../context/AdminAuthContext";
-import { parseMileagePdf } from "../lib/pdfParser";
+import { parseMileagePdf, parseWorkoutsPdf } from "../lib/pdfParser";
 import { parseWorkoutsExcel } from "../lib/excelParser";
 import type {
   MileageRow,
   WorkoutRow,
   WorkoutGroupDefinition,
 } from "../lib/pdfParser";
-import { upsertMileageRows, upsertWorkoutData } from "../lib/adminData";
+import {
+  upsertMileageRows,
+  upsertWorkoutData,
+  publishMileage,
+  publishWorkouts,
+} from "../lib/adminData";
 import type { MatchedRow, TeamScopedGroupDefinition } from "../lib/adminData";
-import { fetchAllAthletes } from "../lib/athleteData";
+import { fetchAthletesForSeason } from "../lib/athleteData";
 import type { AthleteRecord } from "../lib/athleteData";
 import { fetchAliasesForSeason, upsertAlias } from "../lib/aliasData";
 import {
@@ -24,14 +29,6 @@ const CURRENT_SEASON = 2026;
 
 type Mode = "mileage" | "workouts";
 
-function getSelectedSeason(weekOf: string): number {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(weekOf)) {
-    return Number(weekOf.slice(0, 4));
-  }
-
-  return CURRENT_SEASON;
-}
-
 function buildTeamScopedGroupDefinitions(
   groupDefinitions: WorkoutGroupDefinition[],
   workoutRows: MatchedRow<WorkoutRow>[],
@@ -41,15 +38,34 @@ function buildTeamScopedGroupDefinitions(
   const resultMap = new Map<string, TeamScopedGroupDefinition>();
 
   for (const def of groupDefinitions) {
+    if (def.team) {
+      const key = `${def.team}|${def.groupLetter}`;
+
+      resultMap.set(key, {
+        groupLetter: def.groupLetter,
+        description: def.description,
+        team: def.team,
+      });
+
+      continue;
+    }
+
     const teamsForThisDefinition = new Set(
       workoutRows
-        .filter((r) => r.data.groupLetter === def.groupLetter && r.athleteId)
+        .filter(
+          (r) =>
+            r.data.groupLetter === def.groupLetter &&
+            r.data.pageIndex === def.pageIndex &&
+            r.data.sectionId === def.sectionId &&
+            r.athleteId,
+        )
         .map((r) => athleteById.get(r.athleteId)?.team)
         .filter((t): t is string => !!t),
     );
 
     for (const team of teamsForThisDefinition) {
       const key = `${team}|${def.groupLetter}`;
+
       resultMap.set(key, {
         groupLetter: def.groupLetter,
         description: def.description,
@@ -63,11 +79,11 @@ function buildTeamScopedGroupDefinitions(
 
 function AdminDashboard() {
   const { signOut } = useAdminAuth();
+  const navigate = useNavigate();
+
   const [mode, setMode] = useState<Mode>("mileage");
   const [weekOf, setWeekOf] = useState("");
   const [day, setDay] = useState<"tuesday" | "friday">("tuesday");
-
-  const selectedSeason = getSelectedSeason(weekOf);
 
   const [athletes, setAthletes] = useState<AthleteRecord[]>([]);
   const [aliases, setAliases] = useState<
@@ -78,9 +94,11 @@ function AdminDashboard() {
   const [mileageMatches, setMileageMatches] = useState<
     MatchedRow<MileageRow>[] | null
   >(null);
+
   const [workoutMatches, setWorkoutMatches] = useState<
     MatchedRow<WorkoutRow>[] | null
   >(null);
+
   const [groupDefinitions, setGroupDefinitions] = useState<
     WorkoutGroupDefinition[]
   >([]);
@@ -88,43 +106,26 @@ function AdminDashboard() {
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setAthletesLoaded(false);
+  // True after the current upload has successfully been saved as a draft.
+  const [draftSaved, setDraftSaved] = useState(false);
 
-    Promise.all([fetchAllAthletes(), fetchAliasesForSeason(selectedSeason)])
+  useEffect(() => {
+    Promise.all([
+      fetchAthletesForSeason(CURRENT_SEASON),
+      fetchAliasesForSeason(CURRENT_SEASON),
+    ])
       .then(([athleteData, aliasData]) => {
-        if (cancelled) return;
         setAthletes(athleteData);
         setAliases(aliasData);
         setAthletesLoaded(true);
       })
-      .catch((err) => {
-        if (cancelled) return;
-        setStatus(`Failed to load athlete roster: ${err.message}`);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedSeason]);
+      .catch((err) =>
+        setStatus(`Failed to load athlete roster: ${err.message}`),
+      );
+  }, []);
 
   function runMatching<T extends { name: string }>(rows: T[]): MatchedRow<T>[] {
-    const currentSeasonAthletes = athletes.filter(
-      (a) => a.season === selectedSeason,
-    );
-    const otherSeasonAthletes = athletes.filter(
-      (a) => a.season !== selectedSeason,
-    );
-
-    // Other seasons first, current season LAST — Map.set is last-write-wins,
-    // so this guarantees a name existing in both the current and an older
-    // season always resolves to the CURRENT season's id.
-    const nameLookup = buildNameLookup([
-      ...otherSeasonAthletes,
-      ...currentSeasonAthletes,
-    ]);
+    const nameLookup = buildNameLookup(athletes);
     const aliasLookup = buildAliasLookup(aliases);
 
     return rows.map((data) => ({
@@ -133,16 +134,12 @@ function AdminDashboard() {
     }));
   }
 
-  function clearWorkoutPreview() {
-    setWorkoutMatches(null);
-    setGroupDefinitions([]);
-  }
-
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setStatus(null);
+    setDraftSaved(false);
     setBusy(true);
 
     try {
@@ -151,33 +148,29 @@ function AdminDashboard() {
 
         setMileageMatches(runMatching(rows));
         setWorkoutMatches(null);
-        setGroupDefinitions([]);
       } else {
-        if (!weekOf) {
+        const isExcel = /\.xlsx?$/i.test(file.name);
+
+        if (isExcel && !weekOf) {
           throw new Error(
-            "Please select the week's date before uploading a workout workbook.",
+            "Please set the Week of date before uploading an Excel workbook.",
           );
         }
 
-        const parsed = await parseWorkoutsExcel(file, weekOf, day);
+        const parsed = isExcel
+          ? await parseWorkoutsExcel(file, weekOf, day)
+          : await parseWorkoutsPdf(file);
+        console.log("PARSED WORKOUT NAMES:");
+        console.log(parsed.workoutRows.map((row) => row.name));
 
         setWorkoutMatches(runMatching(parsed.workoutRows));
         setGroupDefinitions(parsed.groupDefinitions);
         setMileageMatches(null);
       }
     } catch (err) {
-      const message = (err as Error).message;
-
-      setStatus(
-        mode === "mileage"
-          ? `Failed to parse mileage PDF: ${message}`
-          : `Failed to parse workout Excel file: ${message}`,
-      );
+      setStatus(`Failed to parse file: ${(err as Error).message}`);
     } finally {
       setBusy(false);
-
-      // Allows the same workbook to be selected again after a parse.
-      e.target.value = "";
     }
   }
 
@@ -185,30 +178,40 @@ function AdminDashboard() {
     setMileageMatches((prev) =>
       prev ? prev.map((r, i) => (i === index ? { ...r, athleteId } : r)) : prev,
     );
+
+    setDraftSaved(false);
   }
 
   function updateWorkoutMatch(index: number, athleteId: string) {
     setWorkoutMatches((prev) =>
       prev ? prev.map((r, i) => (i === index ? { ...r, athleteId } : r)) : prev,
     );
+
+    setDraftSaved(false);
   }
 
   function updateGroupDescription(index: number, description: string) {
     setGroupDefinitions((prev) =>
       prev.map((g, i) => (i === index ? { ...g, description } : g)),
     );
+
+    setDraftSaved(false);
   }
 
   function removeMileageRow(index: number) {
     setMileageMatches((prev) =>
       prev ? prev.filter((_, i) => i !== index) : prev,
     );
+
+    setDraftSaved(false);
   }
 
   function removeWorkoutRow(index: number) {
     setWorkoutMatches((prev) =>
       prev ? prev.filter((_, i) => i !== index) : prev,
     );
+
+    setDraftSaved(false);
   }
 
   const mileageUnmatchedCount =
@@ -234,7 +237,7 @@ function AdminDashboard() {
 
     await Promise.all(
       aliasesToLearn.map((row) =>
-        upsertAlias(selectedSeason, row.data.name, row.athleteId).catch((err) =>
+        upsertAlias(CURRENT_SEASON, row.data.name, row.athleteId).catch((err) =>
           console.warn(`Failed to save alias for "${row.data.name}":`, err),
         ),
       ),
@@ -249,16 +252,21 @@ function AdminDashboard() {
 
     setBusy(true);
     setStatus(null);
+    setDraftSaved(false);
 
     try {
       if (mode === "mileage" && mileageMatches) {
         const resolved = mileageMatches.filter((r) => r.athleteId);
 
-        const count = await upsertMileageRows(resolved, weekOf, selectedSeason);
+        const count = await upsertMileageRows(resolved, weekOf, CURRENT_SEASON);
 
         await learnAliasesFrom(resolved);
 
-        setStatus(`✅ Saved ${count} mileage rows for week of ${weekOf}.`);
+        setDraftSaved(true);
+
+        setStatus(
+          `✅ Saved ${count} mileage rows for week of ${weekOf} as DRAFT. Preview before publishing.`,
+        );
       } else if (mode === "workouts" && workoutMatches) {
         const resolved = workoutMatches.filter((r) => r.athleteId);
 
@@ -273,13 +281,15 @@ function AdminDashboard() {
           teamScopedGroups,
           weekOf,
           day,
-          selectedSeason,
+          CURRENT_SEASON,
         );
 
         await learnAliasesFrom(resolved);
 
+        setDraftSaved(true);
+
         setStatus(
-          `✅ Saved ${count} workout rows (${teamScopedGroups.length} team-scoped group definitions) for ${day}, week of ${weekOf}.`,
+          `✅ Saved ${count} workout rows as DRAFT for ${day}, week of ${weekOf}. Preview before publishing.`,
         );
       }
     } catch (err) {
@@ -289,6 +299,58 @@ function AdminDashboard() {
     }
   }
 
+  async function handlePublish() {
+    if (!weekOf) {
+      setStatus("Please select the week's date first.");
+      return;
+    }
+
+    setBusy(true);
+    setStatus(null);
+
+    try {
+      if (mode === "mileage") {
+        await publishMileage(weekOf);
+
+        setDraftSaved(false);
+
+        setStatus(
+          `✅ Published mileage for week of ${weekOf} — now live for everyone.`,
+        );
+      } else {
+        await publishWorkouts(weekOf, day);
+
+        setDraftSaved(false);
+
+        setStatus(
+          `✅ Published ${day} workouts for week of ${weekOf} — now live for everyone.`,
+        );
+      }
+    } catch (err) {
+      setStatus(`❌ Failed to publish: ${(err as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handlePreview() {
+    if (!weekOf || !draftSaved) {
+      setStatus("Save the upload as a draft before opening the preview.");
+      return;
+    }
+
+    const params = new URLSearchParams();
+
+    params.set("mode", mode);
+    params.set("week", weekOf);
+
+    if (mode === "workouts") {
+      params.set("day", day);
+    }
+
+    navigate(`/admin/preview?${params.toString()}`);
+  }
+
   function AthleteSelect({
     value,
     onChange,
@@ -296,47 +358,20 @@ function AdminDashboard() {
     value: string;
     onChange: (id: string) => void;
   }) {
-    const seasons = [...new Set(athletes.map((a) => a.season))].sort(
-      (a, b) => b - a,
-    );
-
-    const selected = athletes.find((a) => a.id === value);
-    const isCrossSeason = selected && selected.season !== selectedSeason;
-
     return (
-      <div>
-        <select
-          className="admin-match-select"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-        >
-          <option value="">-- Select athlete --</option>
-          {seasons.map((season) => (
-            <optgroup
-              key={season}
-              label={
-                season === selectedSeason ? `${season} roster` : `${season}`
-              }
-            >
-              {athletes
-                .filter((a) => a.season === season)
-                .sort((a, b) => a.name.localeCompare(b.name))
-                .map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-            </optgroup>
-          ))}
-        </select>
-        {isCrossSeason && (
-          <div style={{ fontSize: 11, color: "#b00020" }}>
-            ⚠ From {selected.season}, not {selectedSeason} — won't be findable
-            under {selectedSeason} unless they also have a {selectedSeason}{" "}
-            roster row.
-          </div>
-        )}
-      </div>
+      <select
+        className="admin-match-select"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">-- Select athlete --</option>
+
+        {athletes.map((a) => (
+          <option key={a.id} value={a.id}>
+            {a.name}
+          </option>
+        ))}
+      </select>
     );
   }
 
@@ -350,8 +385,9 @@ function AdminDashboard() {
           onClick={() => {
             setMode("mileage");
             setMileageMatches(null);
-            clearWorkoutPreview();
+            setWorkoutMatches(null);
             setStatus(null);
+            setDraftSaved(false);
           }}
         >
           Mileage
@@ -362,8 +398,9 @@ function AdminDashboard() {
           onClick={() => {
             setMode("workouts");
             setMileageMatches(null);
-            clearWorkoutPreview();
+            setWorkoutMatches(null);
             setStatus(null);
+            setDraftSaved(false);
           }}
         >
           Workouts
@@ -383,9 +420,7 @@ function AdminDashboard() {
             value={weekOf}
             onChange={(e) => {
               setWeekOf(e.target.value);
-              setMileageMatches(null);
-              clearWorkoutPreview();
-              setStatus(null);
+              setDraftSaved(false);
             }}
           />
         </label>
@@ -398,8 +433,7 @@ function AdminDashboard() {
               value={day}
               onChange={(e) => {
                 setDay(e.target.value as "tuesday" | "friday");
-                clearWorkoutPreview();
-                setStatus(null);
+                setDraftSaved(false);
               }}
             >
               <option value="tuesday">Tuesday</option>
@@ -410,26 +444,14 @@ function AdminDashboard() {
 
         <input
           type="file"
-          accept={
-            mode === "mileage"
-              ? "application/pdf"
-              : ".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
-          }
+          accept={mode === "mileage" ? "application/pdf" : ".pdf,.xlsx,.xls"}
           onChange={handleFileChange}
           disabled={busy || !athletesLoaded}
         />
       </div>
 
-      <p className="admin-status">
-        {mode === "workouts"
-          ? `Workout source: Excel workbook • ${selectedSeason}`
-          : `Mileage source: PDF • ${selectedSeason}`}
-      </p>
-
       {!athletesLoaded && (
-        <p className="admin-status">
-          Loading {selectedSeason} athlete roster...
-        </p>
+        <p className="admin-status">Loading athlete roster...</p>
       )}
 
       {busy && <p className="admin-status">Working...</p>}
@@ -499,18 +521,31 @@ function AdminDashboard() {
             </table>
           </div>
 
-          <p className="admin-status">
-            This will be saved under <strong>season {selectedSeason}</strong> —
-            confirm this matches the "Week of" year you intended.
-          </p>
+          <div className="admin-button-row">
+            <button
+              className="nav-menu-trigger"
+              onClick={handleSubmit}
+              disabled={busy}
+            >
+              Save to Database
+            </button>
 
-          <button
-            className="nav-menu-trigger"
-            onClick={handleSubmit}
-            disabled={busy}
-          >
-            Save to Database
-          </button>
+            <button
+              className="nav-menu-trigger"
+              onClick={handlePreview}
+              disabled={busy || !draftSaved}
+            >
+              Preview Draft
+            </button>
+
+            <button
+              className="nav-menu-trigger"
+              onClick={handlePublish}
+              disabled={busy || !draftSaved}
+            >
+              Publish (make live for everyone)
+            </button>
+          </div>
         </div>
       )}
 
@@ -528,8 +563,17 @@ function AdminDashboard() {
 
                 <tbody>
                   {groupDefinitions.map((g, i) => (
-                    <tr key={`${g.pageIndex}-${g.sectionId}-${g.groupLetter}`}>
-                      <td>{g.groupLetter}</td>
+                    <tr
+                      key={`${g.pageIndex}-${g.groupLetter}-${g.team ?? "unknown"}`}
+                    >
+                      <td>
+                        {g.groupLetter}
+                        {g.team === "womens-cross-country"
+                          ? " (Women)"
+                          : g.team === "mens-cross-country"
+                            ? " (Men)"
+                            : ""}
+                      </td>
 
                       <td>
                         <textarea
@@ -581,6 +625,7 @@ function AdminDashboard() {
                     </td>
 
                     <td>{r.data.name}</td>
+
                     <td>{r.data.groupLetter ?? "—"}</td>
 
                     <td>
@@ -605,13 +650,31 @@ function AdminDashboard() {
             </table>
           </div>
 
-          <button
-            className="nav-menu-trigger"
-            onClick={handleSubmit}
-            disabled={busy}
-          >
-            Save to Database
-          </button>
+          <div className="admin-button-row">
+            <button
+              className="nav-menu-trigger"
+              onClick={handleSubmit}
+              disabled={busy}
+            >
+              Save to Database
+            </button>
+
+            <button
+              className="nav-menu-trigger"
+              onClick={handlePreview}
+              disabled={busy || !draftSaved}
+            >
+              Preview Draft
+            </button>
+
+            <button
+              className="nav-menu-trigger"
+              onClick={handlePublish}
+              disabled={busy || !draftSaved}
+            >
+              Publish (make live for everyone)
+            </button>
+          </div>
         </div>
       )}
 

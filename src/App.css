@@ -974,6 +974,108 @@ button.admin-nav-link {
   color: black;
 }
 
+.preview-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: #b00020;
+  color: white;
+  text-align: center;
+  font-weight: 700;
+  padding: 8px;
+  z-index: 20;
+}
+
+.admin-button-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.admin-preview-page {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-lg);
+  box-sizing: border-box;
+  z-index: 10;
+}
+
+.admin-preview-controls {
+  width: min(90vw, 700px);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.admin-preview-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: black;
+  font-size: 14px;
+}
+
+.admin-preview-info strong {
+  font-weight: 700;
+}
+
+.admin-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+}
+
+.admin-preview-athlete-name {
+  margin: 0;
+  font-size: clamp(24px, 3.5vw, 40px);
+  text-align: center;
+}
+
+.admin-preview-page .mileage-card,
+.admin-preview-page .workouts-card {
+  margin-bottom: var(--space-md);
+}
+
+@media (max-width: 700px) {
+  .admin-preview-page {
+    padding: var(--space-lg) var(--space-md);
+  }
+
+  .admin-preview-controls {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .admin-preview-info {
+    text-align: center;
+  }
+
+  .admin-preview-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .admin-preview-actions .nav-menu-trigger {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 @media (max-width: 700px) {
   .home-content {
     display: flex;

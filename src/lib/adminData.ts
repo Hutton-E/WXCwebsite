@@ -41,11 +41,9 @@ export async function upsertMileageRows(
   season: number,
 ) {
   const dedupedById = new Map<string, MatchedRow<MileageRow>>();
-
   for (const row of rows) {
     dedupedById.set(row.athleteId, row);
   }
-
   const deduped = Array.from(dedupedById.values());
 
   const payload = deduped.map(({ data: r, athleteId }) => ({
@@ -63,6 +61,7 @@ export async function upsertMileageRows(
     sunday: r.sunday,
     weekly_total: r.weeklyTotal,
     notes: r.notes,
+    is_draft: true,
   }));
 
   const { error, count } = await withTimeout(
@@ -75,7 +74,6 @@ export async function upsertMileageRows(
   );
 
   if (error) throw new Error(error.message);
-
   return count ?? payload.length;
 }
 
@@ -92,13 +90,14 @@ export async function upsertWorkoutData(
     team: g.team,
     group_letter: g.groupLetter,
     description: g.description,
+    is_draft: true,
   }));
 
   if (groupPayload.length > 0) {
     const { error: groupError } = await withTimeout(
-      supabase.from("workout_groups").upsert(groupPayload, {
-        onConflict: "week_of,day,team,group_letter",
-      }),
+      supabase
+        .from("workout_groups")
+        .upsert(groupPayload, { onConflict: "week_of,day,team,group_letter" }),
       SAVE_TIMEOUT_MS,
       "Workout group definitions save",
     );
@@ -107,11 +106,9 @@ export async function upsertWorkoutData(
   }
 
   const dedupedById = new Map<string, MatchedRow<WorkoutRow>>();
-
   for (const r of workoutRows) {
     dedupedById.set(r.athleteId, r);
   }
-
   const deduped = Array.from(dedupedById.values());
 
   const payload = deduped.map(({ data: r, athleteId }) => ({
@@ -123,6 +120,7 @@ export async function upsertWorkoutData(
     group_letter: r.groupLetter || null,
     intervals: Object.keys(r.intervals).length > 0 ? r.intervals : null,
     note: r.note,
+    is_draft: true,
   }));
 
   const { error, count } = await withTimeout(
@@ -135,6 +133,32 @@ export async function upsertWorkoutData(
   );
 
   if (error) throw new Error(error.message);
-
   return count ?? payload.length;
+}
+
+export async function publishWorkouts(
+  weekOf: string,
+  day: "tuesday" | "friday",
+) {
+  const { error: e1 } = await supabase
+    .from("workouts")
+    .update({ is_draft: false })
+    .eq("week_of", weekOf)
+    .eq("day", day);
+  if (e1) throw new Error(e1.message);
+
+  const { error: e2 } = await supabase
+    .from("workout_groups")
+    .update({ is_draft: false })
+    .eq("week_of", weekOf)
+    .eq("day", day);
+  if (e2) throw new Error(e2.message);
+}
+
+export async function publishMileage(weekOf: string) {
+  const { error } = await supabase
+    .from("mileage_entries")
+    .update({ is_draft: false })
+    .eq("week_of", weekOf);
+  if (error) throw new Error(error.message);
 }

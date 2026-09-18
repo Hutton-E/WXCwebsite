@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useUser } from "../context/UserContext";
 import { fetchWorkoutsForAthlete } from "../lib/workoutData";
 import type { WorkoutDay } from "../lib/workoutData";
 
 function formatWeekOf(dateStr: string) {
-  const date = new Date(dateStr + "T00:00:00");
-  return date.toLocaleDateString(undefined, {
+  return new Date(dateStr + "T00:00:00").toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -20,6 +20,16 @@ interface WeekGroup {
   weekOf: string;
   season: number;
   days: WorkoutDay[];
+}
+
+function getIntervalDistance(label: string): number {
+  const match = label.match(/\d+/);
+
+  if (!match) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  return Number(match[0]);
 }
 
 function groupByWeek(rows: WorkoutDay[]): WeekGroup[] {
@@ -44,6 +54,9 @@ function groupByWeek(rows: WorkoutDay[]): WeekGroup[] {
 
 function WorkoutsPage() {
   const { athlete } = useUser();
+  const [searchParams] = useSearchParams();
+  const preview = searchParams.get("preview") === "1";
+
   const [weeks, setWeeks] = useState<WeekGroup[] | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +69,7 @@ function WorkoutsPage() {
     setWeeks(null);
     setError(null);
 
-    fetchWorkoutsForAthlete(athlete.name, athlete.team)
+    fetchWorkoutsForAthlete(athlete.name, athlete.team, preview)
       .then((rows) => {
         if (cancelled) return;
         const grouped = groupByWeek(rows);
@@ -74,7 +87,7 @@ function WorkoutsPage() {
     return () => {
       cancelled = true;
     };
-  }, [athlete]);
+  }, [athlete, preview]);
 
   if (!athlete) return null;
 
@@ -83,6 +96,12 @@ function WorkoutsPage() {
 
   return (
     <div className="workouts-page">
+      {preview && (
+        <div className="preview-banner">
+          PREVIEW MODE — showing draft data, not visible to athletes yet
+        </div>
+      )}
+
       <h1 className="workouts-title acme-regular text-outline">
         {athlete.name}&apos;s Workouts
       </h1>
@@ -151,16 +170,23 @@ function WorkoutsPage() {
 
                   {d.intervals && Object.keys(d.intervals).length > 0 && (
                     <ul className="workouts-interval-list">
-                      {Object.entries(d.intervals).map(([label, value]) => (
-                        <li key={label} className="workouts-interval-item">
-                          <span className="workouts-interval-label">
-                            {label}
-                          </span>
-                          <span className="workouts-interval-value">
-                            {value}
-                          </span>
-                        </li>
-                      ))}
+                      {Object.entries(d.intervals)
+                        .sort(
+                          ([labelA], [labelB]) =>
+                            getIntervalDistance(labelA) -
+                            getIntervalDistance(labelB),
+                        )
+                        .map(([label, value]) => (
+                          <li key={label} className="workouts-interval-item">
+                            <span className="workouts-interval-label">
+                              {label}
+                            </span>
+
+                            <span className="workouts-interval-value">
+                              {value}
+                            </span>
+                          </li>
+                        ))}
                     </ul>
                   )}
 

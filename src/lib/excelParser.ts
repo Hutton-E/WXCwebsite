@@ -10,10 +10,16 @@ const DEFAULT_GROUP_COLUMN = 23;
 
 const NAME_RE = /^[^,]+,\s*.+$/;
 const GROUP_RE = /^[A-Za-z]{1,2}\*?$/;
+const GROUP_TITLE_RE = /Group\s+([A-Za-z]{1,2}\*?)/i;
 const DECORATIVE_RE = /^[.\u2026]+$/;
+
+// Workout times in this workbook are stored as text.
+// Examples: 01:35.2, 03:10.4, 01:26.4
+const TIME_RE = /^\d{1,2}:\d{2}(?:\.\d+)?$/;
 
 function normalizeText(value: unknown): string {
   if (value === null || value === undefined) return "";
+
   return String(value).replace(/\s+/g, " ").trim();
 }
 
@@ -26,6 +32,7 @@ function getCell(
     r: row - 1,
     c: column - 1,
   });
+
   return sheet[address] as XLSX.CellObject | undefined;
 }
 
@@ -35,6 +42,7 @@ function getCellText(
   column: number,
 ): string {
   const cell = getCell(sheet, row, column);
+
   if (!cell) return "";
 
   if (typeof cell.w === "string" && cell.w.trim()) {
@@ -56,25 +64,40 @@ function isDecorativeHeader(value: string): boolean {
   return DECORATIVE_RE.test(value.trim());
 }
 
+function isTimeString(text: string): boolean {
+  return TIME_RE.test(text.trim());
+}
+
 function isIntervalValue(cell: XLSX.CellObject, text: string): boolean {
   if (!text) return false;
 
-  // FBC is a legitimate workout target stored as text rather than a time.
-  if (text.toUpperCase() === "FBC") return true;
+  // FBC is a legitimate workout target stored as text.
+  if (text.toUpperCase() === "FBC") {
+    return true;
+  }
 
-  // Times and numeric values are the normal interval-cell values.
-  if (cell.t === "n" || cell.t === "d") return true;
+  // The workbook stores workout times such as
+  // "01:35.2" as strings, so explicitly recognize them.
+  if (isTimeString(text)) {
+    return true;
+  }
+
+  // Numeric and date cells are also valid interval values.
+  if (cell.t === "n" || cell.t === "d") {
+    return true;
+  }
 
   return false;
 }
 
-// Convert "Last, First" (the workbook's format) into "First Last" (the
-// format athlete.name uses in Supabase) — without this, name matching
-// silently fails for every row, since normalizeName() only lowercases
-// and trims whitespace, it never reorders name parts.
+// Convert "Last, First" into "First Last".
 function toDisplayName(rawName: string): string | null {
   const [last, first] = rawName.split(",").map((s) => s.trim());
-  if (!first || !last) return null;
+
+  if (!first || !last) {
+    return null;
+  }
+
   return `${first} ${last}`;
 }
 
@@ -85,19 +108,26 @@ function findGroupColumn(
 ): number {
   const range = XLSX.utils.decode_range(String(sheet["!ref"] ?? "A1:A1"));
 
+  // First look for a "G" header.
   for (let column = 1; column <= range.e.c + 1; column++) {
     const value = normalizeText(getCellText(sheet, headerRow, column));
+
     if (value.toUpperCase() === "G") {
       return column;
     }
   }
 
+  // If there is no G header, determine the group column
+  // by finding the column containing the most group letters.
   const counts = new Map<number, number>();
 
   for (const row of athleteRows) {
     for (let column = FIRST_WORKOUT_COLUMN; column <= range.e.c + 1; column++) {
       const value = getCellText(sheet, row, column);
-      if (!isGroupLetter(value)) continue;
+
+      if (!isGroupLetter(value)) {
+        continue;
+      }
 
       counts.set(column, (counts.get(column) ?? 0) + 1);
     }
@@ -121,24 +151,118 @@ function addDescriptionsFromText(
   definitions: Map<string, string>,
 ): void {
   const normalized = text.trim();
-  if (!normalized) return;
 
-  // A cell can contain more than one definition, such as:
-  // B: ... B*: ...
-  // The source workbook separates these with a large amount of whitespace.
+  if (!normalized) {
+    return;
+  }
+
+  // A cell can contain more than one definition.
   const parts = normalized.split(/\s{3,}(?=[A-Za-z]{1,2}\*?\s*:)/);
 
   for (const part of parts) {
     const match = part.match(/^([A-Za-z]{1,2}\*?)\s*:\s*(.+)$/i);
 
-    if (!match) continue;
+    if (!match) {
+      continue;
+    }
 
     const groupLetter = match[1].toUpperCase();
+
     const description = match[2].replace(/\s+/g, " ").trim();
 
     if (description) {
       definitions.set(groupLetter, description);
     }
+  }
+}
+
+function addGroupTitleDescription(
+  sheet: XLSX.WorkSheet,
+  headerRow: number,
+  definitions: Map<string, string>,
+): void {
+  // The workbook structure is:
+  //
+  // Row before workout header - group title
+  // Row before workout header - workout description
+  // Workout header - "WO 9/8/2026"
+  //
+  // Example:
+  //
+  // Women's — Group A
+  // 4 x 800 T (60s Rest), ...
+  // WO 9/8/2026
+
+  const titleRow = headerRow - 2;
+  const descriptionRow = headerRow - 1;
+
+  if (titleRow < 1 || descriptionRow < 1) {
+    return;
+  }
+
+  const range = XLSX.utils.decode_range(String(sheet["!ref"] ?? "A1:A1"));
+
+  let title = "";
+  let description = "";
+
+  for (let column = 1; column <= range.e.c + 1; column++) {
+    const text = getCellText(sheet, titleRow, column);
+
+    if (text) {
+      title = text;
+      break;
+    }
+  }
+
+  for (let column = 1; column <= range.e.c + 1; column++) {
+    const text = getCellText(sheet, descriptionRow, column);
+
+    if (text) {
+      description = text;
+      break;
+    }
+  }
+
+  if (!title || !description) {
+    return;
+  }
+
+  const groupMatch = title.match(GROUP_TITLE_RE);
+
+  if (!groupMatch) {
+    return;
+  }
+
+  const groupLetter = groupMatch[1].toUpperCase();
+
+  const team = /women'?s/i.test(title)
+    ? "womens-cross-country"
+    : /men'?s/i.test(title)
+      ? "mens-cross-country"
+      : null;
+
+  if (!team) {
+    return;
+  }
+
+  // Some sheets use:
+  //
+  // A: workout description
+  //
+  // while others simply have:
+  //
+  // workout description
+  //
+  // Handle both formats.
+  const definitionMatch = description.match(/^([A-Za-z]{1,2}\*?)\s*:\s*(.+)$/i);
+
+  if (definitionMatch) {
+    definitions.set(
+      definitionMatch[1].toUpperCase(),
+      definitionMatch[2].replace(/\s+/g, " ").trim(),
+    );
+  } else {
+    definitions.set(groupLetter, description.replace(/\s+/g, " ").trim());
   }
 }
 
@@ -157,10 +281,13 @@ function getTargetSheetName(weekOf: string): string {
 
   const [, month, dayOfMonth] = parts;
 
-  // "Week of" is the actual date of this specific workout day — matching
-  // the same convention already used everywhere else in the app (the
-  // PDF-based mileage/workouts flow). No offset needed: the sheet name is
-  // simply that date's month-day.
+  // The workbook sheet name is the month-day.
+  // Example:
+  //
+  // Week of 2026-09-08
+  //      ↓
+  // Sheet "9-8"
+  //
   return `${month}-${dayOfMonth}`;
 }
 
@@ -177,6 +304,7 @@ export async function parseWorkoutsExcel(
   });
 
   const targetSheetName = getTargetSheetName(weekOf);
+
   const sheetName = workbook.SheetNames.find(
     (name) => name.trim() === targetSheetName,
   );
@@ -200,6 +328,7 @@ export async function parseWorkoutsExcel(
 
   const headerRows: number[] = [];
 
+  // Find every "WO MM/DD/YYYY" row.
   for (let row = 1; row <= range.e.r + 1; row++) {
     const firstCell = getCellText(sheet, row, 1);
 
@@ -219,26 +348,37 @@ export async function parseWorkoutsExcel(
 
   for (let sectionIndex = 0; sectionIndex < headerRows.length; sectionIndex++) {
     const headerRow = headerRows[sectionIndex];
+
     const nextHeaderRow = headerRows[sectionIndex + 1] ?? range.e.r + 2;
 
     const athleteRows: number[] = [];
 
+    // Find all athlete rows in this section.
     for (let row = headerRow + 1; row < nextHeaderRow; row++) {
       if (isAthleteName(getCellText(sheet, row, 1))) {
         athleteRows.push(row);
       }
     }
 
-    if (athleteRows.length === 0) continue;
+    if (athleteRows.length === 0) {
+      continue;
+    }
 
     const groupColumn = findGroupColumn(sheet, headerRow, athleteRows);
 
-    const intervalColumns: { column: number; label: string }[] = [];
+    const intervalColumns: {
+      column: number;
+      label: string;
+    }[] = [];
 
+    // Workout interval columns are between
+    // FIRST_WORKOUT_COLUMN and the group column.
     for (let column = FIRST_WORKOUT_COLUMN; column < groupColumn; column++) {
       const label = getCellText(sheet, headerRow, column);
 
-      if (!label || isDecorativeHeader(label)) continue;
+      if (!label || isDecorativeHeader(label)) {
+        continue;
+      }
 
       intervalColumns.push({
         column,
@@ -250,11 +390,19 @@ export async function parseWorkoutsExcel(
 
     const definitionsInSection = new Map<string, string>();
 
-    // Descriptions are usually in merged cells to the right of the group
-    // column, often on the first athlete row assigned to that group.
+    // NEW:
+    // Read the normal workbook format where the
+    // group title and workout description appear
+    // above the WO header.
+    addGroupTitleDescription(sheet, headerRow, definitionsInSection);
+
+    // Also keep support for the older format where
+    // definitions are written to the right of the
+    // group column.
     for (const row of [headerRow, ...athleteRows]) {
       for (let column = groupColumn + 1; column <= range.e.c + 1; column++) {
         const text = getCellText(sheet, row, column);
+
         if (text.includes(":")) {
           addDescriptionsFromText(text, definitionsInSection);
         }
@@ -267,13 +415,22 @@ export async function parseWorkoutsExcel(
         description,
         pageIndex: sectionIndex + 1,
         sectionId,
+        team: /women'?s/i.test(getCellText(sheet, headerRow - 2, 2))
+          ? "womens-cross-country"
+          : "mens-cross-country",
       });
     }
 
+    // Parse each athlete.
     for (const row of athleteRows) {
       const rawName = getCellText(sheet, row, 1);
+
       const name = toDisplayName(rawName);
-      if (!name) continue;
+
+      if (!name) {
+        continue;
+      }
+
       const rawGroup = getCellText(sheet, row, groupColumn);
 
       const groupLetter = isGroupLetter(rawGroup)
@@ -281,15 +438,27 @@ export async function parseWorkoutsExcel(
         : null;
 
       const intervals: Record<string, string> = {};
+
       const notes: string[] = [];
 
+      // Parse interval columns.
       for (const interval of intervalColumns) {
         const cell = getCell(sheet, row, interval.column);
-        if (!cell) continue;
+
+        if (!cell) {
+          continue;
+        }
 
         const text = getCellText(sheet, row, interval.column);
-        if (!text) continue;
 
+        if (!text) {
+          continue;
+        }
+
+        // FIX:
+        // String-based workout times such as
+        // "01:35.2" are now correctly treated
+        // as interval values.
         if (isIntervalValue(cell, text)) {
           intervals[interval.label] = text;
         } else {
@@ -297,8 +466,8 @@ export async function parseWorkoutsExcel(
         }
       }
 
-      // The source workbook sometimes stores notes in otherwise decorative
-      // columns immediately before the group column.
+      // Some workbooks store notes in otherwise
+      // decorative columns immediately before G.
       for (let column = FIRST_WORKOUT_COLUMN; column < groupColumn; column++) {
         const headerText = getCellText(sheet, headerRow, column);
 
@@ -307,12 +476,23 @@ export async function parseWorkoutsExcel(
         }
 
         const text = getCellText(sheet, row, column);
-        if (!text || isGroupLetter(text)) continue;
+
+        if (!text || isGroupLetter(text)) {
+          continue;
+        }
 
         if (!notes.includes(text)) {
           notes.push(text);
         }
       }
+
+      const sectionTitle = getCellText(sheet, headerRow - 2, 2);
+
+      const team = /women'?s/i.test(sectionTitle)
+        ? "womens-cross-country"
+        : /men'?s/i.test(sectionTitle)
+          ? "mens-cross-country"
+          : undefined;
 
       workoutRows.push({
         name,
@@ -321,6 +501,7 @@ export async function parseWorkoutsExcel(
         note: notes.length > 0 ? notes.join(" | ") : null,
         pageIndex: sectionIndex + 1,
         sectionId,
+        team,
       });
     }
   }
