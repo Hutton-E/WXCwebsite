@@ -14,6 +14,12 @@ export async function getAuthenticatedSupabaseClient() {
     );
   }
 
+  if (serviceRoleKey) {
+    return createClient(url, serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+
   if (email && password && key) {
     const supabase = createClient(url, key);
     const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -22,12 +28,6 @@ export async function getAuthenticatedSupabaseClient() {
     }
 
     return supabase;
-  }
-
-  if (serviceRoleKey) {
-    return createClient(url, serviceRoleKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
   }
 
   throw new Error(

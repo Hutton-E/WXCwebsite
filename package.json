@@ -20,7 +20,8 @@
     "migrate-core-to-supabase": "node scripts/migrate-core-to-supabase.mjs",
     "migrate-fms-to-supabase": "node scripts/migrate-fms-to-supabase.mjs",
     "migrate-lifting-to-supabase": "node scripts/migrate-lifting-to-supabase.mjs",
-    "import-cross-country-schedule": "node scripts/import-cross-country-schedule.mjs"
+    "import-cross-country-schedule": "node scripts/import-cross-country-schedule.mjs",
+    "import-time-trials": "node scripts/import-time-trials-to-supabase.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

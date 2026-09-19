@@ -454,6 +454,141 @@
   opacity: 0.7;
 }
 
+.time-trials-page {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--space-md);
+  z-index: 10;
+}
+
+.time-trials-title {
+  margin: 0 0 var(--space-md);
+  font-size: clamp(28px, 4vw, 48px);
+  text-align: center;
+}
+
+.time-trials-source,
+.time-trials-no-data {
+  margin: 0 auto var(--space-md);
+  max-width: 720px;
+  text-align: center;
+}
+
+.time-trials-home-back,
+.time-trials-back,
+.time-trials-race-link {
+  color: black;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.time-trials-home-back {
+  display: block;
+  position: static;
+  margin: 0 0 var(--space-md);
+  padding: 8px 14px;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 8px;
+  font: 700 clamp(16px, 2vw, 22px) var(--sans);
+  backdrop-filter: blur(6px);
+}
+
+.time-trials-home-back:hover,
+.time-trials-back:hover {
+  background: rgba(90, 84, 84, 0.418);
+}
+
+.time-trials-back {
+  display: block;
+  margin: 0 auto var(--space-md);
+  padding: 10px 18px;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 8px;
+  font: 700 clamp(17px, 2.2vw, 24px) var(--sans);
+  backdrop-filter: blur(6px);
+}
+
+.time-trials-race-link {
+  margin-top: 10px;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: inherit;
+}
+
+.time-trials-race {
+  width: min(96vw, 1100px);
+  margin: 0 auto;
+  overflow-x: auto;
+  box-sizing: border-box;
+  background: rgba(240, 233, 233, 0.863);
+  color: black;
+}
+
+.time-trials-race-header,
+.time-trials-race-row {
+  display: grid;
+  grid-template-columns: 70px minmax(180px, 1fr) 120px minmax(180px, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+}
+
+.time-trials-race-header {
+  font-weight: 700;
+}
+
+.time-trials-race-row.current {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.time-trials-source a {
+  color: black;
+  text-decoration: underline;
+}
+
+.time-trials-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 10px;
+  width: min(90vw, 900px);
+  margin: var(--space-md) auto 0;
+}
+
+.time-trials-card {
+  padding: 14px 16px;
+  background: rgba(240, 233, 233, 0.863);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 6px;
+}
+
+.time-trials-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.time-trials-event,
+.time-trials-time,
+.time-trials-year {
+  color: black;
+}
+
+.time-trials-event,
+.time-trials-time {
+  font-weight: 700;
+}
+
+.time-trials-year {
+  margin-top: 4px;
+  font-size: 14px;
+}
+
 .identity-year-select {
   width: min(90vw, 400px);
   padding: clamp(10px, 1.8vw, 14px) clamp(12px, 2vw, 16px);

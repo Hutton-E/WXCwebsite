@@ -20,8 +20,9 @@ import FmsPage from "./pages/fmsPage";
 import LiftingSheet from "./pages/liftingSheet";
 import SchedulePage from "./pages/schedulePage";
 import SeasonSchedulePage from "./pages/seasonSchedulePage";
+import TimeTrials from "./pages/timeTrials";
 
-const BACK_BUTTON_ROUTES = new Set(["/"]);
+const BACK_BUTTON_ROUTES = new Set(["/", "/time-trials"]);
 
 function AppContent() {
   const location = useLocation();
@@ -39,6 +40,7 @@ function AppContent() {
     "/fms",
     "/lifting_sheet",
     "/tfrrs-stats",
+    "/time-trials",
     "/personal-records",
     "/season-bests",
     "/workouts",
@@ -131,6 +133,15 @@ function AppContent() {
           element={
             <RequireIdentity>
               <TfrrsStats />
+            </RequireIdentity>
+          }
+        />
+
+        <Route
+          path="/time-trials"
+          element={
+            <RequireIdentity>
+              <TimeTrials />
             </RequireIdentity>
           }
         />
