@@ -1142,6 +1142,46 @@
   color: rgba(0, 0, 0, 0.75);
 }
 
+.workouts-pace-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px;
+  background: rgba(221, 235, 255, 0.65);
+  border-radius: 6px;
+  color: black;
+}
+
+.workouts-pace-heading {
+  margin: 0;
+  font-size: clamp(13px, 1.5vw, 15px);
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.workouts-pace-group .workouts-pace-group {
+  padding: 0;
+  background: transparent;
+}
+
+.workouts-pace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.workouts-pace-item {
+  font-size: clamp(13px, 1.5vw, 15px);
+  line-height: 1.35;
+}
+
+.workouts-pace-value {
+  font-style: italic;
+}
+
 .core-page {
   position: fixed;
   inset: 0;
