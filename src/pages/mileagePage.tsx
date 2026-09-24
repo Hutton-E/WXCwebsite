@@ -178,7 +178,7 @@ function MileagePage() {
 
     fetchMileageForAthlete(athlete.id, season, preview)
       .then((data) => {
-        if (cancelled) return;
+        if (cancelled) return [];
         setEntries(data);
         setSelectedWeek(data.length > 0 ? data[0].week_of : null);
         if (data.length > 0) {
