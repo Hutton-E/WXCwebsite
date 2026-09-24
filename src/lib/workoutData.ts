@@ -92,6 +92,53 @@ export async function fetchWorkoutsForAthlete(
   }));
 }
 
+export async function fetchGeneralWorkouts(
+  team: string,
+  preview = false,
+): Promise<WorkoutDay[]> {
+  let groupQuery = supabase
+    .from("workout_groups")
+    .select("week_of, day, group_letter, description")
+    .eq("team", team)
+    .order("week_of", { ascending: false });
+
+  if (!preview) {
+    groupQuery = groupQuery.eq("is_draft", false);
+  }
+
+  const { data: groups, error: groupError } = await groupQuery;
+  if (groupError) throw new Error(groupError.message);
+  if (!groups || groups.length === 0) return [];
+
+  const weeksOf = [...new Set(groups.map((group) => group.week_of))];
+  let workoutQuery = supabase
+    .from("workouts")
+    .select("week_of, season")
+    .in("week_of", weeksOf);
+
+  if (!preview) {
+    workoutQuery = workoutQuery.eq("is_draft", false);
+  }
+
+  const { data: workouts, error: workoutError } = await workoutQuery;
+  if (workoutError) throw new Error(workoutError.message);
+
+  const seasonsByWeek = new Map<string, number>();
+  for (const workout of workouts ?? []) {
+    seasonsByWeek.set(workout.week_of, workout.season);
+  }
+
+  return groups.map((group) => ({
+    weekOf: group.week_of,
+    day: group.day,
+    season: seasonsByWeek.get(group.week_of) ?? Number(group.week_of.slice(0, 4)),
+    groupLetter: group.group_letter,
+    description: group.description,
+    intervals: null,
+    note: null,
+  }));
+}
+
 export async function fetchWorkoutPeers(
   weekOf: string,
   season: number,

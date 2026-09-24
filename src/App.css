@@ -1026,6 +1026,33 @@
   text-align: center;
 }
 
+.workouts-view-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px;
+  background: rgba(240, 233, 233, 0.9);
+  border: 2px solid rgba(0, 0, 0, 0.589);
+  border-radius: 10px;
+}
+
+.workouts-view-button {
+  border: 0;
+  border-radius: 6px;
+  padding: 9px 14px;
+  background: transparent;
+  color: black;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.workouts-view-button.is-active {
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+}
+
 .workouts-no-data {
   margin: 0;
   font-size: clamp(16px, 2vw, 24px);
@@ -1059,6 +1086,15 @@
   background: rgba(255, 255, 255, 0.5);
   border-radius: 8px;
   padding: 14px;
+}
+
+.workouts-general-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.4);
+  border-radius: 6px;
 }
 
 .workouts-day-header {

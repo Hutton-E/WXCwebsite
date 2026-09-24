@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useUser } from "../context/UserContext";
-import { fetchWorkoutPeers, fetchWorkoutsForAthlete } from "../lib/workoutData";
+import {
+  fetchGeneralWorkouts,
+  fetchWorkoutPeers,
+  fetchWorkoutsForAthlete,
+} from "../lib/workoutData";
 import type { WorkoutDay, WorkoutPeer } from "../lib/workoutData";
 
 function formatWeekOf(dateStr: string) {
@@ -40,6 +44,7 @@ function groupByWeek(rows: WorkoutDay[]): WeekGroup[] {
     existing.push(row);
     map.set(key, existing);
   }
+
   return Array.from(map.entries())
     .map(([key, days]) => {
       const [seasonStr, weekOf] = key.split("|");
@@ -50,6 +55,27 @@ function groupByWeek(rows: WorkoutDay[]): WeekGroup[] {
       };
     })
     .sort((a, b) => b.season - a.season || b.weekOf.localeCompare(a.weekOf));
+}
+
+function getSelectedWeekStorageKey(
+  athleteName: string,
+  team: string,
+  preview: boolean,
+) {
+  return `workouts-selected-week:${team}:${athleteName}:${preview ? "preview" : "published"}`;
+}
+
+function GeneralWorkoutDay({ day }: { day: WorkoutDay }) {
+  return (
+    <div className="workouts-general-group">
+      <span className="workouts-group-badge">
+        {day.groupLetter ? `Group ${day.groupLetter}` : "Workout"}
+      </span>
+      <p className="workouts-description">
+        {day.description ?? "No workout description found for this group."}
+      </p>
+    </div>
+  );
 }
 
 function hasIntervals(intervals: Record<string, string> | null): boolean {
@@ -235,6 +261,9 @@ function WorkoutsPage() {
   const [searchParams] = useSearchParams();
   const preview = searchParams.get("preview") === "1";
 
+  const [viewMode, setViewMode] = useState<"personalized" | "general">(
+    "personalized",
+  );
   const [weeks, setWeeks] = useState<WeekGroup[] | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [peers, setPeers] = useState<Record<string, WorkoutPeer[]>>({});
@@ -249,16 +278,35 @@ function WorkoutsPage() {
     setPeers({});
     setError(null);
 
-    fetchWorkoutsForAthlete(athlete.name, athlete.team, preview)
+    const workoutsPromise =
+      viewMode === "personalized"
+        ? fetchWorkoutsForAthlete(athlete.name, athlete.team, preview)
+        : fetchGeneralWorkouts(athlete.team, preview);
+
+    workoutsPromise
       .then((rows) => {
         if (cancelled) return [];
         const grouped = groupByWeek(rows);
         setWeeks(grouped);
-        setSelectedKey(
-          grouped.length > 0
-            ? `${grouped[0].season}|${grouped[0].weekOf}`
-            : null,
+        const storageKey = getSelectedWeekStorageKey(
+          athlete.name,
+          athlete.team,
+          preview,
         );
+        const savedKey = window.localStorage.getItem(storageKey);
+        const nextKey =
+          savedKey &&
+          grouped.some((week) => `${week.season}|${week.weekOf}` === savedKey)
+            ? savedKey
+            : grouped.length > 0
+              ? `${grouped[0].season}|${grouped[0].weekOf}`
+              : null;
+        setSelectedKey(nextKey);
+        if (nextKey) {
+          window.localStorage.setItem(storageKey, nextKey);
+        }
+
+        if (viewMode === "general") return [];
 
         const uniqueDays = [
           ...new Map(
@@ -296,12 +344,17 @@ function WorkoutsPage() {
     return () => {
       cancelled = true;
     };
-  }, [athlete, preview]);
+  }, [athlete, preview, viewMode]);
 
   if (!athlete) return null;
 
   const currentWeek =
     weeks?.find((w) => `${w.season}|${w.weekOf}` === selectedKey) ?? null;
+  const visibleDays =
+    currentWeek?.days.filter(
+      (day) =>
+        day.season === currentWeek.season && day.weekOf === currentWeek.weekOf,
+    ) ?? [];
 
   return (
     <div className="workouts-page">
@@ -312,8 +365,29 @@ function WorkoutsPage() {
       )}
 
       <h1 className="workouts-title acme-regular text-outline">
-        {athlete.name}&apos;s Workouts
+        {viewMode === "personalized" ? `${athlete.name}'s Workouts` : "All Workouts"}
       </h1>
+
+      <div className="workouts-view-switcher" aria-label="Workout view">
+        <button
+          className={`workouts-view-button ${
+            viewMode === "personalized" ? "is-active" : ""
+          }`}
+          onClick={() => setViewMode("personalized")}
+          type="button"
+        >
+          My workouts
+        </button>
+        <button
+          className={`workouts-view-button ${
+            viewMode === "general" ? "is-active" : ""
+          }`}
+          onClick={() => setViewMode("general")}
+          type="button"
+        >
+          All group workouts
+        </button>
+      </div>
 
       {error && (
         <p className="workouts-no-data acme-regular text-outline">
@@ -338,7 +412,18 @@ function WorkoutsPage() {
             <select
               className="identity-year-select"
               value={selectedKey ?? ""}
-              onChange={(e) => setSelectedKey(e.target.value)}
+              onChange={(e) => {
+                const nextKey = e.target.value;
+                setSelectedKey(nextKey);
+                window.localStorage.setItem(
+                  getSelectedWeekStorageKey(
+                    athlete.name,
+                    athlete.team,
+                    preview,
+                  ),
+                  nextKey,
+                );
+              }}
             >
               {weeks.map((w) => (
                 <option
@@ -352,36 +437,44 @@ function WorkoutsPage() {
           )}
 
           {currentWeek && (
-            <div className="workouts-card">
+            <div className="workouts-card" key={selectedKey}>
               <div className="workouts-week-label">
                 {currentWeek.season} — Week of{" "}
                 {formatWeekOf(currentWeek.weekOf)}
               </div>
 
-              {currentWeek.days.map((d) => (
+              {visibleDays.map((d) => (
                 <div key={d.day} className="workouts-day-block">
                   <div className="workouts-day-header">
                     <span className="workouts-day-name">
                       {capitalize(d.day)}
                     </span>
-                    {d.groupLetter && (
+                    {viewMode === "personalized" && d.groupLetter && (
                       <span className="workouts-group-badge">
                         Group {d.groupLetter}
                       </span>
                     )}
                   </div>
 
-                  {d.description && (
+                  {viewMode === "general" ? (
+                    <GeneralWorkoutDay day={d} />
+                  ) : d.description ? (
                     <p className="workouts-description">{d.description}</p>
-                  )}
+                  ) : null}
 
                   {d.note && <p className="workouts-note">{d.note}</p>}
 
-                  <PaceMatches
-                    athleteId={athlete.id}
-                    day={d}
-                    peers={peers[`${currentWeek.season}|${currentWeek.weekOf}|${d.day}`] ?? []}
-                  />
+                  {viewMode === "personalized" && (
+                    <PaceMatches
+                      athleteId={athlete.id}
+                      day={d}
+                      peers={
+                        peers[
+                          `${currentWeek.season}|${currentWeek.weekOf}|${d.day}`
+                        ] ?? []
+                      }
+                    />
+                  )}
 
                   {d.intervals && Object.keys(d.intervals).length > 0 && (
                     <ul className="workouts-interval-list">
@@ -405,7 +498,8 @@ function WorkoutsPage() {
                     </ul>
                   )}
 
-                  {!d.description &&
+                  {viewMode === "personalized" &&
+                    !d.description &&
                     !d.note &&
                     (!d.intervals || Object.keys(d.intervals).length === 0) && (
                       <p className="workouts-description">
