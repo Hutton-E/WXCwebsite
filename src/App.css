@@ -591,8 +591,11 @@
 
 .identity-year-select {
   width: min(90vw, 400px);
-  padding: clamp(10px, 1.8vw, 14px) clamp(12px, 2vw, 16px);
+  box-sizing: border-box;
+  min-height: 60px;
+  padding: 14px clamp(12px, 2vw, 16px);
   font-size: clamp(14px, 1.8vw, 18px);
+  line-height: 1.5;
   border-radius: 10px;
   background: rgba(240, 233, 233, 0.863);
   border: 2px solid rgba(0, 0, 0, 0.589);
@@ -1038,7 +1041,7 @@
   align-items: center;
   gap: 10px;
   font-weight: 700;
-  font-size: 16px;
+  font-size: clamp(19px, 2.2vw, 24px);
 }
 
 .mileage-matches {
