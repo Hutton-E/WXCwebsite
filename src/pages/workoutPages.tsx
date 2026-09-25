@@ -86,41 +86,59 @@ function paceSignature(intervals: Record<string, string> | null): string | null 
   if (!hasIntervals(intervals)) return null;
 
   return Object.entries(intervals!)
-    .sort(([labelA], [labelB]) => labelA.localeCompare(labelB))
-    .map(([label, value]) => `${label.trim().toLowerCase()}=${value.trim().toLowerCase()}`)
+    .map(([label, value]) => `${normalizeIntervalLabel(label)}=${value.trim().toLowerCase()}`)
+    .sort()
     .join("|");
+}
+
+function normalizeIntervalLabel(label: string): string {
+  return label.toLowerCase().replace(/[^\w]+/g, " ").trim();
 }
 
 function paceDistance(
   left: Record<string, string>,
   right: Record<string, string>,
 ): number {
-  const sharedLabels = Object.keys(left).filter((label) => label in right);
-  if (sharedLabels.length === 0) return Number.POSITIVE_INFINITY;
+  const rightIntervals = new Map(
+    Object.entries(right).map(([label, value]) => [
+      normalizeIntervalLabel(label),
+      value,
+    ]),
+  );
+  const sharedTimedIntervals = Object.entries(left).flatMap(([label, value]) => {
+      const rightValue = rightIntervals.get(normalizeIntervalLabel(label));
+      if (rightValue === undefined) return [];
+      const leftSeconds = parsePaceSeconds(value);
+      const rightSeconds = parsePaceSeconds(rightValue);
+      return leftSeconds !== null && rightSeconds !== null
+        ? [Math.abs(leftSeconds - rightSeconds)]
+        : [];
+    });
+  if (sharedTimedIntervals.length === 0) return Number.POSITIVE_INFINITY;
 
   return (
-    sharedLabels.reduce((total, label) => {
-      const leftSeconds = parsePaceSeconds(left[label]);
-      const rightSeconds = parsePaceSeconds(right[label]);
-      return total + Math.abs(leftSeconds - rightSeconds);
-    }, 0) / sharedLabels.length
+    sharedTimedIntervals.reduce((total, difference) => total + difference, 0) /
+    sharedTimedIntervals.length
   );
 }
 
-function parsePaceSeconds(value: string): number {
+function parsePaceSeconds(value: string): number | null {
   const parts = value.trim().split(":");
   if (parts.length === 2) {
     const minutes = Number(parts[0]);
     const seconds = Number(parts[1]);
-    if (Number.isFinite(minutes) && Number.isFinite(seconds)) {
+    if (
+      Number.isFinite(minutes) &&
+      Number.isFinite(seconds) &&
+      seconds >= 0 &&
+      seconds < 60
+    ) {
       return minutes * 60 + seconds;
     }
   }
 
   const numericValue = Number(value);
-  return Number.isFinite(numericValue)
-    ? numericValue
-    : Number.POSITIVE_INFINITY;
+  return Number.isFinite(numericValue) ? numericValue : null;
 }
 
 function groupPeersByWorkoutGroup(peers: WorkoutPeer[]) {
@@ -129,7 +147,7 @@ function groupPeersByWorkoutGroup(peers: WorkoutPeer[]) {
     { names: string[]; intervals: Record<string, string> | null }
   >();
   for (const peer of peers) {
-    const group = peer.groupLetter ? `Group ${peer.groupLetter}` : "No workout group";
+    const group = workoutGroupName(peer.groupLetter);
     const existing = groups.get(group) ?? {
       names: [],
       intervals: peer.intervals,
@@ -138,6 +156,14 @@ function groupPeersByWorkoutGroup(peers: WorkoutPeer[]) {
     groups.set(group, existing);
   }
   return [...groups.entries()];
+}
+
+function workoutGroupName(groupLetter: string | null): string {
+  return groupLetter ? `Group ${groupLetter}` : "No workout group";
+}
+
+function isXtPeer(peer: WorkoutPeer): boolean {
+  return peer.groupLetter?.trim().toUpperCase() === "XT";
 }
 
 function formatPace(intervals: Record<string, string> | null): string | null {
@@ -152,16 +178,26 @@ function formatPace(intervals: Record<string, string> | null): string | null {
 function PaceGroup({
   heading,
   peers,
+  exactGroupLetter,
 }: {
-  heading: string;
+  heading: string | null;
   peers: WorkoutPeer[];
+  exactGroupLetter?: string | null;
 }) {
   if (peers.length === 0) return null;
 
   const groupedPeers = groupPeersByWorkoutGroup(peers);
+  const exactGroupPeers =
+    exactGroupLetter === undefined
+      ? []
+      : peers.filter(
+          (peer) =>
+            peer.groupLetter?.trim().toUpperCase() ===
+            exactGroupLetter?.trim().toUpperCase(),
+        );
   return (
     <div className="workouts-pace-group">
-      <p className="workouts-pace-heading">{heading}</p>
+      {heading && <p className="workouts-pace-heading">{heading}</p>}
       <ul className="workouts-pace-list">
         {groupedPeers.map(([group, details]) => (
           <li key={group} className="workouts-pace-item">
@@ -175,6 +211,16 @@ function PaceGroup({
           </li>
         ))}
       </ul>
+      {exactGroupLetter !== undefined && (
+        <p className="workouts-pace-item">
+          <strong>
+            In your exact workout group ({workoutGroupName(exactGroupLetter)}):
+          </strong>{" "}
+          {exactGroupPeers.length > 0
+            ? exactGroupPeers.map((peer) => peer.name).join(", ")
+            : "Nobody in this pace group."}
+        </p>
+      )}
     </div>
   );
 }
@@ -188,12 +234,21 @@ function PaceMatches({
   day: WorkoutDay;
   peers: WorkoutPeer[];
 }) {
-  if (peers.length <= 1) return null;
-
   const currentPeer = peers.find((peer) => peer.athleteId === athleteId);
-  const otherPeers = peers.filter((peer) => peer.athleteId !== athleteId);
-  const currentSignature = paceSignature(currentPeer?.intervals ?? day.intervals);
-  const pacePeers = peers.filter((peer) => hasIntervals(peer.intervals));
+  const currentGroupLetter = currentPeer?.groupLetter ?? day.groupLetter;
+  if (currentGroupLetter?.trim().toUpperCase() === "XT" || peers.length <= 1) {
+    return null;
+  }
+
+  const comparisonPeers = peers.filter((peer) => !isXtPeer(peer));
+  const otherPeers = comparisonPeers.filter(
+    (peer) => peer.athleteId !== athleteId,
+  );
+  const currentIntervals = currentPeer?.intervals ?? day.intervals;
+  const currentSignature = paceSignature(currentIntervals);
+  const pacePeers = comparisonPeers.filter((peer) =>
+    hasIntervals(peer.intervals),
+  );
 
   if (!currentSignature) {
     if (pacePeers.length === 0) {
@@ -208,10 +263,10 @@ function PaceMatches({
     return (
       <div className="workouts-pace-group">
         <p className="workouts-pace-heading">
-          No interval pace was supplied for you. Your workout group is closest
-          to:
+          No interval pace was supplied for you. Here are all athletes with
+          interval paces:
         </p>
-        <PaceGroup heading="Athletes with interval paces" peers={pacePeers} />
+        <PaceGroup heading={null} peers={pacePeers} />
       </div>
     );
   }
@@ -220,7 +275,7 @@ function PaceMatches({
     (peer) => paceSignature(peer.intervals) === currentSignature,
   );
 
-  if (samePacePeers.length === 0 && currentPeer?.intervals) {
+  if (samePacePeers.length === 0 && currentIntervals) {
     const paceGroups = new Map<string, WorkoutPeer[]>();
     for (const peer of pacePeers) {
       const signature = paceSignature(peer.intervals);
@@ -228,17 +283,20 @@ function PaceMatches({
       paceGroups.set(signature, [...(paceGroups.get(signature) ?? []), peer]);
     }
 
-    const closestGroup = [...paceGroups.values()].sort(
-      (left, right) =>
-        paceDistance(currentPeer.intervals!, left[0].intervals!) -
-        paceDistance(currentPeer.intervals!, right[0].intervals!),
-    )[0];
+    const closestGroup = [...paceGroups.values()]
+      .map((group) => ({
+        group,
+        distance: paceDistance(currentIntervals, group[0].intervals!),
+      }))
+      .filter(({ distance }) => Number.isFinite(distance))
+      .sort((left, right) => left.distance - right.distance)[0]?.group;
 
     if (closestGroup) {
       return (
         <PaceGroup
-          heading="The closest pace group to you is..."
+          heading="The closest pace group in your workout is..."
           peers={closestGroup}
+          exactGroupLetter={currentGroupLetter}
         />
       );
     }
@@ -252,6 +310,7 @@ function PaceMatches({
           : "No other athlete has your exact interval paces."
       }
       peers={samePacePeers}
+      exactGroupLetter={currentGroupLetter}
     />
   );
 }
