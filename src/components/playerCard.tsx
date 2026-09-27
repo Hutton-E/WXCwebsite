@@ -1,0 +1,104 @@
+import type { Athlete } from "../context/UserContext";
+
+interface PlayerCardProps {
+  athlete: Athlete;
+}
+
+function PlayerCard({ athlete }: PlayerCardProps) {
+  const initials = athlete.name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+  const consistencyScores = [
+    {
+      label: "XC",
+      description: "Cross country",
+      value: athlete.crossCountryConsistency,
+    },
+    {
+      label: "INDOOR",
+      description: "Indoor track",
+      value: athlete.indoorConsistency,
+    },
+    {
+      label: "OUTDOOR",
+      description: "Outdoor track",
+      value: athlete.outdoorConsistency,
+    },
+  ];
+
+  return (
+    <article className="player-card" aria-label={`${athlete.name} player card`}>
+      <header className="player-card-topline">
+        <div className="player-card-corner player-card-rank">
+          <span>RANK</span>
+          <strong>--</strong>
+        </div>
+        <span className="player-card-brand">WARTBURG RUNNER</span>
+        <div className="player-card-corner player-card-graduation">
+          <span>CLASS</span>
+          <strong>{athlete.graduationYear ?? "--"}</strong>
+        </div>
+      </header>
+
+      <figure className="player-card-portrait">
+        {athlete.photoUrl ? (
+          <img
+            className="player-card-photo"
+            src={athlete.photoUrl}
+            alt={athlete.name}
+          />
+        ) : (
+          <div className="player-card-photo-fallback" aria-hidden="true">
+            <span>{initials}</span>
+            <small>CROSS COUNTRY</small>
+          </div>
+        )}
+        <figcaption className="player-card-name">{athlete.name}</figcaption>
+      </figure>
+
+      <section className="player-card-type" aria-label="Runner type">
+        <div className="player-card-section-heading">
+          <span>RUNNER TYPE</span>
+          <strong>--</strong>
+        </div>
+        <p>--</p>
+      </section>
+
+      <section className="player-card-consistency" aria-label="Consistency ratings">
+        <h2>CONSISTENCY</h2>
+        <div className="player-card-consistency-grid">
+          {consistencyScores.map(({ label, description, value }) => (
+            <div className="player-card-rating-slot" key={label}>
+              <span>{label}</span>
+              <strong aria-label={`${description}: ${value ?? "not rated"}`}>
+                {value?.toFixed(1) ?? "--"}
+              </strong>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="player-card-attributes" aria-label="Runner attributes">
+        {[
+          ["SPEED", "Speed"],
+          ["ENDURANCE", "Endurance"],
+          ["WIN FACTOR", "Win factor"],
+        ].map(([label, description]) => (
+          <div className="player-card-attribute-slot" key={label}>
+            <span>{label}</span>
+            <strong aria-label={`${description}: not rated`}>--</strong>
+          </div>
+        ))}
+      </section>
+
+      <footer className="player-card-footer">
+        {athlete.season} SEASON <span>WARTBURG CROSS COUNTRY</span>
+      </footer>
+    </article>
+  );
+}
+
+export default PlayerCard;

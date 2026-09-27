@@ -39,17 +39,257 @@
   line-height: 1.4;
 }
 
+.welcome-text.has-athlete {
+  top: 9vh;
+}
+
+.player-card-topline {
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) 68px;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 5px 7px;
+  border-bottom: 1px solid rgba(33, 27, 24, 0.25);
+}
+
+.player-card-corner {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.player-card-corner span {
+  color: #65594c;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.player-card-corner strong {
+  color: #8e1f32;
+  font-family: "Acme", sans-serif;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.player-card-brand {
+  color: #8e1f32;
+  font-family: "Acme", sans-serif;
+  font-size: 12px;
+  text-align: center;
+}
+
+.player-card-graduation {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.player-card-portrait {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 210px;
+  margin: 28px 0 0;
+  overflow: visible;
+  background: #25201e;
+  border: 1px solid rgba(33, 27, 24, 0.28);
+}
+
+.player-card {
+  position: absolute;
+  top: 23vh;
+  left: 50vw;
+  z-index: 8;
+  width: min(330px, 30vw);
+  box-sizing: border-box;
+  padding: 6px;
+  transform: translateX(-50%);
+  overflow: hidden;
+  color: #211b18;
+  text-align: left;
+  background: #f1eadb;
+  border: 2px solid #c9a65e;
+  border-radius: 8px;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48);
+  animation: player-card-enter 380ms ease-out both;
+}
+
+.player-card-photo,
+.player-card-photo-fallback {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.player-card-photo {
+  width: auto;
+  max-width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  background: #25201e;
+}
+
+.player-card-photo-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: #f1eadb;
+  background-color: #25201e;
+  background-image: radial-gradient(
+    rgba(255, 255, 255, 0.1) 1px,
+    transparent 1px
+  );
+  background-size: 8px 8px;
+}
+
+.player-card-photo-fallback span {
+  font-family: "Acme", sans-serif;
+  font-size: 58px;
+  line-height: 1;
+}
+
+.player-card-photo-fallback small {
+  font-size: 10px;
+}
+
+.player-card-type {
+  padding: 5px 3px;
+  border-bottom: 1px solid rgba(33, 27, 24, 0.25);
+}
+
+.player-card-section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.player-card-section-heading span,
+.player-card-consistency h2 {
+  margin: 0;
+  color: #8e1f32;
+  font-family: "Acme", sans-serif;
+  font-size: 11px;
+}
+
+.player-card-section-heading strong {
+  color: #211b18;
+  font-size: 12px;
+}
+
+.player-card-type p {
+  min-height: 14px;
+  margin: 3px 0 0;
+  color: #65594c;
+  font-size: 11px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.player-card-consistency {
+  padding: 5px 3px;
+  border-bottom: 1px solid rgba(33, 27, 24, 0.25);
+}
+
+.player-card-consistency h2 {
+  margin-bottom: 4px;
+}
+
+.player-card-consistency-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.player-card-rating-slot,
+.player-card-attribute-slot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px 6px;
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px solid rgba(33, 27, 24, 0.2);
+  border-radius: 4px;
+}
+
+.player-card-rating-slot span,
+.player-card-attribute-slot span {
+  color: #65594c;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.player-card-rating-slot strong,
+.player-card-attribute-slot strong {
+  color: #211b18;
+  font-family: "Acme", sans-serif;
+  font-size: 12px;
+}
+
+.player-card-attributes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  padding: 5px 3px;
+}
+
+.player-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 20px;
+  padding: 0 8px;
+  color: #fff;
+  background: #8e1f32;
+  border-top: 2px solid #c9a65e;
+  font-family: "Acme", sans-serif;
+  font-size: 9px;
+}
+
+.player-card-name {
+  position: absolute;
+  top: -29px;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  padding: 6px 9px;
+  color: #fff;
+  background: rgba(142, 31, 50, 0.94);
+  border-bottom: 2px solid #c9a65e;
+  font-family: "Acme", sans-serif;
+  font-size: 17px;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+@keyframes player-card-enter {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px) rotate(-1deg);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) rotate(0);
+  }
+}
+
 .left-res-drop {
   position: absolute;
   top: 35vh;
-  left: 10vw;
+  left: 4vw;
   z-index: 15;
 }
 
 .mid-res-drop {
   position: absolute;
   top: 35vh;
-  left: 65vw;
+  left: 75vw;
   z-index: 15;
 }
 
@@ -66,7 +306,7 @@
 }
 
 .home-center-controls.has-athlete {
-  top: 68vh;
+  top: 91vh;
 }
 
 .home-center-controls .identity-lookup {
@@ -297,6 +537,9 @@
 
 .identity-result-item {
   width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   text-align: left;
   padding: 12px 16px;
   background: none;
@@ -306,6 +549,19 @@
   font-size: clamp(15px, 1.8vw, 18px);
   cursor: pointer;
   transition: background 0.15s ease;
+}
+
+.identity-result-photo {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.identity-result-photo-empty {
+  display: inline-block;
 }
 
 .identity-result-item:hover {
@@ -319,7 +575,7 @@
 
 .switch-identity-link {
   position: absolute;
-  top: 27vh;
+  top: 18vh;
   left: 51vw;
   transform: translateX(-50%);
   background: none;
@@ -340,7 +596,7 @@
 
 .switch-identity-confirm {
   position: absolute;
-  top: 28vh;
+  top: 18vh;
   left: 50vw;
   transform: translateX(-50%);
   display: flex;
@@ -1633,6 +1889,20 @@ button.admin-nav-link {
   .welcome-text {
     white-space: normal;
     line-height: 1.4;
+  }
+
+  .player-card {
+    position: relative;
+    top: auto;
+    left: auto;
+    width: min(330px, 86vw);
+    margin: 4px auto;
+    transform: none;
+    animation: none;
+  }
+
+  .player-card-portrait {
+    height: 210px;
   }
 
   .left-res-drop,

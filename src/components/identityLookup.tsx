@@ -87,7 +87,20 @@ function IdentityLookup() {
                 className="identity-result-item"
                 onClick={() => season !== null && selectAthlete(a.id, season)}
               >
-                {a.name}
+                {a.photo_url ? (
+                  <img
+                    className="identity-result-photo"
+                    src={a.photo_url}
+                    alt=""
+                    loading="lazy"
+                  />
+                ) : (
+                  <span
+                    className="identity-result-photo identity-result-photo-empty"
+                    aria-hidden="true"
+                  />
+                )}
+                <span>{a.name}</span>
               </button>
             </li>
           ))}

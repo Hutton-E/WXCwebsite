@@ -1,6 +1,7 @@
 import NavMenu from "../components/navMenu";
 import IdentityLookup from "../components/identityLookup";
 import SwitchIdentityPrompt from "../components/switchIdentity";
+import PlayerCard from "../components/playerCard";
 import { useUser } from "../context/UserContext";
 import { Link } from "react-router-dom";
 
@@ -30,12 +31,15 @@ function Home() {
 
   return (
     <div className="home-content">
-
-      <h1 className="welcome-text acme-regular text-outline">
+      <h1
+        className={`welcome-text acme-regular text-outline${athlete ? " has-athlete" : ""}`}
+      >
         {athlete
           ? `Welcome, ${athlete.name}`
           : "Welcome, please type your name and select it to view resources."}
       </h1>
+
+      {athlete && <PlayerCard athlete={athlete} />}
 
       <div className={`home-center-controls${athlete ? " has-athlete" : ""}`}>
         {!athlete && <IdentityLookup />}
@@ -46,7 +50,10 @@ function Home() {
       </div>
 
       <div className="home-admin-login">
-        <Link to="/admin" className="admin-login-link acme-regular text-outline">
+        <Link
+          to="/admin"
+          className="admin-login-link acme-regular text-outline"
+        >
           Admin Login?
         </Link>
       </div>

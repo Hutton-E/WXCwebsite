@@ -14,8 +14,12 @@ export interface Athlete {
   team: string;
   hometown: string | null;
   highSchool: string | null;
+  photoUrl: string | null;
   tfrrsId: string | null;
   graduationYear: number | null;
+  indoorConsistency: number | null;
+  outdoorConsistency: number | null;
+  crossCountryConsistency: number | null;
 }
 
 interface UserContextValue {
@@ -77,27 +81,49 @@ export function UserProvider({ children }: { children: ReactNode }) {
     supabase
       .from("athletes")
       .select(
-        "id, season, name, team, hometown, high_school, tfrrs_id, graduation_year",
+        "id, season, name, team, hometown, high_school, photo_url, tfrrs_id, graduation_year",
       )
       .eq("id", athleteId)
       .eq("season", season)
       .maybeSingle()
-      .then(({ data, error }) => {
+      .then(async ({ data, error }) => {
         if (cancelled) return;
         if (error || !data) {
           setAthlete(null);
-        } else {
-          setAthlete({
-            id: data.id,
-            season: data.season,
-            name: data.name,
-            team: data.team,
-            hometown: data.hometown,
-            highSchool: data.high_school,
-            tfrrsId: data.tfrrs_id,
-            graduationYear: data.graduation_year,
-          });
+          setAthleteLoading(false);
+          return;
         }
+
+        let consistencyRatings = null;
+        if (data.tfrrs_id) {
+          const { data: ratings } = await supabase
+            .from("tfrrs_athlete_performance")
+            .select(
+              "indoor_consistency_rating, outdoor_consistency_rating, cross_country_consistency_rating",
+            )
+            .eq("tfrrs_id", data.tfrrs_id)
+            .maybeSingle();
+          consistencyRatings = ratings;
+        }
+
+        if (cancelled) return;
+        setAthlete({
+          id: data.id,
+          season: data.season,
+          name: data.name,
+          team: data.team,
+          hometown: data.hometown,
+          highSchool: data.high_school,
+          photoUrl: data.photo_url,
+          tfrrsId: data.tfrrs_id,
+          graduationYear: data.graduation_year,
+          indoorConsistency:
+            consistencyRatings?.indoor_consistency_rating ?? null,
+          outdoorConsistency:
+            consistencyRatings?.outdoor_consistency_rating ?? null,
+          crossCountryConsistency:
+            consistencyRatings?.cross_country_consistency_rating ?? null,
+        });
         setAthleteLoading(false);
       });
 

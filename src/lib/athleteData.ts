@@ -7,6 +7,7 @@ export interface AthleteRecord {
   team: string;
   hometown: string | null;
   high_school: string | null;
+  photo_url: string | null;
 }
 
 export async function fetchAthletesForSeason(
@@ -14,7 +15,7 @@ export async function fetchAthletesForSeason(
 ): Promise<AthleteRecord[]> {
   const { data, error } = await supabase
     .from("athletes")
-    .select("id, season, name, team, hometown, high_school")
+    .select("id, season, name, team, hometown, high_school, photo_url")
     .eq("season", season);
 
   if (error) throw new Error(error.message);
@@ -24,7 +25,7 @@ export async function fetchAthletesForSeason(
 export async function fetchAllAthletes(): Promise<AthleteRecord[]> {
   const { data, error } = await supabase
     .from("athletes")
-    .select("id, season, name, team, hometown, high_school, tfrrs_id");
+    .select("id, season, name, team, hometown, high_school, tfrrs_id, photo_url");
 
   if (error) throw new Error(error.message);
   return data ?? [];
