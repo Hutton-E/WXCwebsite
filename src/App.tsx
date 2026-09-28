@@ -21,6 +21,7 @@ import LiftingSheet from "./pages/liftingSheet";
 import SchedulePage from "./pages/schedulePage";
 import SeasonSchedulePage from "./pages/seasonSchedulePage";
 import TimeTrials from "./pages/timeTrials";
+import PlayerCardPage from "./pages/playerCardPage";
 
 const BACK_BUTTON_ROUTES = new Set(["/", "/time-trials"]);
 
@@ -41,6 +42,7 @@ function AppContent() {
     "/lifting_sheet",
     "/tfrrs-stats",
     "/time-trials",
+    "/player-card",
     "/personal-records",
     "/season-bests",
     "/workouts",
@@ -142,6 +144,15 @@ function AppContent() {
           element={
             <RequireIdentity>
               <TimeTrials />
+            </RequireIdentity>
+          }
+        />
+
+        <Route
+          path="/player-card"
+          element={
+            <RequireIdentity>
+              <PlayerCardPage />
             </RequireIdentity>
           }
         />

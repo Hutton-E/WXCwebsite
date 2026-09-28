@@ -16,16 +16,19 @@ function PlayerCard({ athlete }: PlayerCardProps) {
       label: "XC",
       description: "Cross country",
       value: athlete.crossCountryRating,
+      consistency: null,
     },
     {
       label: "INDOOR",
       description: "Indoor track",
       value: athlete.indoorRating,
+      consistency: athlete.indoorConsistencyRating,
     },
     {
       label: "OUTDOOR",
       description: "Outdoor track",
       value: athlete.outdoorRating,
+      consistency: athlete.outdoorConsistencyRating,
     },
   ];
 
@@ -70,12 +73,24 @@ function PlayerCard({ athlete }: PlayerCardProps) {
       <section className="player-card-consistency" aria-label="Ratings">
         <h2>RATINGS</h2>
         <div className="player-card-consistency-grid">
-          {ratingScores.map(({ label, description, value }) => (
+          {ratingScores.map(({ label, description, value, consistency }) => (
             <div className="player-card-rating-slot" key={label}>
-              <span>{label}</span>
-              <strong aria-label={`${description}: ${value ?? "not rated"}`}>
-                {value?.toFixed(1) ?? "--"}
-              </strong>
+              <div className="player-card-rating-row">
+                <span>{label}</span>
+                <strong aria-label={`${description}: ${value ?? "not rated"}`}>
+                  {value?.toFixed(1) ?? "--"}
+                </strong>
+              </div>
+              {consistency !== null && (
+                <div className="player-card-rating-row player-card-rating-row-consistency">
+                  <span>CONSISTENCY</span>
+                  <strong
+                    aria-label={`${description} consistency: ${consistency}`}
+                  >
+                    {consistency.toFixed(1)}
+                  </strong>
+                </div>
+              )}
             </div>
           ))}
         </div>

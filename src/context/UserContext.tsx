@@ -20,6 +20,8 @@ export interface Athlete {
   crossCountryRating: number | null;
   indoorRating: number | null;
   outdoorRating: number | null;
+  indoorConsistencyRating: number | null;
+  outdoorConsistencyRating: number | null;
 }
 
 interface UserContextValue {
@@ -95,15 +97,34 @@ export function UserProvider({ children }: { children: ReactNode }) {
         }
 
         let ratings = null;
+        let consistencyRatings = null;
         if (data.tfrrs_id) {
-          const { data: ratingsRow } = await supabase
-            .from("tfrrs_athlete_performance")
-            .select(
-              "cross_country_rating, indoor_rating, outdoor_rating",
-            )
-            .eq("tfrrs_id", data.tfrrs_id)
-            .maybeSingle();
-          ratings = ratingsRow;
+          const [ratingsResult, consistencyResult] = await Promise.all([
+            supabase
+              .from("tfrrs_athlete_performance")
+              .select("cross_country_rating, indoor_rating, outdoor_rating")
+              .eq("tfrrs_id", data.tfrrs_id)
+              .maybeSingle(),
+            supabase
+              .from("tfrrs_athlete_performance")
+              .select("indoor_consistency_rating, outdoor_consistency_rating")
+              .eq("tfrrs_id", data.tfrrs_id)
+              .maybeSingle(),
+          ]);
+
+          if (ratingsResult.error) {
+            console.error("Failed to load athlete ratings:", ratingsResult.error);
+          } else {
+            ratings = ratingsResult.data;
+          }
+          if (consistencyResult.error) {
+            console.error(
+              "Failed to load track consistency ratings. Apply supabase/athlete_consistency_scores.sql:",
+              consistencyResult.error,
+            );
+          } else {
+            consistencyRatings = consistencyResult.data;
+          }
         }
 
         if (cancelled) return;
@@ -120,6 +141,10 @@ export function UserProvider({ children }: { children: ReactNode }) {
           crossCountryRating: ratings?.cross_country_rating ?? null,
           indoorRating: ratings?.indoor_rating ?? null,
           outdoorRating: ratings?.outdoor_rating ?? null,
+          indoorConsistencyRating:
+            consistencyRatings?.indoor_consistency_rating ?? null,
+          outdoorConsistencyRating:
+            consistencyRatings?.outdoor_consistency_rating ?? null,
         });
         setAthleteLoading(false);
       });

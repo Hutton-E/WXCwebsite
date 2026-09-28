@@ -19,6 +19,8 @@ export interface AthleteAttributeValues {
   crossCountry: number | null;
   indoor: number | null;
   outdoor: number | null;
+  indoorConsistency: number | null;
+  outdoorConsistency: number | null;
   speed: number | null;
   endurance: number | null;
   winFactor: number | null;
@@ -71,6 +73,12 @@ export interface IndoorRecordRating {
   allAmericanAppearances: AllAmericanAppearance[];
 }
 
+// Outdoor track uses the same rating shape as indoor track (see
+// calculateTrackRecordRating below) — just a different set of rated events
+// and championship meet pattern.
+export type OutdoorEventRating = IndoorEventRating;
+export type OutdoorRecordRating = IndoorRecordRating;
+
 // Individual placing at or above this rank at a national XC championship
 // counts as an All-American appearance (NCAA Division III convention).
 // Regional meets (used to qualify for nationals) must be excluded, since a
@@ -80,12 +88,15 @@ const ALL_AMERICAN_MEET_PATTERN =
   /ncaa[^|]*cross\s*country[^|]*championships?/i;
 const REGIONAL_MEET_PATTERN = /\bregion\b/i;
 
-// Indoor national championship top-8 finishers earn first-team All-American
-// status; places 9-16 earn second-team All-American status.
-const INDOOR_ALL_AMERICAN_PLACING_THRESHOLD = 16;
-const INDOOR_FIRST_TEAM_ALL_AMERICAN_PLACING_THRESHOLD = 8;
+// NCAA Division III indoor and outdoor track national championship top-8
+// finishers earn first-team All-American status; places 9-16 earn
+// second-team All-American status. Both seasons share this convention.
+const TRACK_ALL_AMERICAN_PLACING_THRESHOLD = 16;
+const TRACK_FIRST_TEAM_ALL_AMERICAN_PLACING_THRESHOLD = 8;
 const INDOOR_ALL_AMERICAN_MEET_PATTERN =
   /ncaa[^|]*indoor[^|]*(?:track|championships?)/i;
+const OUTDOOR_ALL_AMERICAN_MEET_PATTERN =
+  /ncaa[^|]*outdoor[^|]*(?:track|championships?)/i;
 
 // A deficit of this many seconds behind the cross country school record
 // (the team's primary distance) costs 10 rating points. Shorter events use
@@ -106,12 +117,136 @@ const PRIMARY_CROSS_COUNTRY_DISTANCE_BY_TEAM: Record<string, string> = {
 // Indoor events rated by proximity to the school record. An athlete must
 // have raced an event at least this many times for it to count at all.
 const INDOOR_RATED_EVENTS = new Set(["800", "1000", "mile", "3000", "5000"]);
-const MIN_ATTEMPTS_FOR_INDOOR_EVENT = 2;
+// Outdoor events rated the same way: 800m, 1500m, 3000m steeplechase, 5000m,
+// and 10,000m. A bare "3000" (no steeplechase) is an indoor-only tune-up
+// distance and intentionally excluded here.
+const OUTDOOR_RATED_EVENTS = new Set(["800", "1500", "3000s", "5000", "10000"]);
+const MIN_ATTEMPTS_FOR_TRACK_EVENT = 2;
+const TIME_CONSISTENCY_WEIGHT = 0.4;
+const PR_CLOSENESS_WEIGHT = 0.6;
+const CONSISTENCY_PENALTY_PER_PERCENT_VARIATION = 10;
+// A race run this many percent slower than the athlete's PR in that same
+// event loses 10 points of PR-closeness credit — a percentage (rather than
+// a flat number of seconds) so the penalty scales fairly whether the event
+// is a short 800m or a long 5000m. Running the actual PR itself scores a
+// perfect 100 since its gap to the record is zero.
+const PR_CLOSENESS_PENALTY_PER_PERCENT_OFF = 10;
 
 // Squares each event's attempt count so an event raced many times heavily
 // outweighs one raced only the minimum required two times.
-function indoorEventWeight(attempts: number): number {
+function trackEventWeight(attempts: number): number {
   return attempts * attempts;
+}
+
+function normalizeConsistencyEvent(event: string): string {
+  const normalized = normalizeEvent(event);
+  return normalized === "1 mile" ? "mile" : normalized;
+}
+
+/**
+ * Rates how consistently an athlete runs close to their own personal best
+ * in each event they've raced at least twice in a season type (indoor or
+ * outdoor). Results are read in chronological order per event: the first
+ * time in an event has no prior PR to compare to, so it counts as a full
+ * mark automatically. Every race after that is scored against the
+ * athlete's standing PR (their best time up to but not including that
+ * race) — a new PR always scores a perfect 100 since its gap is zero, and
+ * a race that misses the standing PR is scored down by how far off it was,
+ * as a percentage of the PR time so short and long events are penalized
+ * fairly. Event scores are also penalized by raw time-to-time variability
+ * (coefficient of variation), so wildly inconsistent performances (even if
+ * a PR was eventually set) still cost points. PR-closeness carries 60% of
+ * the final weight; raw consistency carries the remaining 40%.
+ */
+function calculateTrackConsistencyRating(
+  athlete: AthleteRosterInfo,
+  seasonType: "indoor" | "outdoor",
+): number | null {
+  const resultsByEvent = new Map<
+    string,
+    { seconds: number; meetDate: string | null; index: number }[]
+  >();
+
+  athlete.raceHistory.forEach((race, index) => {
+    if (race.season_type?.trim().toLowerCase() !== seasonType) return;
+    if (isRelayEvent(race.event)) return;
+    if (race.status && race.status !== "FINISHED") return;
+
+    const event = normalizeConsistencyEvent(race.event);
+    const seconds = parseMarkSeconds(race.mark);
+    if (!event || seconds === null) return;
+
+    const results = resultsByEvent.get(event) ?? [];
+    results.push({ seconds, meetDate: race.meet_date, index });
+    resultsByEvent.set(event, results);
+  });
+
+  let totalWeight = 0;
+  let weightedConsistency = 0;
+  let totalPrCloseWeight = 0;
+  let weightedPrCloseness = 0;
+
+  for (const results of resultsByEvent.values()) {
+    if (results.length < 2) continue;
+
+    const mean =
+      results.reduce((sum, result) => sum + result.seconds, 0) /
+      results.length;
+    const standardDeviation = Math.sqrt(
+      results.reduce(
+        (sum, result) => sum + (result.seconds - mean) ** 2,
+        0,
+      ) / results.length,
+    );
+    const coefficientOfVariation = standardDeviation / mean;
+    const consistencyScore = Math.max(
+      0,
+      100 -
+        coefficientOfVariation * 100 * CONSISTENCY_PENALTY_PER_PERCENT_VARIATION,
+    );
+    const eventWeight = results.length;
+    totalWeight += eventWeight;
+    weightedConsistency += consistencyScore * eventWeight;
+
+    const datedResults = results
+      .filter(
+        (result) => result.meetDate && !Number.isNaN(Date.parse(result.meetDate)),
+      )
+      .sort(
+        (first, second) =>
+          (first.meetDate ?? "").localeCompare(second.meetDate ?? "") ||
+          first.index - second.index,
+      );
+
+    let standingPersonalBest = Infinity;
+    for (const result of datedResults) {
+      const percentOffStandingBest =
+        standingPersonalBest === Infinity
+          ? 0
+          : (result.seconds - standingPersonalBest) / standingPersonalBest;
+      totalPrCloseWeight += 1;
+      weightedPrCloseness += Math.min(
+        100,
+        Math.max(
+          0,
+          100 -
+            percentOffStandingBest * 100 * PR_CLOSENESS_PENALTY_PER_PERCENT_OFF,
+        ),
+      );
+      standingPersonalBest = Math.min(standingPersonalBest, result.seconds);
+    }
+  }
+
+  if (totalWeight === 0) return null;
+
+  const consistencyScore = weightedConsistency / totalWeight;
+  if (totalPrCloseWeight === 0) return round(consistencyScore);
+
+  const prClosenessScore = weightedPrCloseness / totalPrCloseWeight;
+  return round(
+    consistencyScore * TIME_CONSISTENCY_WEIGHT +
+      prClosenessScore * PR_CLOSENESS_WEIGHT,
+  );
 }
 
 // Finds the team's cross country record at its primary distance, used as
@@ -164,6 +299,9 @@ function normalizeEvent(event: string): string {
     .toLowerCase()
     .replace(/\(\s*xc\s*\)/g, "")
     .replace(/\bmeters?\b/g, "")
+    // TFRRS formats longer distances with a thousands separator (e.g.
+    // "10,000"); strip it so it normalizes the same as "10000".
+    .replace(/,/g, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -278,19 +416,22 @@ function findAllAmericanAppearances(
   );
 }
 
-// Only counts All-American finishes in the same events used for the indoor
-// rating (800/1000/mile/3000/5000) at the NCAA Indoor Championships — a
-// top-16 finish in an unrelated event (e.g. 60m, pentathlon) doesn't count.
-function findIndoorAllAmericanAppearances(
+// Only counts All-American finishes in the same events used for that
+// season's track rating at its NCAA Championships — a top-16 finish in an
+// unrelated event (e.g. 60m, pentathlon) doesn't count.
+function findTrackAllAmericanAppearances(
   raceHistory: readonly AthleteRaceRecord[],
+  seasonType: "indoor" | "outdoor",
+  ratedEvents: ReadonlySet<string>,
+  meetPattern: RegExp,
 ): AllAmericanAppearance[] {
   const appearancesByEventYear = new Map<string, AllAmericanAppearance>();
 
   for (const race of raceHistory) {
-    if (race.season_type?.trim().toLowerCase() !== "indoor") continue;
+    if (race.season_type?.trim().toLowerCase() !== seasonType) continue;
     if (race.status && race.status !== "FINISHED") continue;
-    if (!INDOOR_RATED_EVENTS.has(normalizeEvent(race.event))) continue;
-    if (!race.meet_name || !INDOOR_ALL_AMERICAN_MEET_PATTERN.test(race.meet_name)) {
+    if (!ratedEvents.has(normalizeEvent(race.event))) continue;
+    if (!race.meet_name || !meetPattern.test(race.meet_name)) {
       continue;
     }
     // Only final-round results count as the meet's actual finish; prelim
@@ -304,7 +445,7 @@ function findIndoorAllAmericanAppearances(
     if (
       placingNumber === null ||
       placingNumber < 1 ||
-      placingNumber > INDOOR_ALL_AMERICAN_PLACING_THRESHOLD ||
+      placingNumber > TRACK_ALL_AMERICAN_PLACING_THRESHOLD ||
       !Number.isInteger(year)
     ) {
       continue;
@@ -441,25 +582,27 @@ export function calculateCrossCountryRecordRating(
   };
 }
 
-interface IndoorRawResult {
+interface TrackRawResult {
   runnerId: string;
   event: string;
   seconds: number;
 }
 
-function collectIndoorResults(
+function collectTrackResults(
   runnerId: string,
   raceHistory: readonly AthleteRaceRecord[],
-): IndoorRawResult[] {
-  const results: IndoorRawResult[] = [];
+  seasonType: "indoor" | "outdoor",
+  ratedEvents: ReadonlySet<string>,
+): TrackRawResult[] {
+  const results: TrackRawResult[] = [];
 
   for (const race of raceHistory) {
-    if (race.season_type?.trim().toLowerCase() !== "indoor") continue;
+    if (race.season_type?.trim().toLowerCase() !== seasonType) continue;
     if (isRelayEvent(race.event)) continue;
     if (race.status && race.status !== "FINISHED") continue;
 
     const event = normalizeEvent(race.event);
-    if (!INDOOR_RATED_EVENTS.has(event)) continue;
+    if (!ratedEvents.has(event)) continue;
 
     const seconds = parseMarkSeconds(race.mark);
     if (seconds === null) continue;
@@ -471,7 +614,7 @@ function collectIndoorResults(
 }
 
 /**
- * Rates an indoor runner across the 800m, 1000m, mile, 3000m, and 5000m,
+ * Rates a runner across a season type's (indoor or outdoor) rated events,
  * scoring each event they've raced at least twice by proximity to their
  * team's school record at that event. Each event's rating threshold is
  * scaled proportionally to its own record time, anchored so the team's
@@ -485,9 +628,12 @@ function collectIndoorResults(
  * those same events adds two points; a second-team finish (places 9-16)
  * adds one point to the final weighted score.
  */
-export function calculateIndoorRecordRating(
+function calculateTrackRecordRating(
   athlete: AthleteRosterInfo,
-  teamRunners: readonly AthleteRosterInfo[] = [],
+  teamRunners: readonly AthleteRosterInfo[],
+  seasonType: "indoor" | "outdoor",
+  ratedEvents: ReadonlySet<string>,
+  allAmericanMeetPattern: RegExp,
 ): IndoorRecordRating {
   const pool = teamRunners.some((runner) => runner.tfrrsId === athlete.tfrrsId)
     ? teamRunners
@@ -497,26 +643,31 @@ export function calculateIndoorRecordRating(
     athlete.team,
     sameTeamRunners,
   );
-  const allAmericanAppearances = findIndoorAllAmericanAppearances(
+  const allAmericanAppearances = findTrackAllAmericanAppearances(
     athlete.raceHistory,
+    seasonType,
+    ratedEvents,
+    allAmericanMeetPattern,
   );
   const allAmericanCount = allAmericanAppearances.length;
   const allAmericanBonus = allAmericanAppearances.reduce((bonus, appearance) => {
     const placing = parsePlacingNumber(appearance.placing);
-    if (placing === null || placing > INDOOR_ALL_AMERICAN_PLACING_THRESHOLD) {
+    if (placing === null || placing > TRACK_ALL_AMERICAN_PLACING_THRESHOLD) {
       return bonus;
     }
     return (
       bonus +
-      (placing <= INDOOR_FIRST_TEAM_ALL_AMERICAN_PLACING_THRESHOLD ? 2 : 1)
+      (placing <= TRACK_FIRST_TEAM_ALL_AMERICAN_PLACING_THRESHOLD ? 2 : 1)
     );
   }, 0);
 
-  const resultsByEvent = new Map<string, IndoorRawResult[]>();
+  const resultsByEvent = new Map<string, TrackRawResult[]>();
   for (const runner of sameTeamRunners) {
-    for (const result of collectIndoorResults(
+    for (const result of collectTrackResults(
       runner.tfrrsId,
       runner.raceHistory,
+      seasonType,
+      ratedEvents,
     )) {
       const results = resultsByEvent.get(result.event) ?? [];
       results.push(result);
@@ -529,7 +680,7 @@ export function calculateIndoorRecordRating(
     const athleteResults = results.filter(
       (result) => result.runnerId === athlete.tfrrsId,
     );
-    if (athleteResults.length < MIN_ATTEMPTS_FOR_INDOOR_EVENT) continue;
+    if (athleteResults.length < MIN_ATTEMPTS_FOR_TRACK_EVENT) continue;
 
     const record = results.reduce((best, result) =>
       result.seconds < best.seconds ? result : best,
@@ -555,7 +706,7 @@ export function calculateIndoorRecordRating(
         0,
         round(100 - (deficitSeconds * 10) / secondsPerTenPoints),
       ),
-      weight: indoorEventWeight(athleteResults.length),
+      weight: trackEventWeight(athleteResults.length),
     });
   }
 
@@ -581,8 +732,37 @@ export function calculateIndoorRecordRating(
   };
 }
 
-// Outdoor ratings are not yet designed; they return null until a
-// methodology (analogous to the cross country and indoor rating) is set.
+// Rates an indoor runner across the 800m, 1000m, mile, 3000m, and 5000m.
+// See calculateTrackRecordRating for the full methodology.
+export function calculateIndoorRecordRating(
+  athlete: AthleteRosterInfo,
+  teamRunners: readonly AthleteRosterInfo[] = [],
+): IndoorRecordRating {
+  return calculateTrackRecordRating(
+    athlete,
+    teamRunners,
+    "indoor",
+    INDOOR_RATED_EVENTS,
+    INDOOR_ALL_AMERICAN_MEET_PATTERN,
+  );
+}
+
+// Rates an outdoor runner across the 800m, 1500m, 3000m steeplechase,
+// 5000m, and 10,000m. See calculateTrackRecordRating for the full
+// methodology.
+export function calculateOutdoorRecordRating(
+  athlete: AthleteRosterInfo,
+  teamRunners: readonly AthleteRosterInfo[] = [],
+): OutdoorRecordRating {
+  return calculateTrackRecordRating(
+    athlete,
+    teamRunners,
+    "outdoor",
+    OUTDOOR_RATED_EVENTS,
+    OUTDOOR_ALL_AMERICAN_MEET_PATTERN,
+  );
+}
+
 export function calculateAthleteAttributes(
   athlete: AthleteRosterInfo,
   teamRunners: readonly AthleteRosterInfo[] = [],
@@ -590,7 +770,9 @@ export function calculateAthleteAttributes(
   return {
     crossCountry: calculateCrossCountryRecordRating(athlete, teamRunners).score,
     indoor: calculateIndoorRecordRating(athlete, teamRunners).score,
-    outdoor: null,
+    outdoor: calculateOutdoorRecordRating(athlete, teamRunners).score,
+    indoorConsistency: calculateTrackConsistencyRating(athlete, "indoor"),
+    outdoorConsistency: calculateTrackConsistencyRating(athlete, "outdoor"),
     speed: null,
     endurance: null,
     winFactor: null,

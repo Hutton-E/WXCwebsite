@@ -1,7 +1,6 @@
 import NavMenu from "../components/navMenu";
 import IdentityLookup from "../components/identityLookup";
 import SwitchIdentityPrompt from "../components/switchIdentity";
-import PlayerCard from "../components/playerCard";
 import { useUser } from "../context/UserContext";
 import { Link } from "react-router-dom";
 
@@ -14,6 +13,7 @@ const resourceLinks = [
 ];
 
 const statsLinks = [
+  { label: "View Player Card", path: "/player-card" },
   { label: "View TFRRS Stats", path: "/tfrrs-stats" },
   { label: "View Time Trials", path: "/time-trials" },
 ];
@@ -38,8 +38,6 @@ function Home() {
           ? `Welcome, ${athlete.name}`
           : "Welcome, please type your name and select it to view resources."}
       </h1>
-
-      {athlete && <PlayerCard athlete={athlete} />}
 
       <div className={`home-center-controls${athlete ? " has-athlete" : ""}`}>
         {!athlete && <IdentityLookup />}

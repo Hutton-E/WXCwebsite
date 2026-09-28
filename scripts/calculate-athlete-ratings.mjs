@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Calculates the cross country and indoor school-record ratings from stored
- * TFRRS histories and writes them to tfrrs_athlete_performance's
- * cross_country_rating and indoor_rating columns. outdoor_rating is not
- * computed yet and is left alone. Only those two columns are updated; raw
+ * Calculates the cross country, indoor, and outdoor school-record ratings
+ * from stored TFRRS histories and writes them to tfrrs_athlete_performance's
+ * cross_country_rating, indoor_rating, outdoor_rating,
+ * indoor_consistency_rating, and outdoor_consistency_rating columns. Raw
  * races, PRs, and public.athletes are not modified.
  *
  * Apply supabase/athlete_record_ratings.sql first.
@@ -90,7 +90,7 @@ async function main() {
   }
 
   console.log(
-    `Calculating cross country and indoor ratings for ${selectedRows.length} athlete(s) using ${teamRunners.length} known runner histories.`,
+    `Calculating cross country, indoor, and outdoor ratings for ${selectedRows.length} athlete(s) using ${teamRunners.length} known runner histories.`,
   );
 
   const calculatedRows = selectedRows.map((row) => {
@@ -105,6 +105,9 @@ async function main() {
       athleteName: row.athlete_name,
       crossCountry: attributes.crossCountry,
       indoor: attributes.indoor,
+      outdoor: attributes.outdoor,
+      indoorConsistency: attributes.indoorConsistency,
+      outdoorConsistency: attributes.outdoorConsistency,
     };
   });
 
@@ -114,10 +117,19 @@ async function main() {
   const indoorAvailable = calculatedRows.filter(
     (row) => row.indoor !== null,
   ).length;
+  const outdoorAvailable = calculatedRows.filter(
+    (row) => row.outdoor !== null,
+  ).length;
+  const indoorConsistencyAvailable = calculatedRows.filter(
+    (row) => row.indoorConsistency !== null,
+  ).length;
+  const outdoorConsistencyAvailable = calculatedRows.filter(
+    (row) => row.outdoorConsistency !== null,
+  ).length;
 
   for (const row of calculatedRows.slice(0, 5)) {
     console.log(
-      `  ${row.athleteName}: XC ${formatScore(row.crossCountry)}, indoor ${formatScore(row.indoor)}`,
+      `  ${row.athleteName}: XC ${formatScore(row.crossCountry)}, indoor ${formatScore(row.indoor)}, outdoor ${formatScore(row.outdoor)}, consistency: indoor ${formatScore(row.indoorConsistency)}, outdoor ${formatScore(row.outdoorConsistency)}`,
     );
   }
   console.log(
@@ -125,6 +137,15 @@ async function main() {
   );
   console.log(
     `Indoor ratings available: ${indoorAvailable}/${calculatedRows.length}.`,
+  );
+  console.log(
+    `Outdoor ratings available: ${outdoorAvailable}/${calculatedRows.length}.`,
+  );
+  console.log(
+    `Indoor consistency scores available: ${indoorConsistencyAvailable}/${calculatedRows.length}.`,
+  );
+  console.log(
+    `Outdoor consistency scores available: ${outdoorConsistencyAvailable}/${calculatedRows.length}.`,
   );
 
   if (dryRun) {
@@ -146,6 +167,9 @@ async function main() {
           .update({
             cross_country_rating: row.crossCountry,
             indoor_rating: row.indoor,
+            outdoor_rating: row.outdoor,
+            indoor_consistency_rating: row.indoorConsistency,
+            outdoor_consistency_rating: row.outdoorConsistency,
           })
           .eq("tfrrs_id", row.tfrrsId)
           .select("tfrrs_id");
@@ -162,7 +186,7 @@ async function main() {
   }
 
   console.log(
-    `Updated cross_country_rating and indoor_rating on ${updated} rows.`,
+    `Updated cross_country_rating, indoor_rating, and outdoor_rating on ${updated} rows.`,
   );
 }
 
