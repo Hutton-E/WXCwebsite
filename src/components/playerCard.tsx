@@ -11,21 +11,21 @@ function PlayerCard({ athlete }: PlayerCardProps) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() ?? "")
     .join("");
-  const consistencyScores = [
+  const ratingScores = [
     {
       label: "XC",
       description: "Cross country",
-      value: athlete.crossCountryConsistency,
+      value: athlete.crossCountryRating,
     },
     {
       label: "INDOOR",
       description: "Indoor track",
-      value: athlete.indoorConsistency,
+      value: athlete.indoorRating,
     },
     {
       label: "OUTDOOR",
       description: "Outdoor track",
-      value: athlete.outdoorConsistency,
+      value: athlete.outdoorRating,
     },
   ];
 
@@ -67,10 +67,10 @@ function PlayerCard({ athlete }: PlayerCardProps) {
         <p>--</p>
       </section>
 
-      <section className="player-card-consistency" aria-label="Consistency ratings">
-        <h2>CONSISTENCY</h2>
+      <section className="player-card-consistency" aria-label="Ratings">
+        <h2>RATINGS</h2>
         <div className="player-card-consistency-grid">
-          {consistencyScores.map(({ label, description, value }) => (
+          {ratingScores.map(({ label, description, value }) => (
             <div className="player-card-rating-slot" key={label}>
               <span>{label}</span>
               <strong aria-label={`${description}: ${value ?? "not rated"}`}>
@@ -81,7 +81,10 @@ function PlayerCard({ athlete }: PlayerCardProps) {
         </div>
       </section>
 
-      <section className="player-card-attributes" aria-label="Runner attributes">
+      <section
+        className="player-card-attributes"
+        aria-label="Runner attributes"
+      >
         {[
           ["SPEED", "Speed"],
           ["ENDURANCE", "Endurance"],

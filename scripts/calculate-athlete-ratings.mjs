@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 /**
- * Calculates season-specific consistency scores from stored TFRRS histories.
- * Only the three consistency columns are updated; raw races, PRs, legacy
- * consistency_rating, and public.athletes are not modified.
+ * Calculates the cross country school-record rating from stored TFRRS
+ * histories and writes it to tfrrs_athlete_performance.cross_country_rating.
+ * indoor_rating and outdoor_rating are not computed yet and are left alone.
+ * Only that one column is updated; raw races, PRs, and public.athletes are
+ * not modified.
  *
- * Apply supabase/athlete_consistency_scores.sql first.
+ * Apply supabase/athlete_record_ratings.sql first.
  */
 
 import { getAuthenticatedSupabaseClient } from "../src/lib/supabaseAdminClient.mjs";
@@ -31,6 +33,30 @@ async function fetchPerformanceRows(supabase) {
   return rows;
 }
 
+async function fetchTeamByTfrrsId(supabase) {
+  const teamByTfrrsId = new Map();
+
+  for (let offset = 0; ; offset += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("athletes")
+      .select("tfrrs_id, team, season")
+      .not("tfrrs_id", "is", null)
+      .order("season", { ascending: false })
+      .range(offset, offset + PAGE_SIZE - 1);
+
+    if (error) throw new Error(error.message);
+    for (const row of data ?? []) {
+      const tfrrsId = String(row.tfrrs_id);
+      // Rows are ordered by season desc, so the first team seen per athlete
+      // is their most recent roster team.
+      if (!teamByTfrrsId.has(tfrrsId)) teamByTfrrsId.set(tfrrsId, row.team);
+    }
+    if (!data || data.length < PAGE_SIZE) break;
+  }
+
+  return teamByTfrrsId;
+}
+
 function formatScore(score) {
   return score === null ? "n/a" : score.toFixed(1);
 }
@@ -42,13 +68,17 @@ async function main() {
     .find((argument) => argument.startsWith("--tfrrs-id="))
     ?.slice("--tfrrs-id=".length);
 
-  const rows = await fetchPerformanceRows(supabase);
+  const [rows, teamByTfrrsId] = await Promise.all([
+    fetchPerformanceRows(supabase),
+    fetchTeamByTfrrsId(supabase),
+  ]);
   if (rows.length === 0) {
     throw new Error("No TFRRS athlete performance rows found.");
   }
 
-  const knownRunners = rows.map((row) => ({
+  const teamRunners = rows.map((row) => ({
     tfrrsId: row.tfrrs_id,
+    team: teamByTfrrsId.get(row.tfrrs_id) ?? "unknown",
     raceHistory: row.race_history ?? [],
   }));
   const selectedRows = requestedTfrrsId
@@ -60,38 +90,32 @@ async function main() {
   }
 
   console.log(
-    `Calculating season consistency for ${selectedRows.length} athlete(s) using ${knownRunners.length} known runner histories.`,
+    `Calculating cross country ratings for ${selectedRows.length} athlete(s) using ${teamRunners.length} known runner histories.`,
   );
 
   const calculatedRows = selectedRows.map((row) => {
     const athlete = {
       tfrrsId: row.tfrrs_id,
+      team: teamByTfrrsId.get(row.tfrrs_id) ?? "unknown",
       raceHistory: row.race_history ?? [],
     };
     return {
       tfrrsId: row.tfrrs_id,
       athleteName: row.athlete_name,
-      consistency: calculateAthleteAttributes(athlete, knownRunners).consistency,
+      crossCountry: calculateAthleteAttributes(athlete, teamRunners)
+        .crossCountry,
     };
   });
 
-  const scoresAvailable = calculatedRows.reduce(
-    (counts, row) => {
-      if (row.consistency.indoor !== null) counts.indoor++;
-      if (row.consistency.outdoor !== null) counts.outdoor++;
-      if (row.consistency.crossCountry !== null) counts.crossCountry++;
-      return counts;
-    },
-    { indoor: 0, outdoor: 0, crossCountry: 0 },
-  );
+  const scoresAvailable = calculatedRows.filter(
+    (row) => row.crossCountry !== null,
+  ).length;
 
   for (const row of calculatedRows.slice(0, 5)) {
-    console.log(
-      `  ${row.athleteName}: indoor ${formatScore(row.consistency.indoor)}, outdoor ${formatScore(row.consistency.outdoor)}, XC ${formatScore(row.consistency.crossCountry)}`,
-    );
+    console.log(`  ${row.athleteName}: XC ${formatScore(row.crossCountry)}`);
   }
   console.log(
-    `Scores available: indoor ${scoresAvailable.indoor}, outdoor ${scoresAvailable.outdoor}, XC ${scoresAvailable.crossCountry}.`,
+    `XC ratings available: ${scoresAvailable}/${calculatedRows.length}.`,
   );
 
   if (dryRun) {
@@ -110,11 +134,7 @@ async function main() {
       batch.map(async (row) => {
         const { data, error } = await supabase
           .from("tfrrs_athlete_performance")
-          .update({
-            indoor_consistency_rating: row.consistency.indoor,
-            outdoor_consistency_rating: row.consistency.outdoor,
-            cross_country_consistency_rating: row.consistency.crossCountry,
-          })
+          .update({ cross_country_rating: row.crossCountry })
           .eq("tfrrs_id", row.tfrrsId)
           .select("tfrrs_id");
 
@@ -129,10 +149,10 @@ async function main() {
     console.log(`Updated ${updated}/${calculatedRows.length} rows.`);
   }
 
-  console.log(`Updated only the three season consistency columns on ${updated} rows.`);
+  console.log(`Updated only cross_country_rating on ${updated} rows.`);
 }
 
 main().catch((error) => {
-  console.error("Failed to calculate athlete consistency:", error);
+  console.error("Failed to calculate athlete ratings:", error);
   process.exit(1);
 });

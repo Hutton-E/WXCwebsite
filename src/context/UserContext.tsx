@@ -17,9 +17,9 @@ export interface Athlete {
   photoUrl: string | null;
   tfrrsId: string | null;
   graduationYear: number | null;
-  indoorConsistency: number | null;
-  outdoorConsistency: number | null;
-  crossCountryConsistency: number | null;
+  crossCountryRating: number | null;
+  indoorRating: number | null;
+  outdoorRating: number | null;
 }
 
 interface UserContextValue {
@@ -94,16 +94,16 @@ export function UserProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        let consistencyRatings = null;
+        let ratings = null;
         if (data.tfrrs_id) {
-          const { data: ratings } = await supabase
+          const { data: ratingsRow } = await supabase
             .from("tfrrs_athlete_performance")
             .select(
-              "indoor_consistency_rating, outdoor_consistency_rating, cross_country_consistency_rating",
+              "cross_country_rating, indoor_rating, outdoor_rating",
             )
             .eq("tfrrs_id", data.tfrrs_id)
             .maybeSingle();
-          consistencyRatings = ratings;
+          ratings = ratingsRow;
         }
 
         if (cancelled) return;
@@ -117,12 +117,9 @@ export function UserProvider({ children }: { children: ReactNode }) {
           photoUrl: data.photo_url,
           tfrrsId: data.tfrrs_id,
           graduationYear: data.graduation_year,
-          indoorConsistency:
-            consistencyRatings?.indoor_consistency_rating ?? null,
-          outdoorConsistency:
-            consistencyRatings?.outdoor_consistency_rating ?? null,
-          crossCountryConsistency:
-            consistencyRatings?.cross_country_consistency_rating ?? null,
+          crossCountryRating: ratings?.cross_country_rating ?? null,
+          indoorRating: ratings?.indoor_rating ?? null,
+          outdoorRating: ratings?.outdoor_rating ?? null,
         });
         setAthleteLoading(false);
       });
