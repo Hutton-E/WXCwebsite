@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Calculates the cross country school-record rating from stored TFRRS
- * histories and writes it to tfrrs_athlete_performance.cross_country_rating.
- * indoor_rating and outdoor_rating are not computed yet and are left alone.
- * Only that one column is updated; raw races, PRs, and public.athletes are
- * not modified.
+ * Calculates the cross country and indoor school-record ratings from stored
+ * TFRRS histories and writes them to tfrrs_athlete_performance's
+ * cross_country_rating and indoor_rating columns. outdoor_rating is not
+ * computed yet and is left alone. Only those two columns are updated; raw
+ * races, PRs, and public.athletes are not modified.
  *
  * Apply supabase/athlete_record_ratings.sql first.
  */
@@ -90,7 +90,7 @@ async function main() {
   }
 
   console.log(
-    `Calculating cross country ratings for ${selectedRows.length} athlete(s) using ${teamRunners.length} known runner histories.`,
+    `Calculating cross country and indoor ratings for ${selectedRows.length} athlete(s) using ${teamRunners.length} known runner histories.`,
   );
 
   const calculatedRows = selectedRows.map((row) => {
@@ -99,23 +99,32 @@ async function main() {
       team: teamByTfrrsId.get(row.tfrrs_id) ?? "unknown",
       raceHistory: row.race_history ?? [],
     };
+    const attributes = calculateAthleteAttributes(athlete, teamRunners);
     return {
       tfrrsId: row.tfrrs_id,
       athleteName: row.athlete_name,
-      crossCountry: calculateAthleteAttributes(athlete, teamRunners)
-        .crossCountry,
+      crossCountry: attributes.crossCountry,
+      indoor: attributes.indoor,
     };
   });
 
-  const scoresAvailable = calculatedRows.filter(
+  const crossCountryAvailable = calculatedRows.filter(
     (row) => row.crossCountry !== null,
+  ).length;
+  const indoorAvailable = calculatedRows.filter(
+    (row) => row.indoor !== null,
   ).length;
 
   for (const row of calculatedRows.slice(0, 5)) {
-    console.log(`  ${row.athleteName}: XC ${formatScore(row.crossCountry)}`);
+    console.log(
+      `  ${row.athleteName}: XC ${formatScore(row.crossCountry)}, indoor ${formatScore(row.indoor)}`,
+    );
   }
   console.log(
-    `XC ratings available: ${scoresAvailable}/${calculatedRows.length}.`,
+    `XC ratings available: ${crossCountryAvailable}/${calculatedRows.length}.`,
+  );
+  console.log(
+    `Indoor ratings available: ${indoorAvailable}/${calculatedRows.length}.`,
   );
 
   if (dryRun) {
@@ -134,7 +143,10 @@ async function main() {
       batch.map(async (row) => {
         const { data, error } = await supabase
           .from("tfrrs_athlete_performance")
-          .update({ cross_country_rating: row.crossCountry })
+          .update({
+            cross_country_rating: row.crossCountry,
+            indoor_rating: row.indoor,
+          })
           .eq("tfrrs_id", row.tfrrsId)
           .select("tfrrs_id");
 
@@ -149,7 +161,9 @@ async function main() {
     console.log(`Updated ${updated}/${calculatedRows.length} rows.`);
   }
 
-  console.log(`Updated only cross_country_rating on ${updated} rows.`);
+  console.log(
+    `Updated cross_country_rating and indoor_rating on ${updated} rows.`,
+  );
 }
 
 main().catch((error) => {
