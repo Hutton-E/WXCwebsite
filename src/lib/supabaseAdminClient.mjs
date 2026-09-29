@@ -1,7 +1,9 @@
 import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
 
-export async function getAuthenticatedSupabaseClient() {
+export async function getAuthenticatedSupabaseClient({
+  requireServiceRole = false,
+} = {}) {
   const url = process.env.VITE_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const key = process.env.VITE_SUPABASE_KEY;
@@ -11,6 +13,12 @@ export async function getAuthenticatedSupabaseClient() {
   if (!url || (!key && !serviceRoleKey)) {
     throw new Error(
       "Missing VITE_SUPABASE_URL and Supabase server key in .env",
+    );
+  }
+
+  if (requireServiceRole && !serviceRoleKey) {
+    throw new Error(
+      "SUPABASE_SERVICE_ROLE_KEY is required for this operation. Add the Supabase service_role key to .env; an authenticated user session cannot update athlete ratings.",
     );
   }
 

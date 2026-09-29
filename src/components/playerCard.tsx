@@ -111,7 +111,11 @@ function PlayerCard({ athlete }: PlayerCardProps) {
             description: "Endurance",
             value: athlete.enduranceRating,
           },
-          { label: "WIN FACTOR", description: "Win factor", value: null },
+          {
+            label: "WIN FACTOR",
+            description: "Win factor",
+            value: athlete.winFactorRating,
+          },
         ].map(({ label, description, value }) => (
           <div className="player-card-attribute-slot" key={label}>
             <span>{label}</span>

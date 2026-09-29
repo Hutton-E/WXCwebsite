@@ -4,8 +4,9 @@
  * 10000m-equivalent endurance ratings
  * from stored TFRRS histories and writes them to tfrrs_athlete_performance's
  * cross_country_rating, indoor_rating, outdoor_rating,
- * indoor_consistency_rating, outdoor_consistency_rating, speed_rating, and
- * endurance_rating columns. Raw races, PRs, and public.athletes are not modified.
+ * indoor_consistency_rating, outdoor_consistency_rating, speed_rating,
+ * endurance_rating, and win_factor_rating columns. Raw races, PRs, and
+ * public.athletes are not modified.
  *
  * Apply supabase/athlete_record_ratings.sql first.
  */
@@ -63,7 +64,9 @@ function formatScore(score) {
 }
 
 async function main() {
-  const supabase = await getAuthenticatedSupabaseClient();
+  const supabase = await getAuthenticatedSupabaseClient({
+    requireServiceRole: true,
+  });
   const dryRun = process.argv.includes("--dry-run");
   const requestedTfrrsId = process.argv
     .find((argument) => argument.startsWith("--tfrrs-id="))
@@ -111,6 +114,7 @@ async function main() {
       outdoorConsistency: attributes.outdoorConsistency,
       speed: attributes.speed,
       endurance: attributes.endurance,
+      winFactor: attributes.winFactor,
     };
   });
 
@@ -135,10 +139,13 @@ async function main() {
   const enduranceAvailable = calculatedRows.filter(
     (row) => row.endurance !== null,
   ).length;
+  const winFactorAvailable = calculatedRows.filter(
+    (row) => row.winFactor !== null,
+  ).length;
 
   for (const row of calculatedRows.slice(0, 5)) {
     console.log(
-      `  ${row.athleteName}: XC ${formatScore(row.crossCountry)}, indoor ${formatScore(row.indoor)}, outdoor ${formatScore(row.outdoor)}, speed ${formatScore(row.speed)}, endurance ${formatScore(row.endurance)}, consistency: indoor ${formatScore(row.indoorConsistency)}, outdoor ${formatScore(row.outdoorConsistency)}`,
+      `  ${row.athleteName}: XC ${formatScore(row.crossCountry)}, indoor ${formatScore(row.indoor)}, outdoor ${formatScore(row.outdoor)}, speed ${formatScore(row.speed)}, endurance ${formatScore(row.endurance)}, win factor ${formatScore(row.winFactor)}, consistency: indoor ${formatScore(row.indoorConsistency)}, outdoor ${formatScore(row.outdoorConsistency)}`,
     );
   }
   console.log(
@@ -159,6 +166,9 @@ async function main() {
   console.log(`Speed ratings available: ${speedAvailable}/${calculatedRows.length}.`);
   console.log(
     `Endurance ratings available: ${enduranceAvailable}/${calculatedRows.length}.`,
+  );
+  console.log(
+    `Win factor ratings available: ${winFactorAvailable}/${calculatedRows.length}.`,
   );
 
   if (dryRun) {
@@ -185,11 +195,16 @@ async function main() {
             outdoor_consistency_rating: row.outdoorConsistency,
             speed_rating: row.speed,
             endurance_rating: row.endurance,
+            win_factor_rating: row.winFactor,
           })
           .eq("tfrrs_id", row.tfrrsId)
           .select("tfrrs_id");
 
-        if (error) throw new Error(`${row.tfrrsId}: ${error.message}`);
+        if (error) {
+          throw new Error(
+            `${row.tfrrsId}: ${error.message}. Apply supabase/athlete_record_ratings.sql with the service-role connection before writing ratings.`,
+          );
+        }
         if (data?.length !== 1) {
           throw new Error(`${row.tfrrsId}: expected one row to be updated.`);
         }
@@ -201,7 +216,7 @@ async function main() {
   }
 
   console.log(
-    `Updated cross_country_rating, indoor_rating, outdoor_rating, speed_rating, and endurance_rating on ${updated} rows.`,
+    `Updated cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating, and win_factor_rating on ${updated} rows.`,
   );
 }
 

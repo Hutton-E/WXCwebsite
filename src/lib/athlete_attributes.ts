@@ -137,6 +137,10 @@ const DISTANCE_400M_TIME_ADJUSTMENT = 1.05;
 const LONG_DISTANCE_400M_TIME_ADJUSTMENT = 1.07;
 const PREDICTED_10000M_TIME_ADJUSTMENT = 1.02;
 const MID_DISTANCE_10000M_TIME_ADJUSTMENT = 1.07;
+const NON_CHAMPIONSHIP_WIN_FACTOR_POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
+const CONFERENCE_WIN_FACTOR_POINTS = [15, 13, 11, 9, 7, 6, 5, 4];
+const REGIONAL_WIN_FACTOR_POINTS = [18, 15, 13, 11, 9, 7, 6, 5];
+const WIN_FACTOR_SCALE = 10;
 
 type WorldAthleticsScoreModel = readonly [quadratic: number, linear: number, offset: number];
 type WorldAthleticsGender = "men" | "women";
@@ -852,6 +856,61 @@ function parsePlacingNumber(placing: string | null | undefined): number | null {
   return match ? Number(match[1]) : null;
 }
 
+function winFactorPointsForPlacing(
+  placing: number,
+  meetName: string | null | undefined,
+): number {
+  const normalizedMeetName = meetName?.toLowerCase() ?? "";
+  if (/\bregional|\bregionals?\b|\bregion\b/.test(normalizedMeetName)) {
+    return REGIONAL_WIN_FACTOR_POINTS[placing - 1] ?? 0;
+  }
+  if (/\bconference\b/.test(normalizedMeetName)) {
+    return CONFERENCE_WIN_FACTOR_POINTS[placing - 1] ?? 0;
+  }
+  if (/\bnational\b|\bncaa\b/.test(normalizedMeetName)) {
+    if (placing === 1) return 20;
+    return placing >= 2 && placing <= 40 ? 20 - Math.ceil(placing / 2) : 0;
+  }
+  return NON_CHAMPIONSHIP_WIN_FACTOR_POINTS[placing - 1] ?? 0;
+}
+
+function isCompletedWinFactorRace(race: AthleteRaceRecord): boolean {
+  const status = race.status?.trim().toUpperCase();
+  if (
+    status &&
+    !["FINISHED", "COMPLETE", "COMPLETED"].includes(status)
+  ) {
+    return false;
+  }
+
+  const mark = race.mark.trim();
+  if (!mark) return false;
+  return !/^(?:DNS|DNF|DQ|DSQ|NT|NH|NM|FOUL|SCR|SCRATCH|WITHDRAWN|AB|DID NOT|NO START|DISQUAL)/i.test(
+    mark,
+  );
+}
+
+function calculateWinFactorRating(
+  raceHistory: readonly AthleteRaceRecord[],
+): number | null {
+  let totalPoints = 0;
+  let competedRaces = 0;
+
+  for (const race of raceHistory) {
+    if (!isCompletedWinFactorRace(race)) continue;
+
+    competedRaces++;
+    const placing = parsePlacingNumber(race.placing);
+    if (placing !== null) {
+      totalPoints += winFactorPointsForPlacing(placing, race.meet_name);
+    }
+  }
+
+  return competedRaces === 0
+    ? null
+    : round((totalPoints / competedRaces) * WIN_FACTOR_SCALE);
+}
+
 interface CrossCountryRawResult {
   runnerId: string;
   distance: string;
@@ -1283,6 +1342,6 @@ export function calculateAthleteAttributes(
     outdoorConsistency: calculateTrackConsistencyRating(athlete, "outdoor"),
     speed: calculateSpeedRating(athlete, teamRunners),
     endurance: calculateEnduranceRating(athlete, teamRunners),
-    winFactor: null,
+    winFactor: calculateWinFactorRating(athlete.raceHistory),
   };
 }
