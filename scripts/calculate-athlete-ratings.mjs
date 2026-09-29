@@ -5,10 +5,11 @@
  * from stored TFRRS histories and writes them to tfrrs_athlete_performance's
  * cross_country_rating, indoor_rating, outdoor_rating,
  * indoor_consistency_rating, outdoor_consistency_rating, speed_rating,
- * endurance_rating, and win_factor_rating columns. Raw races, PRs, and
- * public.athletes are not modified.
+ * endurance_rating, win_factor_rating, and overall_rating columns. Raw
+ * races, PRs, and public.athletes are not modified.
  *
- * Apply supabase/athlete_record_ratings.sql first.
+ * Apply supabase/athlete_record_ratings.sql and
+ * supabase/athlete_overall_rating.sql first.
  */
 
 import { getAuthenticatedSupabaseClient } from "../src/lib/supabaseAdminClient.mjs";
@@ -115,6 +116,7 @@ async function main() {
       speed: attributes.speed,
       endurance: attributes.endurance,
       winFactor: attributes.winFactor,
+      overall: attributes.overall,
       runnerType: attributes.runnerType,
       runnerTypeScores: attributes.runnerTypeScores,
     };
@@ -144,10 +146,13 @@ async function main() {
   const winFactorAvailable = calculatedRows.filter(
     (row) => row.winFactor !== null,
   ).length;
+  const overallAvailable = calculatedRows.filter(
+    (row) => row.overall !== null,
+  ).length;
 
   for (const row of calculatedRows.slice(0, 5)) {
     console.log(
-      `  ${row.athleteName}: ${row.runnerType ?? "unclassified"} — XC ${formatScore(row.crossCountry)}, indoor ${formatScore(row.indoor)}, outdoor ${formatScore(row.outdoor)}, speed ${formatScore(row.speed)}, endurance ${formatScore(row.endurance)}, win factor ${formatScore(row.winFactor)}, consistency: indoor ${formatScore(row.indoorConsistency)}, outdoor ${formatScore(row.outdoorConsistency)}`,
+      `  ${row.athleteName}: ${row.runnerType ?? "unclassified"} — XC ${formatScore(row.crossCountry)}, indoor ${formatScore(row.indoor)}, outdoor ${formatScore(row.outdoor)}, speed ${formatScore(row.speed)}, endurance ${formatScore(row.endurance)}, win factor ${formatScore(row.winFactor)}, overall ${formatScore(row.overall)}, consistency: indoor ${formatScore(row.indoorConsistency)}, outdoor ${formatScore(row.outdoorConsistency)}`,
     );
   }
   console.log(
@@ -171,6 +176,9 @@ async function main() {
   );
   console.log(
     `Win factor ratings available: ${winFactorAvailable}/${calculatedRows.length}.`,
+  );
+  console.log(
+    `Overall ratings available: ${overallAvailable}/${calculatedRows.length}.`,
   );
 
   if (dryRun) {
@@ -198,6 +206,7 @@ async function main() {
             speed_rating: row.speed,
             endurance_rating: row.endurance,
             win_factor_rating: row.winFactor,
+            overall_rating: row.overall,
             runner_type: row.runnerType,
             runner_type_scores: row.runnerTypeScores,
           })

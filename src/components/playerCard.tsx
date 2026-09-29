@@ -116,6 +116,11 @@ function PlayerCard({ athlete }: PlayerCardProps) {
             description: "Win factor",
             value: athlete.winFactorRating,
           },
+          {
+            label: "OVERALL",
+            description: "Overall rating",
+            value: athlete.overallRating,
+          },
         ].map(({ label, description, value }) => (
           <div className="player-card-attribute-slot" key={label}>
             <span>{label}</span>

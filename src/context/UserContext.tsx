@@ -25,6 +25,7 @@ export interface Athlete {
   speedRating: number | null;
   enduranceRating: number | null;
   winFactorRating: number | null;
+  overallRating: number | null;
   runnerType: string | null;
 }
 
@@ -107,7 +108,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
             supabase
               .from("tfrrs_athlete_performance")
               .select(
-                "cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating, win_factor_rating, runner_type",
+                "cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating, win_factor_rating, overall_rating, runner_type",
               )
               .eq("tfrrs_id", data.tfrrs_id)
               .maybeSingle(),
@@ -154,6 +155,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
           speedRating: ratings?.speed_rating ?? null,
           enduranceRating: ratings?.endurance_rating ?? null,
           winFactorRating: ratings?.win_factor_rating ?? null,
+          overallRating: ratings?.overall_rating ?? null,
           runnerType: ratings?.runner_type ?? null,
         });
         setAthleteLoading(false);

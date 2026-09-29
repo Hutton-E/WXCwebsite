@@ -24,6 +24,7 @@ export interface AthleteAttributeValues {
   speed: number | null;
   endurance: number | null;
   winFactor: number | null;
+  overall: number | null;
   runnerType: RunnerType | null;
   runnerTypeScores: RunnerTypeScores;
 }
@@ -156,6 +157,19 @@ const NON_CHAMPIONSHIP_WIN_FACTOR_POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
 const CONFERENCE_WIN_FACTOR_POINTS = [15, 13, 11, 9, 7, 6, 5, 4];
 const REGIONAL_WIN_FACTOR_POINTS = [18, 15, 13, 11, 9, 7, 6, 5];
 const WIN_FACTOR_SCALE = 10;
+// The overall rating blends a season-results average (XC/indoor/outdoor)
+// with a physical-ability average (speed/endurance); the season average is
+// weighted more heavily since it reflects actual competitive results across
+// three full seasons rather than two isolated ability metrics.
+const OVERALL_SEASON_AVERAGE_WEIGHT = 0.65;
+const OVERALL_PHYSICAL_AVERAGE_WEIGHT = 0.35;
+// Win factor is folded in using each athlete's percentile rank among their
+// teammates rather than their raw win-factor score, since raw points scale
+// with how many championship-level races an athlete has run. Ranking by
+// percentile keeps the comparison fair for athletes with fewer counted
+// races.
+const OVERALL_WIN_FACTOR_WEIGHT = 0.15;
+const OVERALL_BASE_WEIGHT = 1 - OVERALL_WIN_FACTOR_WEIGHT;
 
 type WorldAthleticsScoreModel = readonly [quadratic: number, linear: number, offset: number];
 type WorldAthleticsGender = "men" | "women";
@@ -927,6 +941,69 @@ function calculateWinFactorRating(
     : round((totalPoints / competedRaces) * WIN_FACTOR_SCALE);
 }
 
+// Converts an athlete's win factor score into a percentile (0-100) among
+// their teammates' win factor scores. Athletes tied on win factor share the
+// same percentile (the midpoint of their tied group), so the ranking stays
+// fair regardless of how many races each athlete has completed.
+function calculateWinFactorPercentile(
+  athlete: AthleteRosterInfo,
+  teamRunners: readonly AthleteRosterInfo[],
+): number | null {
+  const athleteWinFactor = calculateWinFactorRating(athlete.raceHistory);
+  if (athleteWinFactor === null) return null;
+
+  const pool = teamRunners.some((runner) => runner.tfrrsId === athlete.tfrrsId)
+    ? teamRunners
+    : [...teamRunners, athlete];
+  const teammateWinFactors = pool
+    .filter((runner) => runner.team === athlete.team)
+    .map((runner) => calculateWinFactorRating(runner.raceHistory))
+    .filter((value): value is number => value !== null);
+
+  if (teammateWinFactors.length <= 1) return 100;
+
+  const lowerCount = teammateWinFactors.filter(
+    (value) => value < athleteWinFactor,
+  ).length;
+  const tiedCount = teammateWinFactors.filter(
+    (value) => value === athleteWinFactor,
+  ).length;
+  // Rank position using the midpoint of the tied group so athletes tied for
+  // last don't get penalized more than athletes tied for first are rewarded.
+  const rank = lowerCount + (tiedCount + 1) / 2;
+  return round(((rank - 1) / (teammateWinFactors.length - 1)) * 100);
+}
+
+function calculateOverallRating(
+  ratings: Pick<
+    AthleteAttributeValues,
+    "crossCountry" | "indoor" | "outdoor" | "speed" | "endurance"
+  >,
+  winFactorPercentile: number | null,
+): number | null {
+  const seasonAverage = calculateWeightedRating([
+    [ratings.crossCountry, 1],
+    [ratings.indoor, 1],
+    [ratings.outdoor, 1],
+  ]);
+  const physicalAverage = calculateWeightedRating([
+    [ratings.speed, 1],
+    [ratings.endurance, 1],
+  ]);
+  const baseScore = calculateWeightedRating([
+    [seasonAverage, OVERALL_SEASON_AVERAGE_WEIGHT],
+    [physicalAverage, OVERALL_PHYSICAL_AVERAGE_WEIGHT],
+  ]);
+  if (baseScore === null) return null;
+
+  return winFactorPercentile === null
+    ? baseScore
+    : round(
+        baseScore * OVERALL_BASE_WEIGHT +
+          winFactorPercentile * OVERALL_WIN_FACTOR_WEIGHT,
+      );
+}
+
 type WeightedRating = [value: number | null, weight: number];
 
 function calculateWeightedRating(ratings: WeightedRating[]): number | null {
@@ -948,7 +1025,10 @@ function calculateWeightedRating(ratings: WeightedRating[]): number | null {
 }
 
 function calculateRunnerTypeClassification(
-  ratings: Omit<AthleteAttributeValues, "runnerType" | "runnerTypeScores">,
+  ratings: Omit<
+    AthleteAttributeValues,
+    "runnerType" | "runnerTypeScores" | "overall"
+  >,
 ): { runnerType: RunnerType | null; scores: RunnerTypeScores } {
   const grassGods = calculateWeightedRating([
         [ratings.crossCountry, 0.6],
@@ -1463,8 +1543,13 @@ export function calculateAthleteAttributes(
     winFactor: calculateWinFactorRating(athlete.raceHistory),
   };
   const classification = calculateRunnerTypeClassification(ratings);
+  const winFactorPercentile = calculateWinFactorPercentile(
+    athlete,
+    teamRunners,
+  );
   return {
     ...ratings,
+    overall: calculateOverallRating(ratings, winFactorPercentile),
     runnerType: classification.runnerType,
     runnerTypeScores: classification.scores,
   };
