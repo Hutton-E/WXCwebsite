@@ -161,6 +161,7 @@ const NON_CHAMPIONSHIP_WIN_FACTOR_POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
 const CONFERENCE_WIN_FACTOR_POINTS = [15, 13, 11, 9, 7, 6, 5, 4];
 const REGIONAL_WIN_FACTOR_POINTS = [18, 15, 13, 11, 9, 7, 6, 5];
 const WIN_FACTOR_SCALE = 10;
+const JACK_OF_ALL_RACES_MARGIN = 2;
 
 type WorldAthleticsScoreModel = readonly [quadratic: number, linear: number, offset: number];
 type WorldAthleticsGender = "men" | "women";
@@ -1013,30 +1014,38 @@ function calculateRunnerTypeClassification(
         outdoorAllstar,
         jackOfAllRaces,
       };
-  const eligibleScores: [RunnerType, number][] = [];
-  if (grassGods !== null && grassGods >= 65) {
+      const eligibleScores: [RunnerType, number][] = [];
+      if (grassGods !== null) {
         eligibleScores.push(["Grass God", grassGods]);
       }
-
-  if (indoorDemons !== null && indoorDemons >= 65) {
+      if (indoorDemons !== null) {
         eligibleScores.push(["Indoor Demon", indoorDemons]);
       }
-  if (outdoorAllstar !== null && outdoorAllstar >= 65) {
+      if (outdoorAllstar !== null) {
         eligibleScores.push(["Outdoor Allstar", outdoorAllstar]);
       }
-  const strongSeasonCount = seasonalScores.filter((score) => score >= 70).length;
-  if (
+      if (
         jackOfAllRaces !== null &&
         overallAverage !== null &&
         ratings.crossCountry !== null &&
         ratings.indoor !== null &&
-        ratings.outdoor !== null &&
-        strongSeasonCount >= 2 &&
-        overallAverage >= 75 &&
-        jackOfAllRaces >= 75
+        ratings.outdoor !== null
       ) {
-    eligibleScores.push(["Jack-Of-All-Races", jackOfAllRaces]);
-  }
+        const strongestSpecialtyScore = Math.max(
+          grassGods ?? -Infinity,
+          indoorDemons ?? -Infinity,
+          outdoorAllstar ?? -Infinity,
+        );
+        if (
+          jackOfAllRaces >=
+          strongestSpecialtyScore - JACK_OF_ALL_RACES_MARGIN
+        ) {
+          return {
+            runnerType: "Jack-Of-All-Races",
+            scores,
+          };
+        }
+      }
 
   eligibleScores.sort((first, second) => second[1] - first[1]);
   return {
