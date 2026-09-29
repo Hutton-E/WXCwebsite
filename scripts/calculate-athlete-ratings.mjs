@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * Calculates the cross country, indoor, and outdoor school-record ratings
+ * Calculates cross country, indoor, outdoor, 400m-equivalent speed, and
+ * 10000m-equivalent endurance ratings
  * from stored TFRRS histories and writes them to tfrrs_athlete_performance's
  * cross_country_rating, indoor_rating, outdoor_rating,
- * indoor_consistency_rating, and outdoor_consistency_rating columns. Raw
- * races, PRs, and public.athletes are not modified.
+ * indoor_consistency_rating, outdoor_consistency_rating, speed_rating, and
+ * endurance_rating columns. Raw races, PRs, and public.athletes are not modified.
  *
  * Apply supabase/athlete_record_ratings.sql first.
  */
@@ -108,6 +109,8 @@ async function main() {
       outdoor: attributes.outdoor,
       indoorConsistency: attributes.indoorConsistency,
       outdoorConsistency: attributes.outdoorConsistency,
+      speed: attributes.speed,
+      endurance: attributes.endurance,
     };
   });
 
@@ -126,10 +129,16 @@ async function main() {
   const outdoorConsistencyAvailable = calculatedRows.filter(
     (row) => row.outdoorConsistency !== null,
   ).length;
+  const speedAvailable = calculatedRows.filter(
+    (row) => row.speed !== null,
+  ).length;
+  const enduranceAvailable = calculatedRows.filter(
+    (row) => row.endurance !== null,
+  ).length;
 
   for (const row of calculatedRows.slice(0, 5)) {
     console.log(
-      `  ${row.athleteName}: XC ${formatScore(row.crossCountry)}, indoor ${formatScore(row.indoor)}, outdoor ${formatScore(row.outdoor)}, consistency: indoor ${formatScore(row.indoorConsistency)}, outdoor ${formatScore(row.outdoorConsistency)}`,
+      `  ${row.athleteName}: XC ${formatScore(row.crossCountry)}, indoor ${formatScore(row.indoor)}, outdoor ${formatScore(row.outdoor)}, speed ${formatScore(row.speed)}, endurance ${formatScore(row.endurance)}, consistency: indoor ${formatScore(row.indoorConsistency)}, outdoor ${formatScore(row.outdoorConsistency)}`,
     );
   }
   console.log(
@@ -146,6 +155,10 @@ async function main() {
   );
   console.log(
     `Outdoor consistency scores available: ${outdoorConsistencyAvailable}/${calculatedRows.length}.`,
+  );
+  console.log(`Speed ratings available: ${speedAvailable}/${calculatedRows.length}.`);
+  console.log(
+    `Endurance ratings available: ${enduranceAvailable}/${calculatedRows.length}.`,
   );
 
   if (dryRun) {
@@ -170,6 +183,8 @@ async function main() {
             outdoor_rating: row.outdoor,
             indoor_consistency_rating: row.indoorConsistency,
             outdoor_consistency_rating: row.outdoorConsistency,
+            speed_rating: row.speed,
+            endurance_rating: row.endurance,
           })
           .eq("tfrrs_id", row.tfrrsId)
           .select("tfrrs_id");
@@ -186,7 +201,7 @@ async function main() {
   }
 
   console.log(
-    `Updated cross_country_rating, indoor_rating, and outdoor_rating on ${updated} rows.`,
+    `Updated cross_country_rating, indoor_rating, outdoor_rating, speed_rating, and endurance_rating on ${updated} rows.`,
   );
 }
 
