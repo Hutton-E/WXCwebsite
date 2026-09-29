@@ -111,24 +111,24 @@ export function UserProvider({ children }: { children: ReactNode }) {
         if (data.tfrrs_id) {
           const [ratingsResult, rosterResult, consistencyResult] =
             await Promise.all([
-            supabase
-              .from("tfrrs_athlete_performance")
-              .select(
-                "cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating, win_factor_rating, runner_type",
-              )
-              .eq("tfrrs_id", data.tfrrs_id)
-              .maybeSingle(),
-            supabase
-              .from("athletes")
-              .select("tfrrs_id")
-              .eq("season", season)
-              .not("tfrrs_id", "is", null),
-            supabase
-              .from("tfrrs_athlete_performance")
-              .select("indoor_consistency_rating, outdoor_consistency_rating")
-              .eq("tfrrs_id", data.tfrrs_id)
-              .maybeSingle(),
-          ]);
+              supabase
+                .from("tfrrs_athlete_performance")
+                .select(
+                  "cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating, win_factor_rating, runner_type",
+                )
+                .eq("tfrrs_id", data.tfrrs_id)
+                .maybeSingle(),
+              supabase
+                .from("athletes")
+                .select("tfrrs_id")
+                .eq("season", season)
+                .not("tfrrs_id", "is", null),
+              supabase
+                .from("tfrrs_athlete_performance")
+                .select("indoor_consistency_rating, outdoor_consistency_rating")
+                .eq("tfrrs_id", data.tfrrs_id)
+                .maybeSingle(),
+            ]);
 
           if (ratingsResult.error) {
             console.error("Failed to load athlete ratings:", ratingsResult.error);

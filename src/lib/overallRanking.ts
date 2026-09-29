@@ -37,13 +37,13 @@ function calculateOverallScore(
     ratings.speedRating,
     ratings.enduranceRating,
   ]);
-  const weightedScores = [
+  const weightedScores: [number | null, number][] = [
     [seasonAverage, SEASON_WEIGHT],
     [physicalAverage, PHYSICAL_WEIGHT],
     [winFactorPercentile, WIN_FACTOR_WEIGHT],
-  ] as const;
+  ];
   const availableScores = weightedScores.filter(
-    (entry): entry is readonly [number, number] => entry[0] !== null,
+    (entry): entry is [number, number] => entry[0] !== null,
   );
   if (availableScores.length === 0) return null;
 

@@ -37,7 +37,9 @@ function PlayerCard({ athlete }: PlayerCardProps) {
       <header className="player-card-topline">
         <div className="player-card-corner player-card-rank">
           <span>RANK</span>
-          <strong aria-label={`Overall rank: ${athlete.overallRank ?? "not available"}`}>
+          <strong
+            aria-label={`Overall rank: ${athlete.overallRank ?? "not available"}`}
+          >
             {athlete.overallRank ?? "--"}
           </strong>
         </div>
