@@ -67,7 +67,7 @@ function PlayerCard({ athlete }: PlayerCardProps) {
           <span>RUNNER TYPE</span>
           <strong>--</strong>
         </div>
-        <p>--</p>
+        <p>{athlete.runnerType ?? "--"}</p>
       </section>
 
       <section className="player-card-consistency" aria-label="Ratings">

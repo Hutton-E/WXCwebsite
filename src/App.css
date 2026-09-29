@@ -66,14 +66,14 @@
 }
 
 .player-card-corner strong {
-  color: #8e1f32;
+  color: #f58220;
   font-family: "Acme", sans-serif;
   font-size: 15px;
   line-height: 1;
 }
 
 .player-card-brand {
-  color: #8e1f32;
+  color: #f58220;
   font-family: "Acme", sans-serif;
   font-size: 12px;
   text-align: center;
@@ -92,7 +92,7 @@
   height: 210px;
   margin: 28px 0 0;
   overflow: visible;
-  background: #25201e;
+  background: #111;
   border: 1px solid rgba(33, 27, 24, 0.28);
 }
 
@@ -106,10 +106,10 @@
   padding: 6px;
   transform: translateX(-50%);
   overflow: hidden;
-  color: #211b18;
+  color: #111;
   text-align: left;
-  background: #f1eadb;
-  border: 2px solid #c9a65e;
+  background: #fff;
+  border: 2px solid #f58220;
   border-radius: 8px;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48);
   animation: player-card-enter 380ms ease-out both;
@@ -148,7 +148,7 @@
   height: 100%;
   object-fit: contain;
   object-position: center;
-  background: #25201e;
+  background: #111;
 }
 
 .player-card-photo-fallback {
@@ -157,8 +157,8 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
-  color: #f1eadb;
-  background-color: #25201e;
+  color: #fff;
+  background-color: #111;
   background-image: radial-gradient(
     rgba(255, 255, 255, 0.1) 1px,
     transparent 1px
@@ -177,7 +177,7 @@
 }
 
 .player-card-type {
-  padding: 5px 3px;
+  padding: 9px 3px 11px;
   border-bottom: 1px solid rgba(33, 27, 24, 0.25);
 }
 
@@ -191,7 +191,7 @@
 .player-card-section-heading span,
 .player-card-consistency h2 {
   margin: 0;
-  color: #8e1f32;
+  color: #f58220;
   font-family: "Acme", sans-serif;
   font-size: 11px;
 }
@@ -202,11 +202,14 @@
 }
 
 .player-card-type p {
-  min-height: 14px;
-  margin: 3px 0 0;
-  color: #65594c;
-  font-size: 11px;
-  line-height: 1.3;
+  min-height: 34px;
+  margin: 4px 0 0;
+  color: #000000;
+  font-family: "Acme", sans-serif;
+  font-size: clamp(24px, 7vw, 34px);
+  font-weight: 700;
+  line-height: 1.05;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.75);
   overflow-wrap: anywhere;
 }
 
@@ -233,8 +236,8 @@
   gap: 4px;
   min-width: 0;
   padding: 4px 6px;
-  background: rgba(255, 255, 255, 0.42);
-  border: 1px solid rgba(33, 27, 24, 0.2);
+  background: #fff;
+  border: 1px solid rgba(17, 17, 17, 0.2);
   border-radius: 4px;
 }
 
@@ -266,7 +269,7 @@
 
 .player-card-rating-slot strong,
 .player-card-attribute-slot strong {
-  color: #211b18;
+  color: #111;
   font-family: "Acme", sans-serif;
   font-size: 12px;
 }
@@ -285,8 +288,9 @@
   min-height: 20px;
   padding: 0 8px;
   color: #fff;
-  background: #8e1f32;
-  border-top: 2px solid #c9a65e;
+  color: #fff;
+  background: #111;
+  border-top: 2px solid #f58220;
   font-family: "Acme", sans-serif;
   font-size: 9px;
 }
@@ -299,8 +303,8 @@
   z-index: 1;
   padding: 6px 9px;
   color: #fff;
-  background: rgba(142, 31, 50, 0.94);
-  border-bottom: 2px solid #c9a65e;
+  background: rgba(245, 130, 32, 0.96);
+  border-bottom: 2px solid #111;
   font-family: "Acme", sans-serif;
   font-size: 17px;
   line-height: 1.15;

@@ -24,6 +24,21 @@ export interface AthleteAttributeValues {
   speed: number | null;
   endurance: number | null;
   winFactor: number | null;
+  runnerType: RunnerType | null;
+  runnerTypeScores: RunnerTypeScores;
+}
+
+export type RunnerType =
+  | "Grass God"
+  | "Indoor Demon"
+  | "Outdoor Allstar"
+  | "Jack-Of-All-Races";
+
+export interface RunnerTypeScores {
+  grassGods: number | null;
+  indoorDemons: number | null;
+  outdoorAllstar: number | null;
+  jackOfAllRaces: number | null;
 }
 
 export interface AllAmericanAppearance {
@@ -904,11 +919,114 @@ function calculateWinFactorRating(
     if (placing !== null) {
       totalPoints += winFactorPointsForPlacing(placing, race.meet_name);
     }
+
   }
 
   return competedRaces === 0
     ? null
     : round((totalPoints / competedRaces) * WIN_FACTOR_SCALE);
+}
+
+type WeightedRating = [value: number | null, weight: number];
+
+function calculateWeightedRating(ratings: WeightedRating[]): number | null {
+  const availableRatings = ratings.filter(
+    (rating): rating is [number, number] => rating[0] !== null,
+  );
+  if (availableRatings.length === 0) return null;
+
+  const totalWeight = availableRatings.reduce(
+    (sum, [, weight]) => sum + weight,
+    0,
+  );
+  return round(
+    availableRatings.reduce(
+      (sum, [value, weight]) => sum + value * weight,
+      0,
+    ) / totalWeight,
+  );
+}
+
+function calculateRunnerTypeClassification(
+  ratings: Omit<AthleteAttributeValues, "runnerType" | "runnerTypeScores">,
+): { runnerType: RunnerType | null; scores: RunnerTypeScores } {
+  const grassGods = calculateWeightedRating([
+        [ratings.crossCountry, 0.6],
+        [ratings.endurance, 0.15],
+        [ratings.winFactor, 0.1],
+        [ratings.outdoor, 0.1],
+        [ratings.outdoorConsistency, 0.05],
+      ]);
+  const indoorDemons = calculateWeightedRating([
+        [ratings.indoor, 0.55],
+        [ratings.indoorConsistency, 0.2],
+        [ratings.speed, 0.15],
+        [ratings.winFactor, 0.1],
+      ]);
+  const outdoorAllstar = calculateWeightedRating([
+        [ratings.outdoor, 0.55],
+        [ratings.outdoorConsistency, 0.2],
+        [ratings.endurance, 0.1],
+        [ratings.speed, 0.05],
+        [ratings.winFactor, 0.1],
+      ]);
+
+  const seasonalScores = [grassGods, indoorDemons, outdoorAllstar].filter(
+        (score): score is number => score !== null,
+      );
+  const overallAverage = calculateWeightedRating([
+        [ratings.crossCountry, 1],
+        [ratings.indoor, 1],
+        [ratings.outdoor, 1],
+        [ratings.indoorConsistency, 1],
+        [ratings.outdoorConsistency, 1],
+        [ratings.speed, 1],
+        [ratings.endurance, 1],
+        [ratings.winFactor, 1],
+      ]);
+  const seasonalBalance = calculateWeightedRating(
+        seasonalScores.map((score) => [score, 1]),
+      );
+  const jackOfAllRaces =
+        overallAverage === null || seasonalBalance === null
+          ? null
+          : round(overallAverage * 0.7 + seasonalBalance * 0.3);
+
+  const scores: RunnerTypeScores = {
+        grassGods,
+        indoorDemons,
+        outdoorAllstar,
+        jackOfAllRaces,
+      };
+  const eligibleScores: [RunnerType, number][] = [];
+  if (grassGods !== null && grassGods >= 65) {
+        eligibleScores.push(["Grass God", grassGods]);
+      }
+  if (indoorDemons !== null && indoorDemons >= 65) {
+        eligibleScores.push(["Indoor Demon", indoorDemons]);
+      }
+  if (outdoorAllstar !== null && outdoorAllstar >= 65) {
+        eligibleScores.push(["Outdoor Allstar", outdoorAllstar]);
+      }
+  const strongSeasonCount = seasonalScores.filter((score) => score >= 70).length;
+  if (
+        jackOfAllRaces !== null &&
+        overallAverage !== null &&
+        ratings.crossCountry !== null &&
+        ratings.indoor !== null &&
+        ratings.outdoor !== null &&
+        strongSeasonCount >= 2 &&
+        overallAverage >= 75 &&
+        jackOfAllRaces >= 75
+      ) {
+    eligibleScores.push(["Jack-Of-All-Races", jackOfAllRaces]);
+  }
+
+  eligibleScores.sort((first, second) => second[1] - first[1]);
+  return {
+    runnerType: eligibleScores[0]?.[0] ?? null,
+    scores,
+  }
 }
 
 interface CrossCountryRawResult {
@@ -1334,7 +1452,7 @@ export function calculateAthleteAttributes(
   athlete: AthleteRosterInfo,
   teamRunners: readonly AthleteRosterInfo[] = [],
 ): AthleteAttributeValues {
-  return {
+  const ratings = {
     crossCountry: calculateCrossCountryRecordRating(athlete, teamRunners).score,
     indoor: calculateIndoorRecordRating(athlete, teamRunners).score,
     outdoor: calculateOutdoorRecordRating(athlete, teamRunners).score,
@@ -1343,5 +1461,11 @@ export function calculateAthleteAttributes(
     speed: calculateSpeedRating(athlete, teamRunners),
     endurance: calculateEnduranceRating(athlete, teamRunners),
     winFactor: calculateWinFactorRating(athlete.raceHistory),
+  };
+  const classification = calculateRunnerTypeClassification(ratings);
+  return {
+    ...ratings,
+    runnerType: classification.runnerType,
+    runnerTypeScores: classification.scores,
   };
 }
