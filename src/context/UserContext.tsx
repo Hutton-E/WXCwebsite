@@ -6,6 +6,10 @@ import {
   type ReactNode,
 } from "react";
 import { supabase } from "../lib/supabaseClient";
+import {
+  calculateOverallRanks,
+  type OverallRankingAthlete,
+} from "../lib/overallRanking";
 
 export interface Athlete {
   id: string;
@@ -25,6 +29,7 @@ export interface Athlete {
   speedRating: number | null;
   enduranceRating: number | null;
   winFactorRating: number | null;
+  overallRank: number | null;
   runnerType: string | null;
 }
 
@@ -102,8 +107,10 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
         let ratings = null;
         let consistencyRatings = null;
+        let overallRank: number | null = null;
         if (data.tfrrs_id) {
-          const [ratingsResult, consistencyResult] = await Promise.all([
+          const [ratingsResult, rosterResult, consistencyResult] =
+            await Promise.all([
             supabase
               .from("tfrrs_athlete_performance")
               .select(
@@ -111,6 +118,11 @@ export function UserProvider({ children }: { children: ReactNode }) {
               )
               .eq("tfrrs_id", data.tfrrs_id)
               .maybeSingle(),
+            supabase
+              .from("athletes")
+              .select("tfrrs_id")
+              .eq("season", season)
+              .not("tfrrs_id", "is", null),
             supabase
               .from("tfrrs_athlete_performance")
               .select("indoor_consistency_rating, outdoor_consistency_rating")
@@ -130,6 +142,53 @@ export function UserProvider({ children }: { children: ReactNode }) {
             );
           } else {
             consistencyRatings = consistencyResult.data;
+          }
+
+          if (rosterResult.error) {
+            console.error(
+              "Failed to load athlete roster for overall rankings:",
+              rosterResult.error,
+            );
+          } else {
+            const tfrrsIds = [
+              ...new Set(
+                (rosterResult.data ?? [])
+                  .map((row) => row.tfrrs_id)
+                  .filter((tfrrsId): tfrrsId is string => Boolean(tfrrsId)),
+              ),
+            ];
+            if (tfrrsIds.length > 0) {
+              const { data: rankingRows, error: rankingError } = await supabase
+                .from("tfrrs_athlete_performance")
+                .select(
+                  "tfrrs_id, cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating, win_factor_rating",
+                )
+                .in("tfrrs_id", tfrrsIds);
+
+              if (rankingError) {
+                console.error(
+                  "Failed to load athlete ratings for overall rankings:",
+                  rankingError,
+                );
+              } else {
+                const rankingAthletes: OverallRankingAthlete[] = (
+                  rankingRows ?? []
+                ).map((row) => ({
+                  id: row.tfrrs_id,
+                  ratings: {
+                    crossCountryRating: row.cross_country_rating,
+                    indoorRating: row.indoor_rating,
+                    outdoorRating: row.outdoor_rating,
+                    speedRating: row.speed_rating,
+                    enduranceRating: row.endurance_rating,
+                    winFactorRating: row.win_factor_rating,
+                  },
+                }));
+                overallRank =
+                  calculateOverallRanks(rankingAthletes).get(data.tfrrs_id) ??
+                  null;
+              }
+            }
           }
         }
 
@@ -154,6 +213,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
           speedRating: ratings?.speed_rating ?? null,
           enduranceRating: ratings?.endurance_rating ?? null,
           winFactorRating: ratings?.win_factor_rating ?? null,
+          overallRank,
           runnerType: ratings?.runner_type ?? null,
         });
         setAthleteLoading(false);
