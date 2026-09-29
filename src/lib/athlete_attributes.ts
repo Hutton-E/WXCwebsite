@@ -26,6 +26,11 @@ export interface AthleteAttributeValues {
   winFactor: number | null;
   runnerType: RunnerType | null;
   runnerTypeScores: RunnerTypeScores;
+  seasonAverage: number | null;
+  physicalAbilityAverage: number | null;
+  overallRating: number | null;
+  allAmericanCount: number;
+  secondTeamAllAmericanCount: number;
 }
 
 export type RunnerType =
@@ -941,14 +946,24 @@ function calculateWeightedRating(ratings: WeightedRating[]): number | null {
   );
   return round(
     availableRatings.reduce(
-      (sum, [value, weight]) => sum + value * weight,
+      (sum, [value, weight]) =>
+        sum + Math.min(100, Math.max(0, value)) * weight,
       0,
     ) / totalWeight,
   );
 }
 
 function calculateRunnerTypeClassification(
-  ratings: Omit<AthleteAttributeValues, "runnerType" | "runnerTypeScores">,
+  ratings: Omit<
+    AthleteAttributeValues,
+    | "runnerType"
+    | "runnerTypeScores"
+    | "seasonAverage"
+    | "physicalAbilityAverage"
+    | "overallRating"
+    | "allAmericanCount"
+    | "secondTeamAllAmericanCount"
+  >,
 ): { runnerType: RunnerType | null; scores: RunnerTypeScores } {
   const grassGods = calculateWeightedRating([
         [ratings.crossCountry, 0.6],
@@ -1002,6 +1017,7 @@ function calculateRunnerTypeClassification(
   if (grassGods !== null && grassGods >= 65) {
         eligibleScores.push(["Grass God", grassGods]);
       }
+
   if (indoorDemons !== null && indoorDemons >= 65) {
         eligibleScores.push(["Indoor Demon", indoorDemons]);
       }
@@ -1027,6 +1043,119 @@ function calculateRunnerTypeClassification(
     runnerType: eligibleScores[0]?.[0] ?? null,
     scores,
   }
+}
+
+function calculateOverallRatings(
+  ratings: Omit<
+    AthleteAttributeValues,
+    | "runnerType"
+    | "runnerTypeScores"
+    | "seasonAverage"
+    | "physicalAbilityAverage"
+    | "overallRating"
+    | "allAmericanCount"
+    | "secondTeamAllAmericanCount"
+  >,
+): {
+  seasonAverage: number | null;
+  physicalAbilityAverage: number | null;
+  overallRating: number | null;
+} {
+  const indoorSeason = calculateWeightedRating([
+    [ratings.indoor, 0.8],
+    [ratings.indoorConsistency, 0.2],
+  ]);
+  const outdoorSeason = calculateWeightedRating([
+    [ratings.outdoor, 0.8],
+    [ratings.outdoorConsistency, 0.2],
+  ]);
+  const seasonAverage = calculateWeightedRating([
+    [ratings.crossCountry, 1],
+    [indoorSeason, 1],
+    [outdoorSeason, 1],
+  ]);
+  const physicalAbilityAverage = calculateWeightedRating([
+    [ratings.speed, 1],
+    [ratings.endurance, 1],
+  ]);
+  const overallRating = calculateWeightedRating([
+    [seasonAverage, 0.65],
+    [physicalAbilityAverage, 0.25],
+    [ratings.winFactor, 0.1],
+  ]);
+
+  return { seasonAverage, physicalAbilityAverage, overallRating };
+}
+
+function calculateAllAmericanCounts(
+  raceHistory: readonly AthleteRaceRecord[],
+): { firstTeam: number; secondTeam: number } {
+  const bestPlacings = new Map<
+    string,
+    { placing: number; isTrack: boolean; isFinal: boolean }
+  >();
+
+  for (const race of raceHistory) {
+    if (race.status && race.status.trim().toUpperCase() !== "FINISHED") {
+      continue;
+    }
+    if (!race.meet_name || !race.meet_date) continue;
+    const year = race.meet_date.match(/^(\d{4})/)?.[1];
+    const placing = parsePlacingNumber(race.placing);
+    if (!year || placing === null || placing < 1) continue;
+
+    const seasonType = race.season_type?.trim().toLowerCase();
+    if (
+      seasonType === "cross_country" &&
+      ALL_AMERICAN_MEET_PATTERN.test(race.meet_name) &&
+      !REGIONAL_MEET_PATTERN.test(race.meet_name) &&
+      placing <= ALL_AMERICAN_PLACING_THRESHOLD
+    ) {
+      const key = `xc|${year}`;
+      const existing = bestPlacings.get(key);
+      if (!existing || placing < existing.placing) {
+        bestPlacings.set(key, { placing, isTrack: false, isFinal: true });
+      }
+      continue;
+    }
+
+    const isIndoor =
+      seasonType === "indoor" &&
+      INDOOR_ALL_AMERICAN_MEET_PATTERN.test(race.meet_name);
+    const isOutdoor =
+      seasonType === "outdoor" &&
+      OUTDOOR_ALL_AMERICAN_MEET_PATTERN.test(race.meet_name);
+    if (
+      (isIndoor || isOutdoor) &&
+      placing <= TRACK_ALL_AMERICAN_PLACING_THRESHOLD
+    ) {
+      const appearanceKey = `${seasonType}|${normalizeEvent(race.event)}|${year}`;
+      const isFinal = /\(f\)\s*$/i.test(race.placing ?? "");
+      const existing = bestPlacings.get(appearanceKey);
+      if (
+        !existing ||
+        (isFinal && !existing.isFinal) ||
+        (isFinal === existing.isFinal && placing < existing.placing)
+      ) {
+        bestPlacings.set(appearanceKey, { placing, isTrack: true, isFinal });
+      }
+    }
+  }
+
+  return {
+    firstTeam: [...bestPlacings.values()].filter(
+      ({ placing, isTrack }) =>
+        isTrack
+          ? placing <= TRACK_FIRST_TEAM_ALL_AMERICAN_PLACING_THRESHOLD
+          : placing <= ALL_AMERICAN_PLACING_THRESHOLD,
+    ).length,
+    secondTeam: [...bestPlacings.values()].filter(
+      ({ placing, isTrack }) =>
+        isTrack &&
+        placing > TRACK_FIRST_TEAM_ALL_AMERICAN_PLACING_THRESHOLD &&
+        placing <= TRACK_ALL_AMERICAN_PLACING_THRESHOLD,
+    ).length,
+  };
 }
 
 interface CrossCountryRawResult {
@@ -1463,9 +1592,14 @@ export function calculateAthleteAttributes(
     winFactor: calculateWinFactorRating(athlete.raceHistory),
   };
   const classification = calculateRunnerTypeClassification(ratings);
+  const overall = calculateOverallRatings(ratings);
+  const allAmericanCounts = calculateAllAmericanCounts(athlete.raceHistory);
   return {
     ...ratings,
     runnerType: classification.runnerType,
     runnerTypeScores: classification.scores,
+    ...overall,
+    allAmericanCount: allAmericanCounts.firstTeam,
+    secondTeamAllAmericanCount: allAmericanCounts.secondTeam,
   };
 }

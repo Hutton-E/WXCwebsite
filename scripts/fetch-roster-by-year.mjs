@@ -33,16 +33,16 @@ const TEAMS = [
 const DELAY_MS = 700;
 
 const GRADUATION_OFFSETS = {
-  freshman: 3,
-  sophomore: 2,
-  junior: 1,
-  senior: 0,
-  graduate: 0,
-  fr: 3,
-  so: 2,
-  jr: 1,
-  sr: 0,
-  gr: 0,
+  freshman: 4,
+  sophomore: 3,
+  junior: 2,
+  senior: 1,
+  graduate: 1,
+  fr: 4,
+  so: 3,
+  jr: 2,
+  sr: 1,
+  gr: 1,
 };
 
 function sleep(ms) {

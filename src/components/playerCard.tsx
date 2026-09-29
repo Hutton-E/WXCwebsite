@@ -36,10 +36,10 @@ function PlayerCard({ athlete }: PlayerCardProps) {
     <article className="player-card" aria-label={`${athlete.name} player card`}>
       <header className="player-card-topline">
         <div className="player-card-corner player-card-rank">
-          <span>RANK</span>
-          <strong>--</strong>
+          <span>OVERALL</span>
+          <strong>{athlete.overallRating?.toFixed(2) ?? "--"}</strong>
         </div>
-        <span className="player-card-brand">WARTBURG RUNNER</span>
+        <span className="player-card-brand"> Wartburg XC/TF</span>
         <div className="player-card-corner player-card-graduation">
           <span>CLASS</span>
           <strong>{athlete.graduationYear ?? "--"}</strong>
@@ -65,7 +65,10 @@ function PlayerCard({ athlete }: PlayerCardProps) {
       <section className="player-card-type" aria-label="Runner type">
         <div className="player-card-section-heading">
           <span>RUNNER TYPE</span>
-          <strong>--</strong>
+          <strong>
+            1st-T AA: {athlete.allAmericanCount} | 2nd-T AA:{" "}
+            {athlete.secondTeamAllAmericanCount}
+          </strong>
         </div>
         <p>{athlete.runnerType ?? "--"}</p>
       </section>

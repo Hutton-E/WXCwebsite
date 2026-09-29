@@ -26,6 +26,10 @@ export interface Athlete {
   enduranceRating: number | null;
   winFactorRating: number | null;
   runnerType: string | null;
+  overallRating: number | null;
+  overallRank: number | null;
+  allAmericanCount: number;
+  secondTeamAllAmericanCount: number;
 }
 
 interface UserContextValue {
@@ -107,7 +111,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
             supabase
               .from("tfrrs_athlete_performance")
               .select(
-                "cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating, win_factor_rating, runner_type",
+                "cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating, win_factor_rating, runner_type, overall_rating, overall_rank, all_american_count, second_team_all_american_count",
               )
               .eq("tfrrs_id", data.tfrrs_id)
               .maybeSingle(),
@@ -155,6 +159,11 @@ export function UserProvider({ children }: { children: ReactNode }) {
           enduranceRating: ratings?.endurance_rating ?? null,
           winFactorRating: ratings?.win_factor_rating ?? null,
           runnerType: ratings?.runner_type ?? null,
+          overallRating: ratings?.overall_rating ?? null,
+          overallRank: ratings?.overall_rank ?? null,
+          allAmericanCount: ratings?.all_american_count ?? 0,
+          secondTeamAllAmericanCount:
+            ratings?.second_team_all_american_count ?? 0,
         });
         setAthleteLoading(false);
       });

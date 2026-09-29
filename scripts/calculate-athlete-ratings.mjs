@@ -117,8 +117,19 @@ async function main() {
       winFactor: attributes.winFactor,
       runnerType: attributes.runnerType,
       runnerTypeScores: attributes.runnerTypeScores,
+      seasonAverage: attributes.seasonAverage,
+      physicalAbilityAverage: attributes.physicalAbilityAverage,
+      overallRating: attributes.overallRating,
+      allAmericanCount: attributes.allAmericanCount,
+      secondTeamAllAmericanCount: attributes.secondTeamAllAmericanCount,
     };
   });
+  const rankedRows = calculatedRows
+    .filter((row) => row.overallRating !== null)
+    .sort((first, second) => second.overallRating - first.overallRating);
+  const overallRankByTfrrsId = new Map(
+    rankedRows.map((row, index) => [row.tfrrsId, index + 1]),
+  );
 
   const crossCountryAvailable = calculatedRows.filter(
     (row) => row.crossCountry !== null,
@@ -200,6 +211,12 @@ async function main() {
             win_factor_rating: row.winFactor,
             runner_type: row.runnerType,
             runner_type_scores: row.runnerTypeScores,
+            season_average: row.seasonAverage,
+            physical_ability_average: row.physicalAbilityAverage,
+            overall_rating: row.overallRating,
+            overall_rank: overallRankByTfrrsId.get(row.tfrrsId) ?? null,
+            all_american_count: row.allAmericanCount,
+            second_team_all_american_count: row.secondTeamAllAmericanCount,
           })
           .eq("tfrrs_id", row.tfrrsId)
           .select("tfrrs_id");

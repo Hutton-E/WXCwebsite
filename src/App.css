@@ -66,10 +66,15 @@
 }
 
 .player-card-corner strong {
-  color: #f58220;
+  color: #000000;
   font-family: "Acme", sans-serif;
   font-size: 15px;
   line-height: 1;
+}
+
+.player-card-rank strong,
+.player-card-graduation strong {
+  color: #f58220;
 }
 
 .player-card-brand {
@@ -109,7 +114,7 @@
   color: #111;
   text-align: left;
   background: #fff;
-  border: 2px solid #f58220;
+  border: 2px solid rgb(245, 131, 31);
   border-radius: 8px;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48);
   animation: player-card-enter 380ms ease-out both;
@@ -262,7 +267,7 @@
 
 .player-card-rating-slot span,
 .player-card-attribute-slot span {
-  color: #65594c;
+  color: rgb(245, 131, 31);
   font-size: 8px;
   font-weight: 700;
 }
