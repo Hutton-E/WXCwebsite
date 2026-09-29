@@ -22,6 +22,8 @@ export interface Athlete {
   outdoorRating: number | null;
   indoorConsistencyRating: number | null;
   outdoorConsistencyRating: number | null;
+  speedRating: number | null;
+  enduranceRating: number | null;
 }
 
 interface UserContextValue {
@@ -102,7 +104,9 @@ export function UserProvider({ children }: { children: ReactNode }) {
           const [ratingsResult, consistencyResult] = await Promise.all([
             supabase
               .from("tfrrs_athlete_performance")
-              .select("cross_country_rating, indoor_rating, outdoor_rating")
+              .select(
+                "cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating",
+              )
               .eq("tfrrs_id", data.tfrrs_id)
               .maybeSingle(),
             supabase
@@ -145,6 +149,8 @@ export function UserProvider({ children }: { children: ReactNode }) {
             consistencyRatings?.indoor_consistency_rating ?? null,
           outdoorConsistencyRating:
             consistencyRatings?.outdoor_consistency_rating ?? null,
+          speedRating: ratings?.speed_rating ?? null,
+          enduranceRating: ratings?.endurance_rating ?? null,
         });
         setAthleteLoading(false);
       });

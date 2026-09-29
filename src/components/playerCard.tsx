@@ -101,13 +101,23 @@ function PlayerCard({ athlete }: PlayerCardProps) {
         aria-label="Runner attributes"
       >
         {[
-          ["SPEED", "Speed"],
-          ["ENDURANCE", "Endurance"],
-          ["WIN FACTOR", "Win factor"],
-        ].map(([label, description]) => (
+          {
+            label: "SPEED",
+            description: "Speed",
+            value: athlete.speedRating,
+          },
+          {
+            label: "ENDURANCE",
+            description: "Endurance",
+            value: athlete.enduranceRating,
+          },
+          { label: "WIN FACTOR", description: "Win factor", value: null },
+        ].map(({ label, description, value }) => (
           <div className="player-card-attribute-slot" key={label}>
             <span>{label}</span>
-            <strong aria-label={`${description}: not rated`}>--</strong>
+            <strong aria-label={`${description}: ${value ?? "not rated"}`}>
+              {value?.toFixed(1) ?? "--"}
+            </strong>
           </div>
         ))}
       </section>
