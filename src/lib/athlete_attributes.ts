@@ -151,9 +151,9 @@ const CONSISTENCY_PENALTY_PER_PERCENT_VARIATION = 10;
 // is a short 800m or a long 5000m. Running the actual PR itself scores a
 // perfect 100 since its gap to the record is zero.
 const PR_CLOSENESS_PENALTY_PER_PERCENT_OFF = 10;
-const MID_DISTANCE_800M_400M_TIME_ADJUSTMENT = 1.03;
-const MID_DISTANCE_1500_MILE_400M_TIME_ADJUSTMENT = 1.04;
-const DISTANCE_400M_TIME_ADJUSTMENT = 1.05;
+const MID_DISTANCE_800M_400M_TIME_ADJUSTMENT = 1.04;
+const MID_DISTANCE_1500_MILE_400M_TIME_ADJUSTMENT = 1.05;
+const DISTANCE_400M_TIME_ADJUSTMENT = 1.06;
 const LONG_DISTANCE_400M_TIME_ADJUSTMENT = 1.07;
 const PREDICTED_10000M_TIME_ADJUSTMENT = 1.02;
 const MID_DISTANCE_10000M_TIME_ADJUSTMENT = 1.07;
@@ -583,7 +583,7 @@ function predictedPerformanceSeconds(
   return closest / 100;
 }
 
-function athlete400EquivalentSeconds(
+export function athlete400EquivalentSeconds(
   athlete: AthleteRosterInfo,
 ): number | null {
   const gender: WorldAthleticsGender | null =
@@ -600,37 +600,48 @@ function athlete400EquivalentSeconds(
       (entry): entry is { race: AthleteRaceRecord; result: TrackRace } =>
         entry.result !== null,
     );
-  const direct400Results = races
-    .filter((entry) => entry.result.distanceMeters === 400)
-    .map((entry) => entry.result.seconds);
+  const direct400Results = direct400Seconds(athlete.raceHistory);
   if (direct400Results.length > 0) {
     return Math.min(...direct400Results);
   }
 
-  const scoredRaces = races
-    .map(({ result }) => {
+  const bestResultByEvent = new Map<
+    string,
+    { result: TrackRace; points: number }
+  >();
+  for (const { result } of races) {
+      if (result.distanceMeters === 400) continue;
       const sourceModel = scoreModelForRace(gender, result);
-      if (!sourceModel) return null;
-      return {
+      if (!sourceModel) continue;
+
+      const eventKey = `${result.distanceMeters}|${result.shortTrack}`;
+      const scoredResult = {
         result,
         points: worldAthleticsPoints(result.seconds, sourceModel),
       };
-    })
-    .filter(
-      (entry): entry is { result: TrackRace; points: number } => entry !== null,
-    )
+      const existing = bestResultByEvent.get(eventKey);
+      if (!existing || scoredResult.points > existing.points) {
+        bestResultByEvent.set(eventKey, scoredResult);
+      }
+  }
+
+  const lowestDistanceEvents = [...bestResultByEvent.values()]
     .sort(
       (first, second) =>
         first.result.distanceMeters - second.result.distanceMeters ||
         second.points - first.points,
-    );
-  const shortestRace = scoredRaces[0];
-  if (!shortestRace) return null;
+    )
+    .slice(0, 3);
+  if (lowestDistanceEvents.length === 0) return null;
+
+  const bestSpeedResult = lowestDistanceEvents.reduce((best, candidate) =>
+    candidate.points > best.points ? candidate : best,
+  );
 
   const targetModel = scoreModelForRace(gender, {
     distanceMeters: 400,
     seconds: 0,
-    shortTrack: shortestRace.result.shortTrack,
+    shortTrack: bestSpeedResult.result.shortTrack,
   });
   if (!targetModel) return null;
 
@@ -644,13 +655,25 @@ function athlete400EquivalentSeconds(
         ? LONG_DISTANCE_400M_TIME_ADJUSTMENT
         : DISTANCE_400M_TIME_ADJUSTMENT;
   const convertedSeconds = predictedPerformanceSeconds(
-    shortestRace.points,
+    bestSpeedResult.points,
     targetModel,
     25,
   );
   return convertedSeconds === null
     ? null
     : round(convertedSeconds * adjustment);
+}
+
+function direct400Seconds(
+  raceHistory: readonly AthleteRaceRecord[],
+): number[] {
+  return raceHistory
+    .map(parseTrackRace)
+    .filter(
+      (result): result is TrackRace =>
+        result !== null && result.distanceMeters === 400,
+    )
+    .map((result) => result.seconds);
 }
 
 function athlete10000EquivalentSeconds(
@@ -795,7 +818,17 @@ function calculateSpeedRating(
     ? teamRunners
     : [...teamRunners, athlete];
   const sameTeamRunners = pool.filter((runner) => runner.team === athlete.team);
-  const fastestSeconds = sameTeamRunners.reduce<number | null>(
+  const fastestLegitimate400Seconds = sameTeamRunners.reduce<number | null>(
+    (fastest, runner) => {
+      const direct400 = direct400Seconds(runner.raceHistory);
+      const seconds = direct400.length > 0 ? Math.min(...direct400) : null;
+      return seconds !== null && (fastest === null || seconds < fastest)
+        ? seconds
+        : fastest;
+    },
+    null,
+  );
+  const fastestSeconds = fastestLegitimate400Seconds ?? sameTeamRunners.reduce<number | null>(
     (fastest, runner) => {
       const seconds = athlete400EquivalentSeconds(runner);
       return seconds !== null && (fastest === null || seconds < fastest)
@@ -815,9 +848,16 @@ function calculateSpeedRating(
     fastestSeconds,
     anchorRecordSeconds,
   );
+  const cappedAthleteSeconds =
+    fastestLegitimate400Seconds === null
+      ? athleteSeconds
+      : Math.max(athleteSeconds, fastestLegitimate400Seconds);
   return Math.max(
     0,
-    round(100 - ((athleteSeconds - fastestSeconds) * 10) / secondsPerTenPoints),
+    round(
+      100 -
+        ((cappedAthleteSeconds - fastestSeconds) * 10) / secondsPerTenPoints,
+    ),
   );
 }
 
