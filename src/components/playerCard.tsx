@@ -1,9 +1,5 @@
 import { useState } from "react";
 import type { Athlete } from "../context/UserContext";
-import {
-  analyzeAchievements,
-  buildAchievementSummary,
-} from "../lib/athleteAchievements";
 
 interface PlayerCardProps {
   athlete: Athlete;
@@ -37,62 +33,6 @@ function PlayerCard({ athlete }: PlayerCardProps) {
       consistency: athlete.outdoorConsistencyRating,
     },
   ];
-  const scoreSignals = [
-    {
-      label: "SEASON FORM",
-      value: athlete.overallRating,
-      detail: "65% of the overall score",
-    },
-    {
-      label: "PHYSICAL",
-      value:
-        athlete.speedRating !== null && athlete.enduranceRating !== null
-          ? (athlete.speedRating + athlete.enduranceRating) / 2
-          : athlete.speedRating ?? athlete.enduranceRating,
-      detail: "25%: speed and endurance",
-    },
-    {
-      label: "WIN FACTOR",
-      value: athlete.winFactorRating,
-      detail: "10%: finishes at scored meets",
-    },
-  ];
-  const achievementSummary = buildAchievementSummary(
-    athlete.name,
-    athlete.raceHistory,
-    athlete.runnerType,
-    {
-      crossCountry: athlete.crossCountryRating,
-      indoor: athlete.indoorRating,
-      outdoor: athlete.outdoorRating,
-      speed: athlete.speedRating,
-      endurance: athlete.enduranceRating,
-      winFactor: athlete.winFactorRating,
-    },
-    {
-      firstTeam: athlete.allAmericanCount,
-      secondTeam: athlete.secondTeamAllAmericanCount,
-    },
-  );
-  const achievementAnalysis = analyzeAchievements(athlete.raceHistory);
-  const firstName = athlete.name.split(" ")[0];
-  const bestPerformance = athlete.bestWorldAthleticsPerformance;
-  const fallbackPerformance =
-    athlete.topAchievements[0]
-      ? `${athlete.topAchievements[0].label} at ${athlete.topAchievements[0].meetName}`
-      : bestPerformance
-        ? `${bestPerformance.mark} in the ${bestPerformance.event} (${bestPerformance.points} World Athletics points)`
-      : athlete.runnerType
-        ? `${athlete.runnerType} profile across the available results`
-        : "a growing body of competitive results";
-  function scoreSignal(value: number | null): string {
-    if (value === null) return "Not enough data yet";
-    if (value >= 90) return "A standout strength";
-    if (value >= 75) return "A strong contributor";
-    if (value >= 60) return "Building momentum";
-    return "Room to grow";
-  }
-
   return (
     <div className={`player-card-shell${isFlipped ? " is-flipped" : ""}`}>
       <article className="player-card player-card-face player-card-front" aria-label={`${athlete.name} player card`}>
@@ -188,47 +128,10 @@ function PlayerCard({ athlete }: PlayerCardProps) {
           <span>View Card Front</span>
           <span aria-hidden="true">↻</span>
         </button>
-        <header className="player-card-back-header">
-          <span>FULL PICTURE</span>
-          <strong>{athlete.name}</strong>
-          <small>Verified TFRRS results and team records</small>
-        </header>
-        <section className="player-card-back-section">
-          <p className="player-card-back-summary">
-            In total, {firstName} is a {athlete.allAmericanCount}x first-team All-American in XC,
-            {achievementAnalysis.firstTeamByDiscipline.indoor ?? 0}x first-team All-American indoors,
-            {achievementAnalysis.firstTeamByDiscipline.outdoor ?? 0}x first-team All-American outdoors,
-            {achievementAnalysis.secondTeamByDiscipline.indoor ?? 0}x second-team All-American indoors,
-            {achievementAnalysis.secondTeamByDiscipline.outdoor ?? 0}x second-team All-American outdoors.
-            {bestPerformance
-              ? ` The standout mark is ${bestPerformance.mark} in ${bestPerformance.event}, worth ${bestPerformance.points} World Athletics points.`
-              : ` The standout performance is ${fallbackPerformance}.`}
-            {" "}{achievementSummary}
-          </p>
+        <section className="player-card-summary-panel" aria-label="Athlete summary">
+          <h2>ABOUT THE ATHLETE</h2>
+          <p>{athlete.cardSummary}</p>
         </section>
-        <section className="player-card-back-section" aria-label="Your score signals">
-          <h2>WHY THIS SCORE</h2>
-          <div className="player-card-signal-list">
-            {scoreSignals.map(({ label, value, detail }) => (
-              <div className="player-card-signal" key={label}>
-                <div>
-                  <strong>{label}</strong>
-                  <small>{detail}</small>
-                </div>
-                <span>
-                  <strong>{value?.toFixed(1) ?? "--"}</strong>
-                  <small>{scoreSignal(value)}</small>
-                </span>
-              </div>
-            ))}
-          </div>
-          <p className="player-card-back-note">
-            The overall score blends these signals, and missing data is never treated as a zero.
-          </p>
-        </section>
-        <p className="player-card-back-footnote">
-          Event ratings compare your best marks with Wartburg records. Track ratings include consistency, and strong national finishes can add a small bonus.
-        </p>
       </article>
     </div>
   );

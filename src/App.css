@@ -208,160 +208,26 @@
   animation: none;
 }
 
-.player-card-back-header {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding-bottom: 11px;
-  border-bottom: 2px solid #f58220;
+.player-card-summary-panel {
+  height: 33%;
+  box-sizing: border-box;
+  padding: 8px 2px 10px;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(33, 27, 24, 0.2);
 }
 
-.player-card-back-header > span,
-.player-card-back-section h2 {
-  margin: 0;
+.player-card-summary-panel h2 {
+  margin: 0 0 7px;
   color: #f58220;
   font: 11px/1.1 "Acme", sans-serif;
   letter-spacing: 0.4px;
 }
 
-.player-card-back-header strong {
-  color: #211b18;
-  font: 25px/1.05 "Acme", sans-serif;
-  overflow-wrap: anywhere;
-}
-
-.player-card-back-header small,
-.player-card-back-note,
-.player-card-back-summary,
-.player-card-back-footnote {
+.player-card-summary-panel p {
+  margin: 0;
   color: #65594c;
   font-size: 10px;
   line-height: 1.35;
-}
-
-.player-card-back-section {
-  padding: 13px 0;
-  border-bottom: 1px solid rgba(33, 27, 24, 0.2);
-}
-
-.player-card-formula {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-top: 8px;
-}
-
-.player-card-formula span {
-  flex: 1 1 30%;
-  min-width: 75px;
-  padding: 7px 5px;
-  color: #211b18;
-  background: #fff;
-  border: 1px solid rgba(245, 130, 32, 0.65);
-  border-radius: 4px;
-  font: 11px/1.15 "Acme", sans-serif;
-  text-align: center;
-}
-
-.player-card-back-note {
-  margin-top: 8px;
-}
-
-.player-card-back-summary {
-  margin: 8px 0 0;
-}
-
-.player-card-accolade-list {
-  display: grid;
-  gap: 3px;
-  margin: 8px 0 0;
-  padding-left: 16px;
-  color: #65594c;
-  font-size: 10px;
-  line-height: 1.25;
-}
-
-.player-card-back-label {
-  margin: 10px 0 0;
-  color: #f58220;
-  font: 10px/1.1 "Acme", sans-serif;
-  letter-spacing: 0.3px;
-}
-
-.player-card-yearly-accolades {
-  display: grid;
-  gap: 2px;
-  margin-top: 9px;
-  color: #65594c;
-  font-size: 9px;
-  line-height: 1.25;
-}
-
-.player-card-yearly-accolades p {
-  margin: 0;
-}
-
-.player-card-yearly-accolades strong {
-  color: #211b18;
-}
-
-.player-card-signal-list {
-  display: grid;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.player-card-signal {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 8px;
-  background: rgba(255, 255, 255, 0.8);
-  border-left: 3px solid #f58220;
-}
-
-.player-card-signal div {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.player-card-signal strong {
-  color: #211b18;
-  font: 12px/1 "Acme", sans-serif;
-}
-
-.player-card-signal small {
-  color: #65594c;
-  font-size: 9px;
-}
-
-.player-card-signal > span {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-  flex-shrink: 0;
-  color: #211b18;
-  font-size: 9px;
-  font-weight: 700;
-  text-align: right;
-}
-
-.player-card-signal > span strong {
-  font: 15px/1 "Acme", sans-serif;
-}
-
-.player-card-signal > span small {
-  color: #65594c;
-  font-size: 8px;
-  font-weight: 400;
-}
-
-.player-card-back-footnote {
-  margin-top: auto;
-  padding-top: 10px;
 }
 
 .player-card-page {
