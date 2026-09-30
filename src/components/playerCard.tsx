@@ -132,6 +132,39 @@ function PlayerCard({ athlete }: PlayerCardProps) {
           <h2>ABOUT THE ATHLETE</h2>
           <p>{athlete.cardSummary}</p>
         </section>
+        <section className="player-card-rating-guide" aria-label="How ratings are calculated">
+          <h2>HOW RATINGS ARE CALCULATED</h2>
+          <dl>
+            <div>
+              <dt>Overall</dt>
+              <dd>Combines season performance, physical ability, and success in competition.</dd>
+            </div>
+            <div>
+              <dt>XC</dt>
+              <dd>Compares the athlete&apos;s best cross country time with the team&apos;s best at the standard distance, with credit for All-American finishes.</dd>
+            </div>
+            <div>
+              <dt>Indoor / Outdoor</dt>
+              <dd>Compares track performances with team records across qualifying events, giving more influence to events raced more often.</dd>
+            </div>
+            <div>
+              <dt>Consistency</dt>
+              <dd>Rewards performances that stay close to the athlete&apos;s personal best and penalizes large swings from race to race.</dd>
+            </div>
+            <div>
+              <dt>Speed</dt>
+              <dd>Converts the athlete&apos;s best track mark to an equivalent 400-meter time and compares it with the team&apos;s fastest.</dd>
+            </div>
+            <div>
+              <dt>Endurance</dt>
+              <dd>Converts the athlete&apos;s best distance performance to an equivalent 10,000-meter time and compares it with the team&apos;s fastest.</dd>
+            </div>
+            <div>
+              <dt>Win factor</dt>
+              <dd>Measures average race success, with more credit for high finishes at conference, regional, and national meets.</dd>
+            </div>
+          </dl>
+        </section>
       </article>
     </div>
   );
