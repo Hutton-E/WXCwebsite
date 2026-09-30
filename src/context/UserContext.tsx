@@ -46,6 +46,14 @@ const UserContext = createContext<UserContextValue | undefined>(undefined);
 const ID_KEY = "wxc_selected_athlete_id";
 const SEASON_KEY = "wxc_selected_season";
 
+function normalizeAthleteName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function UserProvider({ children }: { children: ReactNode }) {
   const [athleteId, setAthleteIdState] = useState<string | null>(() =>
     sessionStorage.getItem(ID_KEY),
@@ -137,6 +145,35 @@ export function UserProvider({ children }: { children: ReactNode }) {
           }
         }
 
+        let photoUrl = data.photo_url;
+        if (!photoUrl) {
+          const { data: historicalRows, error: historicalPhotoError } =
+            await supabase
+              .from("athletes")
+              .select("name, team, season, tfrrs_id, photo_url")
+              .eq("team", data.team)
+              .lt("season", data.season)
+              .not("photo_url", "is", null)
+              .order("season", { ascending: false });
+
+          if (historicalPhotoError) {
+            console.error(
+              "Failed to load historical roster photo fallback:",
+              historicalPhotoError,
+            );
+          } else {
+            const normalizedName = normalizeAthleteName(data.name);
+            const historicalPhoto = (historicalRows ?? []).find(
+              (row) =>
+                (data.tfrrs_id &&
+                  row.tfrrs_id &&
+                  row.tfrrs_id === data.tfrrs_id) ||
+                normalizeAthleteName(row.name) === normalizedName,
+            );
+            photoUrl = historicalPhoto?.photo_url ?? null;
+          }
+        }
+
         if (cancelled) return;
         setAthlete({
           id: data.id,
@@ -145,7 +182,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
           team: data.team,
           hometown: data.hometown,
           highSchool: data.high_school,
-          photoUrl: data.photo_url,
+          photoUrl,
           tfrrsId: data.tfrrs_id,
           graduationYear: data.graduation_year,
           crossCountryRating: ratings?.cross_country_rating ?? null,

@@ -13,6 +13,13 @@ import { getAuthenticatedSupabaseClient } from "../src/lib/supabaseAdminClient.m
 const PAGE_SIZE = 1000;
 const DELAY_MS = 700;
 const PROFILE_ORIGIN = "https://www.tfrrs.org";
+// TFRRS can create a new profile ID when an athlete changes schools.
+// Keep the current roster ID as the canonical storage key, but import the
+// athlete's historical profiles into that same record.
+const HISTORICAL_PROFILE_IDS = {
+  "9445700": ["9259583"],
+  "8659713": ["7043067"],
+};
 const MONTHS = {
   jan: "01",
   january: "01",
@@ -203,8 +210,8 @@ function parseRaceHistory($) {
   return races;
 }
 
-async function fetchAthletePerformance(athlete) {
-  const sourceUrl = resolveProfileUrl(athlete.tfrrsId, athlete.name);
+async function fetchAthletePerformance(athlete, profileId = athlete.tfrrsId) {
+  const sourceUrl = resolveProfileUrl(profileId, athlete.name);
   const response = await fetch(sourceUrl, {
     headers: { "User-Agent": "Mozilla/5.0 (WXC TFRRS results importer)" },
   });
@@ -223,7 +230,50 @@ async function fetchAthletePerformance(athlete) {
     throw new Error(`No recognized PR or race-history tables at ${sourceUrl}`);
   }
 
-  return { sourceUrl, personalRecords, raceHistory };
+  return { profileId, sourceUrl, personalRecords, raceHistory };
+}
+
+function mergePerformance(performanceEntries) {
+  const raceHistory = [];
+  const seenRaces = new Set();
+  const personalRecords = {
+    overall: [],
+    cross_country: [],
+    indoor: [],
+    outdoor: [],
+  };
+  const seenRecords = new Set();
+
+  for (const performance of performanceEntries) {
+    for (const race of performance.raceHistory) {
+      const key = [
+        race.meet_date,
+        race.meet_name,
+        race.event,
+        race.mark,
+        race.placing,
+        race.result_url,
+      ].join("|");
+      if (seenRaces.has(key)) continue;
+      seenRaces.add(key);
+      raceHistory.push(race);
+    }
+
+    for (const [seasonType, records] of Object.entries(
+      performance.personalRecords,
+    )) {
+      for (const record of records) {
+        const key = [seasonType, record.event, record.mark, record.result_url].join(
+          "|",
+        );
+        if (seenRecords.has(key)) continue;
+        seenRecords.add(key);
+        personalRecords[seasonType].push(record);
+      }
+    }
+  }
+
+  return { raceHistory, personalRecords };
 }
 
 async function fetchRosterAthletes(supabase) {
@@ -291,7 +341,31 @@ async function main() {
   for (let index = 0; index < athletes.length; index++) {
     const athlete = athletes[index];
     try {
-      const performance = await fetchAthletePerformance(athlete);
+      const profileIds = [
+        athlete.tfrrsId,
+        ...(HISTORICAL_PROFILE_IDS[athlete.tfrrsId] ?? []),
+      ];
+      const performances = [];
+      const profileErrors = [];
+      for (const profileId of profileIds) {
+        try {
+          performances.push(await fetchAthletePerformance(athlete, profileId));
+        } catch (error) {
+          profileErrors.push(`${profileId}: ${error.message}`);
+        }
+      }
+      if (performances.length === 0) {
+        throw new Error(profileErrors.join("; "));
+      }
+      if (profileErrors.length > 0) {
+        console.warn(
+          `[${index + 1}/${athletes.length}] ${athlete.name}: skipped profile(s): ${profileErrors.join("; ")}`,
+        );
+      }
+      const performance = {
+        ...mergePerformance(performances),
+        sourceUrl: performances[0].sourceUrl,
+      };
       console.log(
         `[${index + 1}/${athletes.length}] ${athlete.name}: ${performance.raceHistory.length} races, ${Object.values(performance.personalRecords).reduce((count, records) => count + records.length, 0)} PR entries`,
       );

@@ -157,11 +157,13 @@ const DISTANCE_400M_TIME_ADJUSTMENT = 1.06;
 const LONG_DISTANCE_400M_TIME_ADJUSTMENT = 1.07;
 const PREDICTED_10000M_TIME_ADJUSTMENT = 1.02;
 const MID_DISTANCE_10000M_TIME_ADJUSTMENT = 1.07;
+const CROSS_COUNTRY_DISTANCE_PROJECTION_EXPONENT = 1.06;
 const NON_CHAMPIONSHIP_WIN_FACTOR_POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
 const CONFERENCE_WIN_FACTOR_POINTS = [15, 13, 11, 9, 7, 6, 5, 4];
 const REGIONAL_WIN_FACTOR_POINTS = [18, 15, 13, 11, 9, 7, 6, 5];
-const WIN_FACTOR_SCALE = 10;
 const JACK_OF_ALL_RACES_MARGIN = 2;
+const MIN_SEASONS_FOR_COMPOSITES = 2;
+const WIN_FACTOR_OUTPUT_MULTIPLIER = 2;
 
 type WorldAthleticsScoreModel = readonly [quadratic: number, linear: number, offset: number];
 type WorldAthleticsGender = "men" | "women";
@@ -172,6 +174,14 @@ type TrackRace = {
   scoringEvent?: string;
 };
 type RaceSpecialty = "mid-distance" | "3k-5k" | "5k-10k";
+
+function worldAthleticsGenderForTeam(
+  team: string,
+): WorldAthleticsGender | null {
+  if (team === "mens-cross-country") return "men";
+  if (team === "womens-cross-country") return "women";
+  return null;
+}
 
 // Quadratic fits to the 2025 World Athletics scoring tables. Short-track
 // events use their dedicated tables when an indoor result is being scored.
@@ -586,12 +596,7 @@ function predictedPerformanceSeconds(
 export function athlete400EquivalentSeconds(
   athlete: AthleteRosterInfo,
 ): number | null {
-  const gender: WorldAthleticsGender | null =
-    athlete.team === "mens-cross-country"
-      ? "men"
-      : athlete.team === "womens-cross-country"
-        ? "women"
-        : null;
+  const gender = worldAthleticsGenderForTeam(athlete.team);
   if (!gender) return null;
 
   const races = athlete.raceHistory
@@ -679,12 +684,7 @@ function direct400Seconds(
 function athlete10000EquivalentSeconds(
   athlete: AthleteRosterInfo,
 ): number | null {
-  const gender: WorldAthleticsGender | null =
-    athlete.team === "mens-cross-country"
-      ? "men"
-      : athlete.team === "womens-cross-country"
-        ? "women"
-        : null;
+  const gender = worldAthleticsGenderForTeam(athlete.team);
   if (!gender) return null;
 
   const races = athlete.raceHistory
@@ -935,6 +935,20 @@ function winFactorPointsForPlacing(
   return NON_CHAMPIONSHIP_WIN_FACTOR_POINTS[placing - 1] ?? 0;
 }
 
+function winFactorMaximumPointsForMeet(
+  meetName: string | null | undefined,
+): number {
+  const normalizedMeetName = meetName?.toLowerCase() ?? "";
+  if (/\bregional|\bregionals?\b|\bregion\b/.test(normalizedMeetName)) {
+    return REGIONAL_WIN_FACTOR_POINTS[0];
+  }
+  if (/\bconference\b/.test(normalizedMeetName)) {
+    return CONFERENCE_WIN_FACTOR_POINTS[0];
+  }
+  if (/\bnational\b|\bncaa\b/.test(normalizedMeetName)) return 20;
+  return NON_CHAMPIONSHIP_WIN_FACTOR_POINTS[0];
+}
+
 function isCompletedWinFactorRace(race: AthleteRaceRecord): boolean {
   const status = race.status?.trim().toUpperCase();
   if (
@@ -951,35 +965,101 @@ function isCompletedWinFactorRace(race: AthleteRaceRecord): boolean {
   );
 }
 
-function calculateWinFactorRating(
+interface WinFactorSeasonScore {
+  seasonKey: string;
+  score: number;
+}
+
+function winFactorSeasonKey(race: AthleteRaceRecord): string {
+  const seasonType =
+    race.season_type?.trim().toLowerCase().replace(/[\s-]+/g, "_") ??
+    "unknown";
+  const year = race.meet_date?.match(/^(\d{4})/)?.[1] ?? "unknown";
+  return `${seasonType}:${year}`;
+}
+
+function calculateWinFactorSeasonScores(
   raceHistory: readonly AthleteRaceRecord[],
-): number | null {
-  let totalPoints = 0;
-  let competedRaces = 0;
+): WinFactorSeasonScore[] {
+  const racesBySeason = new Map<string, number[]>();
 
   for (const race of raceHistory) {
     if (!isCompletedWinFactorRace(race)) continue;
 
-    competedRaces++;
     const placing = parsePlacingNumber(race.placing);
-    if (placing !== null) {
-      totalPoints += winFactorPointsForPlacing(placing, race.meet_name);
-    }
-
+    const rawPoints =
+      placing === null
+        ? 0
+        : winFactorPointsForPlacing(placing, race.meet_name);
+    const maximumPoints = winFactorMaximumPointsForMeet(race.meet_name);
+    const seasonKey = winFactorSeasonKey(race);
+    const scores = racesBySeason.get(seasonKey) ?? [];
+    scores.push((rawPoints / maximumPoints) * 100);
+    racesBySeason.set(seasonKey, scores);
   }
 
-  return competedRaces === 0
-    ? null
-    : round((totalPoints / competedRaces) * WIN_FACTOR_SCALE);
+  return [...racesBySeason.entries()].map(([seasonKey, scores]) => ({
+    seasonKey,
+    score: scores.reduce((sum, score) => sum + score, 0) / scores.length,
+  }));
+}
+
+function calculateWinFactorRating(
+  athlete: AthleteRosterInfo,
+  teamRunners: readonly AthleteRosterInfo[],
+): number | null {
+  const pool = teamRunners.some((runner) => runner.tfrrsId === athlete.tfrrsId)
+    ? teamRunners
+    : [...teamRunners, athlete];
+  const sameTeamRunners = pool.filter((runner) => runner.team === athlete.team);
+  const athleteSeasonScores = calculateWinFactorSeasonScores(
+    athlete.raceHistory,
+  );
+  if (athleteSeasonScores.length === 0) return null;
+
+  const teamSeasonScores = new Map<string, number[]>();
+  for (const runner of sameTeamRunners) {
+    for (const season of calculateWinFactorSeasonScores(runner.raceHistory)) {
+      const scores = teamSeasonScores.get(season.seasonKey) ?? [];
+      scores.push(season.score);
+      teamSeasonScores.set(season.seasonKey, scores);
+    }
+  }
+
+  const adjustedScores = athleteSeasonScores.map((season) => {
+    const teamScores = teamSeasonScores.get(season.seasonKey) ?? [];
+    const teamAverage =
+      teamScores.length > 0
+        ? teamScores.reduce((sum, score) => sum + score, 0) /
+          teamScores.length
+        : season.score;
+    const completedRaceCount = athlete.raceHistory.filter(
+      (race) =>
+        isCompletedWinFactorRace(race) &&
+        winFactorSeasonKey(race) === season.seasonKey,
+    ).length;
+    const athleteWeight = completedRaceCount / (completedRaceCount + 5);
+    return athleteWeight * season.score + (1 - athleteWeight) * teamAverage;
+  });
+
+  const careerScore =
+    adjustedScores.reduce((sum, score) => sum + score, 0) /
+    adjustedScores.length;
+  return round(
+    Math.min(100, careerScore * WIN_FACTOR_OUTPUT_MULTIPLIER),
+  );
 }
 
 type WeightedRating = [value: number | null, weight: number];
 
-function calculateWeightedRating(ratings: WeightedRating[]): number | null {
+function calculateWeightedRating(
+  ratings: WeightedRating[],
+  minimumAvailableRatings = 1,
+): number | null {
   const availableRatings = ratings.filter(
     (rating): rating is [number, number] => rating[0] !== null,
   );
-  if (availableRatings.length === 0) return null;
+  if (availableRatings.length < minimumAvailableRatings) return null;
 
   const totalWeight = availableRatings.reduce(
     (sum, [, weight]) => sum + weight,
@@ -1006,6 +1086,11 @@ function calculateRunnerTypeClassification(
     | "secondTeamAllAmericanCount"
   >,
 ): { runnerType: RunnerType | null; scores: RunnerTypeScores } {
+  const availableSeasonCount = [
+    ratings.crossCountry,
+    ratings.indoor,
+    ratings.outdoor,
+  ].filter((rating): rating is number => rating !== null).length;
   const grassGods = calculateWeightedRating([
         [ratings.crossCountry, 0.6],
         [ratings.endurance, 0.15],
@@ -1055,21 +1140,25 @@ function calculateRunnerTypeClassification(
         jackOfAllRaces,
       };
       const eligibleScores: [RunnerType, number][] = [];
-      if (grassGods !== null) {
+      if (availableSeasonCount >= MIN_SEASONS_FOR_COMPOSITES && grassGods !== null) {
         eligibleScores.push(["Grass God", grassGods]);
       }
-      if (indoorDemons !== null) {
+      if (
+        availableSeasonCount >= MIN_SEASONS_FOR_COMPOSITES &&
+        indoorDemons !== null
+      ) {
         eligibleScores.push(["Indoor Demon", indoorDemons]);
       }
-      if (outdoorAllstar !== null) {
+      if (
+        availableSeasonCount >= MIN_SEASONS_FOR_COMPOSITES &&
+        outdoorAllstar !== null
+      ) {
         eligibleScores.push(["Outdoor Allstar", outdoorAllstar]);
       }
       if (
         jackOfAllRaces !== null &&
         overallAverage !== null &&
-        ratings.crossCountry !== null &&
-        ratings.indoor !== null &&
-        ratings.outdoor !== null
+        availableSeasonCount >= MIN_SEASONS_FOR_COMPOSITES
       ) {
         const strongestSpecialtyScore = Math.max(
           grassGods ?? -Infinity,
@@ -1122,7 +1211,7 @@ function calculateOverallRatings(
     [ratings.crossCountry, 1],
     [indoorSeason, 1],
     [outdoorSeason, 1],
-  ]);
+  ], MIN_SEASONS_FOR_COMPOSITES);
   const physicalAbilityAverage = calculateWeightedRating([
     [ratings.speed, 1],
     [ratings.endurance, 1],
@@ -1211,6 +1300,71 @@ interface CrossCountryRawResult {
   runnerId: string;
   distance: string;
   seconds: number;
+}
+
+function interpolatedWorldAthleticsDistanceModel(
+  gender: WorldAthleticsGender,
+  distanceMeters: number,
+): WorldAthleticsScoreModel | null {
+  const models = WORLD_ATHLETICS_SCORE_MODELS[gender];
+  const lowerDistance = distanceMeters < 5000 ? 3000 : 5000;
+  const upperDistance = distanceMeters < 5000 ? 5000 : 10000;
+  const shorterModel = models[`${lowerDistance}m`];
+  const longerModel = models[`${upperDistance}m`];
+  if (!shorterModel || !longerModel || distanceMeters <= 0) return null;
+
+  const ratio = Math.max(
+    0,
+    Math.min(1, (distanceMeters - lowerDistance) / (upperDistance - lowerDistance)),
+  );
+  return [
+    shorterModel[0] + (longerModel[0] - shorterModel[0]) * ratio,
+    shorterModel[1] + (longerModel[1] - shorterModel[1]) * ratio,
+    shorterModel[2] + (longerModel[2] - shorterModel[2]) * ratio,
+  ];
+}
+
+function crossCountryDistanceMeters(distance: string): number {
+  return Number.parseFloat(distance) * 1000;
+}
+
+function predictPrimaryCrossCountrySeconds(
+  gender: WorldAthleticsGender,
+  targetDistance: string,
+  results: readonly CrossCountryRawResult[],
+): number | null {
+  const targetDistanceMeters = crossCountryDistanceMeters(targetDistance);
+  let bestPoints = -Infinity;
+  let bestPrediction: number | null = null;
+  for (const result of results) {
+    const sourceDistanceMeters = crossCountryDistanceMeters(result.distance);
+    if (
+      !Number.isFinite(sourceDistanceMeters) ||
+      sourceDistanceMeters <= 0
+    ) {
+      continue;
+    }
+    const sourceModel = interpolatedWorldAthleticsDistanceModel(
+      gender,
+      sourceDistanceMeters,
+    );
+    if (!sourceModel) continue;
+
+    const points = worldAthleticsPoints(result.seconds, sourceModel);
+    // World Athletics points choose the strongest available race; the
+    // Riegel projection then extends that performance to the team's primary
+    // XC distance, including cases where no official 8K/6K model exists.
+    const predicted =
+      result.seconds *
+      (targetDistanceMeters / sourceDistanceMeters) **
+        CROSS_COUNTRY_DISTANCE_PROJECTION_EXPONENT;
+    if (points > bestPoints) {
+      bestPoints = points;
+      bestPrediction = predicted;
+    }
+  }
+
+  return bestPrediction;
 }
 
 function collectCrossCountryResults(
@@ -1348,16 +1502,42 @@ export function calculateCrossCountryRecordRating(
     ? teamRunners
     : [...teamRunners, athlete];
   const sameTeamRunners = pool.filter((runner) => runner.team === athlete.team);
+  const primaryDistance = PRIMARY_CROSS_COUNTRY_DISTANCE_BY_TEAM[athlete.team];
+  const gender = worldAthleticsGenderForTeam(athlete.team);
 
   const resultsByDistance = new Map<string, CrossCountryRawResult[]>();
   for (const runner of sameTeamRunners) {
-    for (const result of collectCrossCountryResults(
+    const runnerResults = collectCrossCountryResults(
       runner.tfrrsId,
       runner.raceHistory,
-    )) {
-      const results = resultsByDistance.get(result.distance) ?? [];
-      results.push(result);
-      resultsByDistance.set(result.distance, results);
+    );
+    const hasPrimaryDistance = runnerResults.some(
+      (result) => result.distance === primaryDistance,
+    );
+    const predictedPrimarySeconds =
+      !hasPrimaryDistance && gender && primaryDistance
+        ? predictPrimaryCrossCountrySeconds(
+            gender,
+            primaryDistance,
+            runnerResults,
+          )
+        : null;
+    const effectiveResults =
+      predictedPrimarySeconds === null
+        ? runnerResults
+        : [
+            ...runnerResults,
+            {
+              runnerId: runner.tfrrsId,
+              distance: primaryDistance,
+              seconds: predictedPrimarySeconds,
+            },
+          ];
+
+    for (const result of effectiveResults) {
+      const distanceResults = resultsByDistance.get(result.distance) ?? [];
+      distanceResults.push(result);
+      resultsByDistance.set(result.distance, distanceResults);
     }
   }
 
@@ -1409,25 +1589,13 @@ export function calculateCrossCountryRecordRating(
     };
   }
 
-  const primaryDistance = PRIMARY_CROSS_COUNTRY_DISTANCE_BY_TEAM[athlete.team];
-  const best = distances.find((entry) => entry.distance === primaryDistance);
-
-  if (!best) {
-    return {
-      score: null,
-      deficitSeconds: null,
-      bestDistance: null,
-      athleteSeconds: null,
-      recordSeconds: null,
-      recordHolderTfrrsId: null,
-      isRecordHolder: false,
-      allAmericanCount,
-      allAmericanAppearances,
-      distances: distances.sort((first, second) =>
-        first.distance.localeCompare(second.distance),
-      ),
-    };
-  }
+  const best =
+    distances.find((entry) => entry.distance === primaryDistance) ??
+    distances.reduce((longest, entry) => {
+      const entryKilometers = Number.parseFloat(entry.distance);
+      const longestKilometers = Number.parseFloat(longest.distance);
+      return entryKilometers > longestKilometers ? entry : longest;
+    });
 
   return {
     score: round(best.score + allAmericanCount),
@@ -1638,7 +1806,7 @@ export function calculateAthleteAttributes(
     outdoorConsistency: calculateTrackConsistencyRating(athlete, "outdoor"),
     speed: calculateSpeedRating(athlete, teamRunners),
     endurance: calculateEnduranceRating(athlete, teamRunners),
-    winFactor: calculateWinFactorRating(athlete.raceHistory),
+    winFactor: calculateWinFactorRating(athlete, teamRunners),
   };
   const classification = calculateRunnerTypeClassification(ratings);
   const overall = calculateOverallRatings(ratings);
