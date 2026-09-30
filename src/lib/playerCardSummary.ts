@@ -83,6 +83,7 @@ function summaryRacesForSeason(
 function countAllAmericans(
   races: readonly PlayerCardRace[],
   seasonType: "cross_country" | "indoor" | "outdoor",
+  minimumPlace: number,
   maximumPlace: number,
 ): number {
   const appearances = new Set<string>();
@@ -93,6 +94,7 @@ function countAllAmericans(
       !isFinished(race) ||
       race.season_type !== seasonType ||
       placing === null ||
+      placing < minimumPlace ||
       placing > maximumPlace ||
       !isNationalMeet(meetName, seasonType) ||
       (seasonType !== "cross_country" && !/\(f\)\s*$/i.test(race.placing ?? ""))
@@ -165,6 +167,24 @@ function ordinal(place: number): string {
           ? "rd"
           : "th";
   return `${place}${suffix}`;
+}
+
+function formatAllAmericanRecognition(
+  count: number,
+  seasonLabel: string,
+  teamLabel: string,
+): string | null {
+  if (count === 0) return null;
+  const countLabel = count === 1 ? "a" : `a ${count}-time`;
+  return `${countLabel} ${seasonLabel} ${teamLabel}-team All-American`;
+}
+
+function joinRecognitions(recognitions: readonly string[]): string {
+  if (recognitions.length <= 1) return recognitions[0] ?? "";
+  if (recognitions.length === 2) {
+    return `${recognitions[0]} and ${recognitions[1]}`;
+  }
+  return `${recognitions.slice(0, -1).join(", ")}, and ${recognitions.at(-1)}`;
 }
 
 function hasGraduated(graduationYear: number | null): boolean {
@@ -259,9 +279,21 @@ function bestSeasonFinish(
 
 export function buildPlayerCardSummary(athlete: SummaryAthlete): string {
   const firstName = athlete.name.split(/\s+/)[0];
-  const xcAllAmericans = countAllAmericans(athlete.raceHistory, "cross_country", 40);
-  const indoorAllAmericans = countAllAmericans(athlete.raceHistory, "indoor", 8);
-  const outdoorAllAmericans = countAllAmericans(athlete.raceHistory, "outdoor", 8);
+  const xcAllAmericans = countAllAmericans(athlete.raceHistory, "cross_country", 1, 40);
+  const indoorAllAmericans = countAllAmericans(athlete.raceHistory, "indoor", 1, 8);
+  const outdoorAllAmericans = countAllAmericans(athlete.raceHistory, "outdoor", 1, 8);
+  const indoorSecondTeamAllAmericans = countAllAmericans(
+    athlete.raceHistory,
+    "indoor",
+    9,
+    16,
+  );
+  const outdoorSecondTeamAllAmericans = countAllAmericans(
+    athlete.raceHistory,
+    "outdoor",
+    9,
+    16,
+  );
   const grassGod = athlete.runnerType === "Grass God";
   const indoorDemon = athlete.runnerType === "Indoor Demon";
   const outdoorSpecialist =
@@ -284,15 +316,31 @@ export function buildPlayerCardSummary(athlete: SummaryAthlete): string {
   const finishes = seasons
     .map((seasonType) => bestSeasonFinish(athlete.raceHistory, seasonType))
     .filter((finish): finish is string => finish !== null);
-  const allAmericanSentence = `${firstName} graduated in ${
+  const allAmericanRecognitions = [
+    formatAllAmericanRecognition(xcAllAmericans, "XC", "first"),
+    formatAllAmericanRecognition(indoorAllAmericans, "indoor", "first"),
+    formatAllAmericanRecognition(outdoorAllAmericans, "outdoor", "first"),
+    formatAllAmericanRecognition(
+      indoorSecondTeamAllAmericans,
+      "indoor",
+      "second",
+    ),
+    formatAllAmericanRecognition(
+      outdoorSecondTeamAllAmericans,
+      "outdoor",
+      "second",
+    ),
+  ].filter((recognition): recognition is string => recognition !== null);
+  const allAmericanRecognitionText = joinRecognitions(allAmericanRecognitions);
+  const graduatedRecognitionSentence = `${firstName} graduated in ${
     athlete.graduationYear ?? "their final Wartburg season"
-  } as a ${xcAllAmericans}-time XC All-American, ${indoorAllAmericans}-time indoor All-American, and ${outdoorAllAmericans}-time outdoor All-American.`;
+  } as ${allAmericanRecognitionText}.`;
   const statusSentence =
-    xcAllAmericans + indoorAllAmericans + outdoorAllAmericans === 0
+    allAmericanRecognitions.length === 0
       ? zeroAllAmericanSentence(athlete, firstName)
       : athlete.graduationYear !== null && !hasGraduated(athlete.graduationYear)
-        ? `${firstName} graduates in ${athlete.graduationYear} and is currently a ${xcAllAmericans}-time XC All-American, ${indoorAllAmericans}-time indoor All-American, and ${outdoorAllAmericans}-time outdoor All-American.`
-        : allAmericanSentence;
+        ? `${firstName} graduates in ${athlete.graduationYear} and is currently ${allAmericanRecognitionText}.`
+        : graduatedRecognitionSentence;
   const archetypeLead = grassGod
     ? "As a Grass God, their target-distance XC PR and best cross-country finish show a runner built for the long haul"
     : indoorDemon
