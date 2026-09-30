@@ -22,6 +22,7 @@ import SchedulePage from "./pages/schedulePage";
 import SeasonSchedulePage from "./pages/seasonSchedulePage";
 import TimeTrials from "./pages/timeTrials";
 import PlayerCardPage from "./pages/playerCardPage";
+import PlayerCardsPage from "./pages/playerCardsPage";
 
 const BACK_BUTTON_ROUTES = new Set(["/", "/time-trials"]);
 
@@ -43,6 +44,7 @@ function AppContent() {
     "/tfrrs-stats",
     "/time-trials",
     "/player-card",
+    "/player-cards",
     "/personal-records",
     "/season-bests",
     "/workouts",
@@ -156,6 +158,8 @@ function AppContent() {
             </RequireIdentity>
           }
         />
+
+        <Route path="/player-cards" element={<PlayerCardsPage />} />
 
         <Route
           path="/personal-records"

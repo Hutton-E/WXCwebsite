@@ -20,6 +20,7 @@ const statsLinks = [
 const commonLinks = [
   { label: "View Core", path: "/core" },
   { label: "View Schedule", path: "/season-schedule" },
+  { label: "View Player Cards", path: "/player-cards" },
 ];
 
 function Home() {
