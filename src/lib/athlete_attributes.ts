@@ -1721,11 +1721,22 @@ function calculateTrackRecordRating(
   }
 
   const events: IndoorEventRating[] = [];
+  const hasRepeatedEvent = [...resultsByEvent.values()].some((results) => {
+    const athleteAttempts = results.filter(
+      (result) => result.runnerId === athlete.tfrrsId,
+    );
+    return athleteAttempts.length >= MIN_ATTEMPTS_FOR_TRACK_EVENT;
+  });
+  const minimumAttempts =
+    !hasRepeatedEvent
+      ? 1
+      : MIN_ATTEMPTS_FOR_TRACK_EVENT;
+
   for (const [event, results] of resultsByEvent) {
     const athleteResults = results.filter(
       (result) => result.runnerId === athlete.tfrrsId,
     );
-    if (athleteResults.length < MIN_ATTEMPTS_FOR_TRACK_EVENT) continue;
+    if (athleteResults.length < minimumAttempts) continue;
 
     const record = results.reduce((best, result) =>
       result.seconds < best.seconds ? result : best,
