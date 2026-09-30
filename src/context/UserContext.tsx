@@ -6,6 +6,19 @@ import {
   type ReactNode,
 } from "react";
 import { supabase } from "../lib/supabaseClient";
+import {
+  findTopAchievements,
+  type AthleteAchievement,
+  type AthleteRaceRecord,
+} from "../lib/athleteAchievements";
+import type { BestWorldAthleticsPerformance } from "../lib/athlete_attributes";
+import {
+  calculateBestWorldAthleticsPerformance,
+  calculateCrossCountryRecordRating,
+  calculateIndoorRecordRating,
+  calculateOutdoorRecordRating,
+  type AthleteRosterInfo,
+} from "../lib/athlete_attributes";
 
 export interface Athlete {
   id: string;
@@ -30,6 +43,14 @@ export interface Athlete {
   overallRank: number | null;
   allAmericanCount: number;
   secondTeamAllAmericanCount: number;
+  raceHistory: AthleteRaceRecord[];
+  topAchievements: AthleteAchievement[];
+  schoolRecords: {
+    crossCountry: string[];
+    indoor: string[];
+    outdoor: string[];
+  };
+  bestWorldAthleticsPerformance: BestWorldAthleticsPerformance | null;
 }
 
 interface UserContextValue {
@@ -119,7 +140,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
             supabase
               .from("tfrrs_athlete_performance")
               .select(
-                "cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating, win_factor_rating, runner_type, overall_rating, overall_rank, all_american_count, second_team_all_american_count",
+                "race_history, cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating, win_factor_rating, runner_type, overall_rating, overall_rank, all_american_count, second_team_all_american_count",
               )
               .eq("tfrrs_id", data.tfrrs_id)
               .maybeSingle(),
@@ -174,6 +195,85 @@ export function UserProvider({ children }: { children: ReactNode }) {
           }
         }
 
+        let schoolRecords = { crossCountry: [], indoor: [], outdoor: [] } as {
+          crossCountry: string[];
+          indoor: string[];
+          outdoor: string[];
+        };
+        let bestWorldAthleticsPerformance: BestWorldAthleticsPerformance | null =
+          null;
+        if (data.tfrrs_id && ratings?.race_history) {
+          const { data: teamRows, error: teamRowsError } = await supabase
+            .from("athletes")
+            .select("tfrrs_id, team, season")
+            .eq("team", data.team)
+            .not("tfrrs_id", "is", null)
+            .order("season", { ascending: false });
+          if (teamRowsError) {
+            console.error("Failed to load team roster for record analysis:", teamRowsError);
+          } else {
+            const teamIds = [...new Set((teamRows ?? []).map((row) => row.tfrrs_id))];
+            const { data: teamPerformances, error: teamPerformanceError } =
+              await supabase
+                .from("tfrrs_athlete_performance")
+                .select("tfrrs_id, race_history")
+                .in("tfrrs_id", teamIds);
+            if (teamPerformanceError) {
+              console.error(
+                "Failed to load team performance history for record analysis:",
+                teamPerformanceError,
+              );
+            } else {
+              const performanceById = new Map(
+                (teamPerformances ?? []).map((row) => [row.tfrrs_id, row]),
+              );
+              const teamRunners: AthleteRosterInfo[] = teamIds.flatMap((tfrrsId) => {
+                const teamRow = teamRows?.find((row) => row.tfrrs_id === tfrrsId);
+                const performance = performanceById.get(tfrrsId);
+                return teamRow && performance
+                  ? [
+                      {
+                        tfrrsId,
+                        team: teamRow.team,
+                        raceHistory: performance.race_history ?? [],
+                      },
+                    ]
+                  : [];
+              });
+              const currentRunner = teamRunners.find(
+                (runner) => runner.tfrrsId === data.tfrrs_id,
+              );
+              if (currentRunner) {
+                const crossCountryRecords = calculateCrossCountryRecordRating(
+                  currentRunner,
+                  teamRunners,
+                );
+                const indoorRecords = calculateIndoorRecordRating(
+                  currentRunner,
+                  teamRunners,
+                );
+                const outdoorRecords = calculateOutdoorRecordRating(
+                  currentRunner,
+                  teamRunners,
+                );
+                schoolRecords = {
+                  crossCountry: crossCountryRecords.distances
+                    .filter((record) => record.recordHolderTfrrsId === data.tfrrs_id)
+                    .map((record) => `${record.distance} XC`),
+                  indoor: indoorRecords.events
+                    .filter((event) => event.recordHolderTfrrsId === data.tfrrs_id)
+                    .map((event) => event.event),
+                  outdoor: outdoorRecords.events
+                    .filter((event) => event.recordHolderTfrrsId === data.tfrrs_id)
+                    .map((event) => event.event),
+                };
+                bestWorldAthleticsPerformance =
+                  calculateBestWorldAthleticsPerformance(currentRunner);
+              }
+            }
+          }
+        }
+
         if (cancelled) return;
         setAthlete({
           id: data.id,
@@ -201,6 +301,10 @@ export function UserProvider({ children }: { children: ReactNode }) {
           allAmericanCount: ratings?.all_american_count ?? 0,
           secondTeamAllAmericanCount:
             ratings?.second_team_all_american_count ?? 0,
+          raceHistory: ratings?.race_history ?? [],
+          topAchievements: findTopAchievements(ratings?.race_history ?? []),
+          schoolRecords,
+          bestWorldAthleticsPerformance,
         });
         setAthleteLoading(false);
       });

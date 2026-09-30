@@ -53,6 +53,79 @@
   border-bottom: 1px solid rgba(33, 27, 24, 0.25);
 }
 
+.player-card-shell {
+  position: absolute;
+  top: 23vh;
+  left: 50vw;
+  z-index: 8;
+  display: grid;
+  width: min(330px, 30vw);
+  perspective: 1200px;
+  transform-style: preserve-3d;
+  transform: translateX(-50%);
+}
+
+.player-card-face {
+  grid-area: 1 / 1;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  transition: transform 420ms cubic-bezier(0.2, 0.75, 0.3, 1);
+  will-change: transform;
+}
+
+.player-card-back {
+  transform: rotateY(180deg);
+}
+
+.player-card-shell.is-flipped .player-card-front {
+  transform: rotateY(-180deg);
+}
+
+.player-card-shell.is-flipped .player-card-back {
+  transform: rotateY(0);
+}
+
+.player-card-flip-control {
+  position: absolute;
+  top: 0;
+  right: -26px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  width: 26px;
+  height: 25%;
+  box-sizing: border-box;
+  padding: 8px 5px;
+  color: #fff;
+  background: #211b18;
+  border: 1px solid #f58220;
+  border-radius: 0 5px 5px 0;
+  font: 9px/1 "Acme", sans-serif;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+  cursor: pointer;
+}
+
+.player-card-flip-control-back {
+  right: auto;
+  left: -26px;
+  border-radius: 5px 0 0 5px;
+}
+
+.player-card-flip-control:hover,
+.player-card-flip-control:focus-visible {
+  color: #211b18;
+  background: #f58220;
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.player-card-flip-control span:last-child {
+  font-size: 13px;
+}
+
 .player-card-corner {
   display: flex;
   flex-direction: column;
@@ -102,15 +175,12 @@
 }
 
 .player-card {
-  position: absolute;
-  top: 23vh;
-  left: 50vw;
+  position: relative;
   z-index: 8;
-  width: min(330px, 30vw);
+  width: 100%;
   box-sizing: border-box;
   padding: 6px;
-  transform: translateX(-50%);
-  overflow: hidden;
+  overflow: visible;
   color: #111;
   text-align: left;
   background: #fff;
@@ -118,6 +188,180 @@
   border-radius: 8px;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48);
   animation: player-card-enter 380ms ease-out both;
+}
+
+.player-card-front {
+  transform: rotateY(0);
+}
+
+.player-card-back {
+  display: flex;
+  flex-direction: column;
+  min-height: 430px;
+  padding: 15px 14px 12px;
+  color: #211b18;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.92)),
+    repeating-linear-gradient(0deg, transparent 0 20px, rgba(245, 130, 32, 0.08) 21px);
+  border-color: #211b18;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48);
+  animation: none;
+}
+
+.player-card-back-header {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-bottom: 11px;
+  border-bottom: 2px solid #f58220;
+}
+
+.player-card-back-header > span,
+.player-card-back-section h2 {
+  margin: 0;
+  color: #f58220;
+  font: 11px/1.1 "Acme", sans-serif;
+  letter-spacing: 0.4px;
+}
+
+.player-card-back-header strong {
+  color: #211b18;
+  font: 25px/1.05 "Acme", sans-serif;
+  overflow-wrap: anywhere;
+}
+
+.player-card-back-header small,
+.player-card-back-note,
+.player-card-back-summary,
+.player-card-back-footnote {
+  color: #65594c;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.player-card-back-section {
+  padding: 13px 0;
+  border-bottom: 1px solid rgba(33, 27, 24, 0.2);
+}
+
+.player-card-formula {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.player-card-formula span {
+  flex: 1 1 30%;
+  min-width: 75px;
+  padding: 7px 5px;
+  color: #211b18;
+  background: #fff;
+  border: 1px solid rgba(245, 130, 32, 0.65);
+  border-radius: 4px;
+  font: 11px/1.15 "Acme", sans-serif;
+  text-align: center;
+}
+
+.player-card-back-note {
+  margin-top: 8px;
+}
+
+.player-card-back-summary {
+  margin: 8px 0 0;
+}
+
+.player-card-accolade-list {
+  display: grid;
+  gap: 3px;
+  margin: 8px 0 0;
+  padding-left: 16px;
+  color: #65594c;
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.player-card-back-label {
+  margin: 10px 0 0;
+  color: #f58220;
+  font: 10px/1.1 "Acme", sans-serif;
+  letter-spacing: 0.3px;
+}
+
+.player-card-yearly-accolades {
+  display: grid;
+  gap: 2px;
+  margin-top: 9px;
+  color: #65594c;
+  font-size: 9px;
+  line-height: 1.25;
+}
+
+.player-card-yearly-accolades p {
+  margin: 0;
+}
+
+.player-card-yearly-accolades strong {
+  color: #211b18;
+}
+
+.player-card-signal-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.player-card-signal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  background: rgba(255, 255, 255, 0.8);
+  border-left: 3px solid #f58220;
+}
+
+.player-card-signal div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.player-card-signal strong {
+  color: #211b18;
+  font: 12px/1 "Acme", sans-serif;
+}
+
+.player-card-signal small {
+  color: #65594c;
+  font-size: 9px;
+}
+
+.player-card-signal > span {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+  color: #211b18;
+  font-size: 9px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.player-card-signal > span strong {
+  font: 15px/1 "Acme", sans-serif;
+}
+
+.player-card-signal > span small {
+  color: #65594c;
+  font-size: 8px;
+  font-weight: 400;
+}
+
+.player-card-back-footnote {
+  margin-top: auto;
+  padding-top: 10px;
 }
 
 .player-card-page {
@@ -135,6 +379,13 @@
 }
 
 .player-card-page .player-card {
+  position: relative;
+  top: auto;
+  left: auto;
+  width: min(330px, 90vw);
+}
+
+.player-card-page .player-card-shell {
   position: relative;
   top: auto;
   left: auto;
@@ -232,7 +483,8 @@
   grid-template-columns: repeat(auto-fit, minmax(280px, 330px));
   justify-content: center;
   align-items: start;
-  gap: var(--space-md);
+  column-gap: clamp(56px, 5vw, 72px);
+  row-gap: var(--space-md);
   max-width: 1400px;
   margin: 0 auto;
 }
@@ -242,8 +494,15 @@
   top: auto;
   left: auto;
   width: 100%;
-  transform: none;
   animation: none;
+}
+
+.player-cards-grid .player-card-shell {
+  position: relative;
+  top: auto;
+  left: auto;
+  width: 100%;
+  transform: none;
 }
 
 .player-card-photo,
@@ -2045,13 +2304,16 @@ button.admin-nav-link {
     line-height: 1.4;
   }
 
-  .player-card {
+  .player-card-shell {
     position: relative;
     top: auto;
     left: auto;
     width: min(330px, 86vw);
     margin: 4px auto;
     transform: none;
+  }
+
+  .player-card {
     animation: none;
   }
 

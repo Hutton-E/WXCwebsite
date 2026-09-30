@@ -15,6 +15,13 @@ export interface AthleteRosterInfo {
   raceHistory: readonly AthleteRaceRecord[];
 }
 
+export interface BestWorldAthleticsPerformance {
+  event: string;
+  mark: string;
+  points: number;
+  seasonType: string;
+}
+
 export interface AthleteAttributeValues {
   crossCountry: number | null;
   indoor: number | null;
@@ -1817,6 +1824,32 @@ export function calculateOutdoorRecordRating(
     OUTDOOR_RATED_EVENTS,
     OUTDOOR_ALL_AMERICAN_MEET_PATTERN,
   );
+}
+
+export function calculateBestWorldAthleticsPerformance(
+  athlete: AthleteRosterInfo,
+): BestWorldAthleticsPerformance | null {
+  const gender = worldAthleticsGenderForTeam(athlete.team);
+  if (!gender) return null;
+
+  let best: BestWorldAthleticsPerformance | null = null;
+  for (const race of athlete.raceHistory) {
+    if (race.status && race.status !== "FINISHED") continue;
+    const parsedRace = parseTrackRace(race);
+    if (!parsedRace) continue;
+    const model = scoreModelForRace(gender, parsedRace);
+    if (!model) continue;
+    const points = worldAthleticsPoints(parsedRace.seconds, model);
+    if (!best || points > best.points) {
+      best = {
+        event: race.event,
+        mark: race.mark,
+        points,
+        seasonType: race.season_type ?? "track",
+      };
+    }
+  }
+  return best;
 }
 
 export function calculateAthleteAttributes(
