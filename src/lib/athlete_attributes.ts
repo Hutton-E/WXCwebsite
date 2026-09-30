@@ -1061,14 +1061,14 @@ function calculateWeightedRating(
   );
   if (availableRatings.length < minimumAvailableRatings) return null;
 
-  const totalWeight = availableRatings.reduce(
+  const totalWeight = ratings.reduce(
     (sum, [, weight]) => sum + weight,
     0,
   );
   return round(
-    availableRatings.reduce(
+    ratings.reduce(
       (sum, [value, weight]) =>
-        sum + Math.min(100, Math.max(0, value)) * weight,
+        sum + (value === null ? 0 : Math.min(100, Math.max(0, value))) * weight,
       0,
     ) / totalWeight,
   );
@@ -1207,11 +1207,25 @@ function calculateOverallRatings(
     [ratings.outdoor, 0.8],
     [ratings.outdoorConsistency, 0.2],
   ]);
-  const seasonAverage = calculateWeightedRating([
+  const seasonRatings: WeightedRating[] = [
     [ratings.crossCountry, 1],
     [indoorSeason, 1],
     [outdoorSeason, 1],
-  ], MIN_SEASONS_FOR_COMPOSITES);
+  ];
+  const availableSeasonCount = seasonRatings.filter(
+    ([value]) => value !== null,
+  ).length;
+  const seasonAverage =
+    availableSeasonCount === 0
+      ? 0
+      : calculateWeightedRating(
+          availableSeasonCount === 1
+            ? seasonRatings.filter(
+                (rating): rating is [number, number] => rating[0] !== null,
+              )
+            : seasonRatings,
+          availableSeasonCount === 1 ? 1 : MIN_SEASONS_FOR_COMPOSITES,
+        );
   const physicalAbilityAverage = calculateWeightedRating([
     [ratings.speed, 1],
     [ratings.endurance, 1],
