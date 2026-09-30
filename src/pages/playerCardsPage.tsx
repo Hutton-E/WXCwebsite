@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import PlayerCard from "../components/playerCard";
 import { fetchPlayerCards } from "../lib/playerCardData";
 import type { Athlete } from "../context/UserContext";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 type GenderFilter = "all" | "women" | "men";
 type SortField =
@@ -34,6 +35,8 @@ function getGender(team: string): Exclude<GenderFilter, "all"> {
 }
 
 function PlayerCardsPage() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [cards, setCards] = useState<Athlete[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +50,21 @@ function PlayerCardsPage() {
   const [maximumRank, setMaximumRank] = useState("");
   const [runnerType, setRunnerType] = useState("all");
   const [allAmerican, setAllAmerican] = useState("all");
+  const selectedAthleteId = searchParams.get("athleteId");
+
+  function resetFilters() {
+    setQuery("");
+    setSeason("all");
+    setClassYear("all");
+    setGender("all");
+    setSortField("overallRating");
+    setDescending(true);
+    setMinimumRank("");
+    setMaximumRank("");
+    setRunnerType("all");
+    setAllAmerican("all");
+    navigate("/player-cards", { replace: true });
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -120,6 +138,8 @@ function PlayerCardsPage() {
 
     return cardsForSelectedSeason
       .filter((card) => {
+        const matchesSelectedAthlete =
+          !selectedAthleteId || card.id === selectedAthleteId;
         const matchesQuery =
           !lowerQuery || card.name.toLowerCase().includes(lowerQuery);
         const matchesSeason = season === "all" || card.season === Number(season);
@@ -140,6 +160,7 @@ function PlayerCardsPage() {
             ? card.allAmericanCount + card.secondTeamAllAmericanCount > 0
             : card.allAmericanCount + card.secondTeamAllAmericanCount === 0);
         return (
+          matchesSelectedAthlete &&
           matchesQuery &&
           matchesSeason &&
           matchesClassYear &&
@@ -169,13 +190,14 @@ function PlayerCardsPage() {
     query,
     runnerType,
     season,
+    selectedAthleteId,
     sortField,
   ]);
 
   return (
     <main className="player-cards-browser">
       <h1 className="player-cards-title acme-regular text-outline">
-        View Player Cards
+        {selectedAthleteId ? "View Player Card" : "View Player Cards"}
       </h1>
       <section className="player-cards-filters" aria-label="Player card filters">
         <label>
@@ -279,6 +301,9 @@ function PlayerCardsPage() {
             <option value="no">Not All-American</option>
           </select>
         </label>
+        <button className="player-cards-reset" type="button" onClick={resetFilters}>
+          Reset filters
+        </button>
       </section>
 
       {loading && <p className="player-cards-status">Loading player cards...</p>}

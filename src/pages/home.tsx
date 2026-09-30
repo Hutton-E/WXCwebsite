@@ -12,12 +12,6 @@ const resourceLinks = [
   { label: "View Lifting Sheet", path: "/lifting_sheet" },
 ];
 
-const statsLinks = [
-  { label: "View Player Card", path: "/player-card" },
-  { label: "View Player Card Directory", path: "/player-cards" },
-  { label: "View TFRRS Stats", path: "/tfrrs-stats" },
-  { label: "View Time Trials", path: "/time-trials" },
-];
 const commonLinks = [
   { label: "View Core", path: "/core" },
   { label: "View Schedule", path: "/season-schedule" },
@@ -64,7 +58,18 @@ function Home() {
             <NavMenu label="View WXC Resources" items={resourceLinks} />
           </nav>
           <nav className="mid-res-drop">
-            <NavMenu label="View Personal Stats" items={statsLinks} />
+            <NavMenu
+              label="View Personal Stats"
+              items={[
+                {
+                  label: "View Player Card",
+                  path: `/player-cards?athleteId=${encodeURIComponent(athlete.id)}`,
+                },
+                { label: "View Player Card Directory", path: "/player-cards" },
+                { label: "View TFRRS Stats", path: "/tfrrs-stats" },
+                { label: "View Time Trials", path: "/time-trials" },
+              ]}
+            />
           </nav>
 
           <SwitchIdentityPrompt />
