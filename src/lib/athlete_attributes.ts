@@ -917,6 +917,74 @@ function parsePlacingNumber(placing: string | null | undefined): number | null {
   return match ? Number(match[1]) : null;
 }
 
+function nationalChampionRunnerType(
+  raceHistory: readonly AthleteRaceRecord[],
+): RunnerType | null {
+  const nationalTitleCounts: Record<
+    "cross_country" | "indoor" | "outdoor",
+    number
+  > = {
+    cross_country: 0,
+    indoor: 0,
+    outdoor: 0,
+  };
+
+  for (const race of raceHistory) {
+    const seasonType = race.season_type?.trim().toLowerCase();
+    const meetName = race.meet_name ?? "";
+    if (
+      parsePlacingNumber(race.placing) !== 1 ||
+      !/\(f\)\s*$/i.test(race.placing ?? "")
+    ) {
+      continue;
+    }
+
+    if (
+      seasonType === "cross_country" &&
+      ALL_AMERICAN_MEET_PATTERN.test(meetName) &&
+      !REGIONAL_MEET_PATTERN.test(meetName)
+    ) {
+      nationalTitleCounts.cross_country += 1;
+    }
+    if (
+      seasonType === "indoor" &&
+      INDOOR_ALL_AMERICAN_MEET_PATTERN.test(meetName)
+    ) {
+      nationalTitleCounts.indoor += 1;
+    }
+    if (
+      seasonType === "outdoor" &&
+      OUTDOOR_ALL_AMERICAN_MEET_PATTERN.test(meetName)
+    ) {
+      nationalTitleCounts.outdoor += 1;
+    }
+  }
+
+  const totalNationalTitles = Object.values(nationalTitleCounts).reduce(
+    (sum, count) => sum + count,
+    0,
+  );
+  if (totalNationalTitles === 0) return null;
+  if (totalNationalTitles % 2 === 0) return "Jack-Of-All-Races";
+
+  const dominantSeason = (
+    Object.entries(nationalTitleCounts) as [
+      keyof typeof nationalTitleCounts,
+      number,
+    ][]
+  ).reduce((best, current) => (current[1] > best[1] ? current : best));
+
+  const archetypeBySeason: Record<
+    keyof typeof nationalTitleCounts,
+    RunnerType
+  > = {
+    cross_country: "Grass God",
+    indoor: "Indoor Demon",
+    outdoor: "Outdoor Allstar",
+  };
+  return archetypeBySeason[dominantSeason[0]];
+}
+
 function winFactorPointsForPlacing(
   placing: number,
   meetName: string | null | undefined,
@@ -1075,6 +1143,7 @@ function calculateWeightedRating(
 }
 
 function calculateRunnerTypeClassification(
+  raceHistory: readonly AthleteRaceRecord[],
   ratings: Omit<
     AthleteAttributeValues,
     | "runnerType"
@@ -1139,6 +1208,13 @@ function calculateRunnerTypeClassification(
         outdoorAllstar,
         jackOfAllRaces,
       };
+      const nationalChampionType = nationalChampionRunnerType(raceHistory);
+      if (nationalChampionType !== null) {
+        return {
+          runnerType: nationalChampionType,
+          scores,
+        };
+      }
       const eligibleScores: [RunnerType, number][] = [];
       if (availableSeasonCount >= MIN_SEASONS_FOR_COMPOSITES && grassGods !== null) {
         eligibleScores.push(["Grass God", grassGods]);
@@ -1833,7 +1909,10 @@ export function calculateAthleteAttributes(
     endurance: calculateEnduranceRating(athlete, teamRunners),
     winFactor: calculateWinFactorRating(athlete, teamRunners),
   };
-  const classification = calculateRunnerTypeClassification(ratings);
+  const classification = calculateRunnerTypeClassification(
+    athlete.raceHistory,
+    ratings,
+  );
   const overall = calculateOverallRatings(ratings);
   const allAmericanCounts = calculateAllAmericanCounts(athlete.raceHistory);
   return {

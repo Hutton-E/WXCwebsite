@@ -49,15 +49,6 @@ function isNationalMeet(meetName: string, seasonType: string): boolean {
       : /outdoor/i.test(meetName);
 }
 
-function finishLevel(meetName: string, seasonType: string): number {
-  if (isNationalMeet(meetName, seasonType)) return 3;
-  if (/\b(region|regional)\b/i.test(meetName)) return 2;
-  if (/\b(conference|a-?r-?c|american rivers|i+iac)\b/i.test(meetName)) {
-    return 1;
-  }
-  return 0;
-}
-
 function isRelayEvent(event: string): boolean {
   return /\brelay\b|\b(?:dmr|smr)\b|\b\d+\s*x\s*\d+\b|\bmedley\b/i.test(event);
 }
@@ -70,10 +61,12 @@ function summaryRacesForSeason(
   races: readonly PlayerCardRace[],
   seasonType: string,
 ): readonly PlayerCardRace[] {
-  const seasonRaces = races.filter((race) => race.season_type === seasonType);
+  const seasonRaces = races.filter(
+    (race) => race.season_type === seasonType && isUsableRace(race),
+  );
   if (seasonType === "cross_country") return seasonRaces;
   const validRaces = seasonRaces.filter(
-    (race) => isFinished(race) && isValidTrackEvent(race.event),
+    (race) => isValidTrackEvent(race.event),
   );
   return validRaces.length > 0
     ? validRaces
@@ -109,12 +102,22 @@ function countAllAmericans(
 }
 
 function markSeconds(mark: string): number | null {
-  const parts = mark.replace(/[A-Za-z]/g, "").trim().split(":");
+  const normalizedMark = mark.trim();
+  if (
+    !/^\d+(?::\d{1,2}){0,2}(?:\.\d+)?$/.test(normalizedMark)
+  ) {
+    return null;
+  }
+  const parts = normalizedMark.split(":");
   const values = parts.map(Number);
   if (values.some((value) => !Number.isFinite(value))) return null;
   if (values.length === 3) return values[0] * 3600 + values[1] * 60 + values[2];
   if (values.length === 2) return values[0] * 60 + values[1];
   return values[0] ?? null;
+}
+
+function isUsableRace(race: PlayerCardRace): boolean {
+  return isFinished(race) && markSeconds(race.mark) !== null;
 }
 
 function eventMeters(event: string): number | null {
@@ -132,41 +135,94 @@ function comparableTrackScore(record: PersonalRecord): number {
   return seconds && meters ? meters ** 1.06 / seconds : 0;
 }
 
-function bestRecord(
-  records: Record<string, PersonalRecord[]>,
-  seasonType: string,
-  team: string,
-): PersonalRecord | null {
-  const allSeasonRecords = (records[seasonType] ?? []).filter(
-    (record) => record.event && record.mark,
-  );
-  const seasonRecords =
-    seasonType === "cross_country"
-      ? allSeasonRecords
-      : allSeasonRecords.filter((record) => isValidTrackEvent(record.event)).length > 0
-        ? allSeasonRecords.filter((record) => isValidTrackEvent(record.event))
-        : allSeasonRecords.filter((record) => isRelayEvent(record.event));
-  if (seasonRecords.length === 0) return null;
-  if (seasonType === "cross_country") {
-    const target = team.startsWith("womens") ? /\b6\s*k\b/i : /\b8\s*k\b/i;
-    return seasonRecords.find((record) => target.test(record.event)) ?? seasonRecords[0];
-  }
-  return seasonRecords.reduce((best, record) =>
-    comparableTrackScore(record) > comparableTrackScore(best) ? record : best,
-  );
+function normalizedEvent(event: string): string {
+  return event.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function ordinal(place: number): string {
-  if (place % 100 >= 11 && place % 100 <= 13) return `${place}th`;
-  const suffix =
-    place % 10 === 1
-      ? "st"
-      : place % 10 === 2
-        ? "nd"
-        : place % 10 === 3
-          ? "rd"
-          : "th";
-  return `${place}${suffix}`;
+function mostCommonEvent(
+  races: readonly PlayerCardRace[],
+  seasonType: string,
+): string | null {
+  const seasonRaces = summaryRacesForSeason(races, seasonType);
+  if (seasonRaces.length === 0) return null;
+
+  const counts = new Map<string, { event: string; count: number }>();
+  for (const race of seasonRaces) {
+    const key = normalizedEvent(race.event);
+    const current = counts.get(key);
+    counts.set(key, {
+      event: current?.event ?? race.event,
+      count: (current?.count ?? 0) + 1,
+    });
+  }
+
+  return [...counts.values()].sort(
+    (first, second) => second.count - first.count,
+  )[0]?.event ?? null;
+}
+
+function mostCommonEventPersonalRecord(
+  races: readonly PlayerCardRace[],
+  records: Record<string, PersonalRecord[]>,
+  seasonType: string,
+): { event: string; mark: string; meet: string } | null {
+  const event = mostCommonEvent(races, seasonType);
+  if (!event) return null;
+
+  const matchingRecords = (records[seasonType] ?? []).filter(
+    (record) =>
+      normalizedEvent(record.event) === normalizedEvent(event) &&
+      markSeconds(record.mark) !== null,
+  );
+  const personalRecord =
+    matchingRecords.length > 0
+      ? matchingRecords.reduce((best, record) =>
+          comparableTrackScore(record) > comparableTrackScore(best)
+            ? record
+            : best,
+        )
+      : null;
+  const matchingRaces = summaryRacesForSeason(races, seasonType).filter(
+    (race) => normalizedEvent(race.event) === normalizedEvent(event),
+  );
+  const recordRace =
+    matchingRaces.find(
+      (race) => personalRecord !== null && race.mark === personalRecord.mark,
+    ) ??
+    matchingRaces.reduce<PlayerCardRace | null>((best, race) => {
+      if (!best) return race;
+      return markSeconds(race.mark) !== null &&
+        markSeconds(best.mark) !== null &&
+        markSeconds(race.mark)! < markSeconds(best.mark)!
+        ? race
+        : best;
+    }, null);
+
+  return {
+    event: personalRecord?.event ?? event,
+    mark: personalRecord?.mark ?? recordRace?.mark ?? "an unlisted mark",
+    meet: recordRace?.meet_name ?? "an unlisted meet",
+  };
+}
+
+function nationalChampionAchievements(
+  races: readonly PlayerCardRace[],
+): string[] {
+  return races
+    .filter((race) => {
+      const seasonType = race.season_type ?? "";
+      const meetName = race.meet_name ?? "";
+      return (
+        placingNumber(race.placing) === 1 &&
+        /\(f\)\s*$/i.test(race.placing ?? "") &&
+        isNationalMeet(meetName, seasonType) &&
+        !/\b(region|regional)\b/i.test(meetName)
+      );
+    })
+    .map(
+      (race) =>
+        `was a National Champ in the ${race.event} at the ${race.meet_name}`,
+    );
 }
 
 function formatAllAmericanRecognition(
@@ -227,56 +283,6 @@ function zeroAllAmericanSentence(
   return `${firstName} completed a strong collegiate career ${strengths}.`;
 }
 
-function bestSeasonFinish(
-  races: readonly PlayerCardRace[],
-  seasonType: string,
-): string | null {
-  const eligibleRaces = summaryRacesForSeason(races, seasonType).filter((race) => {
-    const meetName = race.meet_name ?? "";
-    const place = placingNumber(race.placing);
-    if (
-      race.season_type !== seasonType ||
-      !isFinished(race) ||
-      !meetName ||
-      place === null
-    ) {
-      return false;
-    }
-    if (isNationalMeet(meetName, seasonType)) {
-      if (seasonType === "cross_country" && place > 40) return false;
-      if (
-        seasonType !== "cross_country" &&
-        !/\(f\)\s*$/i.test(race.placing ?? "")
-      ) {
-        return false;
-      }
-    }
-    return true;
-  });
-  const best = eligibleRaces
-    .sort(
-      (first, second) => {
-        const firstMeet = first.meet_name ?? "";
-        const secondMeet = second.meet_name ?? "";
-        return (
-          finishLevel(secondMeet, seasonType) -
-            finishLevel(firstMeet, seasonType) ||
-          (placingNumber(first.placing) ?? Infinity) -
-            (placingNumber(second.placing) ?? Infinity)
-        );
-      },
-    )[0];
-  const place = best ? placingNumber(best.placing) : null;
-  if (!best || !place) return null;
-  if (seasonType !== "cross_country") {
-    if (isRelayEvent(best.event)) {
-      return `${ordinal(place)} in the full-team ${best.event} (${best.mark}) at ${best.meet_name}`;
-    }
-    return `${ordinal(place)} in ${best.event} (${best.mark}) at ${best.meet_name}`;
-  }
-  return `${ordinal(place)} at ${best.meet_name}`;
-}
-
 export function buildPlayerCardSummary(athlete: SummaryAthlete): string {
   const firstName = athlete.name.split(/\s+/)[0];
   const xcAllAmericans = countAllAmericans(athlete.raceHistory, "cross_country", 1, 40);
@@ -294,28 +300,6 @@ export function buildPlayerCardSummary(athlete: SummaryAthlete): string {
     9,
     16,
   );
-  const grassGod = athlete.runnerType === "Grass God";
-  const indoorDemon = athlete.runnerType === "Indoor Demon";
-  const outdoorSpecialist =
-    athlete.runnerType === "Outdoor Allstar" ||
-    athlete.runnerType === "Outdoor Outlaw";
-  const jackOfAllRaces = athlete.runnerType === "Jack-Of-All-Races";
-  const seasons = grassGod
-    ? ["cross_country"]
-    : indoorDemon
-      ? ["indoor"]
-      : outdoorSpecialist
-        ? ["outdoor"]
-        : jackOfAllRaces
-          ? ["cross_country", "indoor", "outdoor"]
-          : ["cross_country", "indoor", "outdoor"];
-  const records = seasons
-    .map((seasonType) => bestRecord(athlete.personalRecords, seasonType, athlete.team))
-    .filter((record): record is PersonalRecord => record !== null)
-    .map((record) => `${record.event} (${record.mark})`);
-  const finishes = seasons
-    .map((seasonType) => bestSeasonFinish(athlete.raceHistory, seasonType))
-    .filter((finish): finish is string => finish !== null);
   const allAmericanRecognitions = [
     formatAllAmericanRecognition(xcAllAmericans, "XC", "first"),
     formatAllAmericanRecognition(indoorAllAmericans, "indoor", "first"),
@@ -341,21 +325,24 @@ export function buildPlayerCardSummary(athlete: SummaryAthlete): string {
       : athlete.graduationYear !== null && !hasGraduated(athlete.graduationYear)
         ? `${firstName} graduates in ${athlete.graduationYear} and is currently ${allAmericanRecognitionText}.`
         : graduatedRecognitionSentence;
-  const archetypeLead = grassGod
-    ? "As a Grass God, their target-distance XC PR and best cross-country finish show a runner built for the long haul"
-    : indoorDemon
-      ? "As an Indoor Demon, their fastest comparable indoor event and best indoor finish show sharp speed and precision"
-      : outdoorSpecialist
-        ? "As an Outdoor Allstar, their fastest comparable outdoor event and best outdoor finish show range and confidence"
-        : jackOfAllRaces
-          ? "As a Jack-Of-All-Races, their fastest XC, indoor, and outdoor events show a rare ability to contribute across every season"
-          : "Their best available marks and finishes show a versatile competitor with a clear competitive identity";
-  const performanceSentence =
-    records.length > 0
-      ? `${archetypeLead}, highlighted by ${records.join(" and ")}${finishes.length > 0 ? ` and ${finishes.join(" and ")}` : ""}.`
-      : finishes.length > 0
-        ? `${archetypeLead}, highlighted by ${finishes.join(" and ")}.`
-        : `${firstName} developed as a ${athlete.runnerType ?? "versatile"} competitor across the available results.`;
+  const seasonSentences = [
+    ["cross-country", "cross_country"],
+    ["indoor", "indoor"],
+    ["outdoor", "outdoor"],
+  ].map(([label, seasonType]) => {
+    const record = mostCommonEventPersonalRecord(
+      athlete.raceHistory,
+      athlete.personalRecords,
+      seasonType,
+    );
+    if (!record) return `This athlete has no recorded ${label} data.`;
+    return `${firstName}'s most-run ${label} event is ${record.event}, with a PR of ${record.mark} at the ${record.meet}.`;
+  });
+  const nationalChampSentences = nationalChampionAchievements(
+    athlete.raceHistory,
+  ).map((achievement) => `${firstName} ${achievement}.`);
 
-  return `${statusSentence} ${performanceSentence.replace("their", `${firstName}'s`)}`;
+  return [statusSentence, ...seasonSentences, ...nationalChampSentences].join(
+    " ",
+  );
 }
