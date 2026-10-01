@@ -8,7 +8,9 @@ function ErrorPage() {
   const location = useLocation();
 
   const state = (location.state as ErrorPageState) || {};
-  const message = state.message || "Something went wrong.";
+  const message =
+    state.message ||
+    "Page not found. Please reload the website in another browser.";
   const code = state.code || 404;
 
   return (

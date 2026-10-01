@@ -4,6 +4,7 @@ import "./App.css";
 import { BrowserRouter, Route, Routes, useLocation } from "react-router-dom";
 import Home from "./pages/home";
 import ErrorPage from "./pages/error";
+import NotFoundPage from "./pages/notFound";
 import BackButton from "./components/backButton";
 import RequireIdentity from "./components/requireIdentity";
 import ComingSoon from "./components/comingSoon";
@@ -66,7 +67,7 @@ function AppContent() {
 
         <Route path="/error" element={<ErrorPage />} />
 
-        <Route path="*" element={<ErrorPage />} />
+        <Route path="*" element={<NotFoundPage />} />
 
         <Route
           path="/about"

@@ -869,7 +869,7 @@
   font-size: clamp(25px, 2.5vw, 50px);
   font-weight: 500;
   margin: 0;
-  white-space: nowrap;
+  width: min(90vw, 900px);
   z-index: var(--z-overlay);
 }
 
