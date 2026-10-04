@@ -1,8 +1,42 @@
 import { useState } from "react";
-import type { Athlete } from "../context/UserContext";
+import type { Athlete, PreviousValues } from "../context/UserContext";
 
 interface PlayerCardProps {
   athlete: Athlete;
+}
+
+function formatValue(value: number | string | null, digits: number) {
+  if (value === null) return "--";
+  return typeof value === "number" ? value.toFixed(digits) : value;
+}
+
+function ChangedValue({
+  current,
+  previous,
+  digits = 1,
+}: {
+  current: number | string | null;
+  previous: number | string | null | undefined;
+  digits?: number;
+}) {
+  const changed =
+    previous !== undefined &&
+    (typeof current === "number" && typeof previous === "number"
+      ? Math.round(current * 100) !== Math.round(previous * 100)
+      : current !== previous);
+  if (!changed) return <>{formatValue(current, digits)}</>;
+  const direction =
+    typeof current === "number" && typeof previous === "number" && current < previous
+      ? "is-down"
+      : "is-up";
+  return (
+    <span className={`player-card-change ${direction}`}>
+      <span className="player-card-change-old">{formatValue(previous, digits)}</span>
+      <span className="player-card-change-arrow" aria-hidden="true">&rarr;</span>
+      <span className="player-card-change-new">{formatValue(current, digits)}</span>
+      <span className="visually-hidden"> (updated from {formatValue(previous, digits)})</span>
+    </span>
+  );
 }
 
 function PlayerCard({ athlete }: PlayerCardProps) {
@@ -14,24 +48,31 @@ function PlayerCard({ athlete }: PlayerCardProps) {
     .slice(0, 2)
     .map((part) => part[0]?.toUpperCase() ?? "")
     .join("");
+  const previous: PreviousValues = athlete.previousValues ?? {};
   const ratingScores = [
     {
       label: "XC",
       description: "Cross country",
       value: athlete.crossCountryRating,
+      previousValue: previous.crossCountryRating,
       consistency: null,
+      previousConsistency: undefined,
     },
     {
       label: "INDOOR",
       description: "Indoor track",
       value: athlete.indoorRating,
+      previousValue: previous.indoorRating,
       consistency: athlete.indoorConsistencyRating,
+      previousConsistency: previous.indoorConsistencyRating,
     },
     {
       label: "OUTDOOR",
       description: "Outdoor track",
       value: athlete.outdoorRating,
+      previousValue: previous.outdoorRating,
       consistency: athlete.outdoorConsistencyRating,
+      previousConsistency: previous.outdoorConsistencyRating,
     },
   ];
   return (
@@ -49,7 +90,13 @@ function PlayerCard({ athlete }: PlayerCardProps) {
         <header className="player-card-topline">
           <div className="player-card-corner player-card-rank">
             <span>OVERALL</span>
-            <strong>{athlete.overallRating?.toFixed(2) ?? "--"}</strong>
+            <strong>
+              <ChangedValue
+                current={athlete.overallRating}
+                previous={previous.overallRating}
+                digits={2}
+              />
+            </strong>
           </div>
           <span className="player-card-brand"> Wartburg XC/TF</span>
           <div className="player-card-corner player-card-graduation">
@@ -72,28 +119,40 @@ function PlayerCard({ athlete }: PlayerCardProps) {
           <div className="player-card-section-heading">
             <span>RUNNER TYPE</span>
             <strong>
-              1st-T AA: {athlete.allAmericanCount} | 2nd-T AA:{" "}
-              {athlete.secondTeamAllAmericanCount}
+              1st-T AA:{" "}
+              <ChangedValue
+                current={athlete.allAmericanCount}
+                previous={previous.allAmericanCount}
+                digits={0}
+              />{" "}
+              | 2nd-T AA:{" "}
+              <ChangedValue
+                current={athlete.secondTeamAllAmericanCount}
+                previous={previous.secondTeamAllAmericanCount}
+                digits={0}
+              />
             </strong>
           </div>
-          <p>{athlete.runnerType ?? "--"}</p>
+          <p>
+            <ChangedValue current={athlete.runnerType} previous={previous.runnerType} />
+          </p>
         </section>
         <section className="player-card-consistency" aria-label="Ratings">
           <h2>RATINGS</h2>
           <div className="player-card-consistency-grid">
-            {ratingScores.map(({ label, description, value, consistency }) => (
+            {ratingScores.map(({ label, description, value, previousValue, consistency, previousConsistency }) => (
               <div className="player-card-rating-slot" key={label}>
                 <div className="player-card-rating-row">
                   <span>{label}</span>
                   <strong aria-label={`${description}: ${value ?? "not rated"}`}>
-                    {value?.toFixed(1) ?? "--"}
+                    <ChangedValue current={value} previous={previousValue} />
                   </strong>
                 </div>
                 {consistency !== null && (
                   <div className="player-card-rating-row player-card-rating-row-consistency">
                     <span>CONSISTENCY</span>
                     <strong aria-label={`${description} consistency: ${consistency}`}>
-                      {consistency.toFixed(1)}
+                      <ChangedValue current={consistency} previous={previousConsistency} />
                     </strong>
                   </div>
                 )}
@@ -103,14 +162,14 @@ function PlayerCard({ athlete }: PlayerCardProps) {
         </section>
         <section className="player-card-attributes" aria-label="Runner attributes">
           {[
-            { label: "SPEED", description: "Speed", value: athlete.speedRating },
-            { label: "ENDURANCE", description: "Endurance", value: athlete.enduranceRating },
-            { label: "WIN FACTOR", description: "Win factor", value: athlete.winFactorRating },
-          ].map(({ label, description, value }) => (
+            { label: "SPEED", description: "Speed", value: athlete.speedRating, previousValue: previous.speedRating },
+            { label: "ENDURANCE", description: "Endurance", value: athlete.enduranceRating, previousValue: previous.enduranceRating },
+            { label: "WIN FACTOR", description: "Win factor", value: athlete.winFactorRating, previousValue: previous.winFactorRating },
+          ].map(({ label, description, value, previousValue }) => (
             <div className="player-card-attribute-slot" key={label}>
               <span>{label}</span>
               <strong aria-label={`${description}: ${value ?? "not rated"}`}>
-                {value?.toFixed(1) ?? "--"}
+                <ChangedValue current={value} previous={previousValue} />
               </strong>
             </div>
           ))}

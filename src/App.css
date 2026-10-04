@@ -2409,3 +2409,85 @@ button.admin-nav-link {
     grid-template-columns: 1fr;
   }
 }
+
+.player-card .player-card-change {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 2px;
+  font-size: 1.3em;
+  white-space: nowrap;
+  letter-spacing: -0.02em;
+}
+
+.player-card .player-card-change .player-card-change-old {
+  color: #d62828;
+  font-size: 1em;
+  font-weight: 700;
+  text-decoration: line-through;
+}
+
+.player-card .player-card-change .player-card-change-arrow {
+  color: #d62828;
+  font-size: 0.9em;
+}
+
+.player-card .player-card-change .player-card-change-new {
+  color: #1f9d3a;
+  font-size: 1em;
+  font-weight: 700;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.player-card .player-card-attribute-slot:has(.player-card-change),
+.player-card .player-card-rating-row:has(.player-card-change) {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.player-card .player-card-attribute-slot:has(.player-card-change) > span,
+.player-card .player-card-rating-row:has(.player-card-change) > span {
+  margin-right: auto;
+}
+.player-card .player-card-corner .player-card-change {
+  font-size: 0.9em;
+}
+.player-card .player-card-type p .player-card-change {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 0 6px;
+  font-size: 1em;
+  letter-spacing: 0;
+}
+
+.player-card .player-card-type p .player-card-change .player-card-change-old,
+.player-card .player-card-type p .player-card-change .player-card-change-arrow {
+  font-size: 0.55em;
+}
+
+.player-card .player-card-type p .player-card-change .player-card-change-new {
+  flex-basis: 100%;
+}
+
+.player-card .player-card-change.is-down .player-card-change-old {
+  color: #1f9d3a;
+}
+
+.player-card .player-card-change.is-down .player-card-change-arrow,
+.player-card .player-card-change.is-down .player-card-change-new {
+  color: #d62828;
+}
+
+.player-card .player-card-change.is-up .player-card-change-arrow {
+  color: #1f9d3a;
+}

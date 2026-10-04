@@ -1,5 +1,6 @@
 import { supabase } from "./supabaseClient";
 import type { Athlete } from "../context/UserContext";
+import { parsePreviousRatings } from "./previousRatings";
 import {
   buildPlayerCardSummary,
   type PlayerCardRace,
@@ -34,6 +35,7 @@ interface PerformanceRow {
   overall_rank: number | null;
   all_american_count: number | null;
   second_team_all_american_count: number | null;
+  previous_ratings: Record<string, number | string | null> | null;
 }
 
 export async function fetchPlayerCards(): Promise<Athlete[]> {
@@ -48,7 +50,7 @@ export async function fetchPlayerCards(): Promise<Athlete[]> {
     supabase
       .from("tfrrs_athlete_performance")
       .select(
-        "tfrrs_id, race_history, personal_records, cross_country_rating, indoor_rating, outdoor_rating, indoor_consistency_rating, outdoor_consistency_rating, speed_rating, endurance_rating, win_factor_rating, runner_type, overall_rating, overall_rank, all_american_count, second_team_all_american_count",
+        "tfrrs_id, race_history, personal_records, cross_country_rating, indoor_rating, outdoor_rating, indoor_consistency_rating, outdoor_consistency_rating, speed_rating, endurance_rating, win_factor_rating, runner_type, overall_rating, overall_rank, all_american_count,         second_team_all_american_count, previous_ratings",
       ),
   ]);
 
@@ -96,6 +98,7 @@ export async function fetchPlayerCards(): Promise<Athlete[]> {
       allAmericanCount: performance?.all_american_count ?? 0,
       secondTeamAllAmericanCount:
         performance?.second_team_all_american_count ?? 0,
+      previousValues: parsePreviousRatings(performance?.previous_ratings),
       cardSummary: buildPlayerCardSummary({
         name: row.name,
         team: row.team,

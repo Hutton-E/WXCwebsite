@@ -6,7 +6,26 @@ import {
   type ReactNode,
 } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { parsePreviousRatings } from "../lib/previousRatings";
 import { buildPlayerCardSummary } from "../lib/playerCardSummary";
+
+export type PreviousValues = Partial<
+  Record<
+    | "crossCountryRating"
+    | "indoorRating"
+    | "outdoorRating"
+    | "indoorConsistencyRating"
+    | "outdoorConsistencyRating"
+    | "speedRating"
+    | "enduranceRating"
+    | "winFactorRating"
+    | "overallRating"
+    | "overallRank"
+    | "allAmericanCount"
+    | "secondTeamAllAmericanCount",
+    number | null
+  >
+> & { runnerType?: string | null };
 
 export interface Athlete {
   id: string;
@@ -32,6 +51,7 @@ export interface Athlete {
   allAmericanCount: number;
   secondTeamAllAmericanCount: number;
   cardSummary: string;
+  previousValues: PreviousValues | null;
 }
 
 interface UserContextValue {
@@ -121,7 +141,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
             supabase
               .from("tfrrs_athlete_performance")
               .select(
-                "race_history, personal_records, cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating, win_factor_rating, runner_type, overall_rating, overall_rank, all_american_count, second_team_all_american_count",
+                "race_history, personal_records, cross_country_rating, indoor_rating, outdoor_rating, speed_rating, endurance_rating, win_factor_rating, runner_type, overall_rating, overall_rank, all_american_count, second_team_all_american_count, previous_ratings",
               )
               .eq("tfrrs_id", data.tfrrs_id)
               .maybeSingle(),
@@ -203,6 +223,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
           allAmericanCount: ratings?.all_american_count ?? 0,
           secondTeamAllAmericanCount:
             ratings?.second_team_all_american_count ?? 0,
+          previousValues: parsePreviousRatings(ratings?.previous_ratings),
           cardSummary: buildPlayerCardSummary({
             name: data.name,
             team: data.team,

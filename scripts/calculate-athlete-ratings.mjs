@@ -15,6 +15,28 @@ import { getAuthenticatedSupabaseClient } from "../src/lib/supabaseAdminClient.m
 import { calculateAthleteAttributes } from "../src/lib/athlete_attributes.ts";
 
 const PAGE_SIZE = 500;
+const TRACKED_COLUMNS = [
+  "cross_country_rating",
+  "indoor_rating",
+  "outdoor_rating",
+  "indoor_consistency_rating",
+  "outdoor_consistency_rating",
+  "speed_rating",
+  "endurance_rating",
+  "win_factor_rating",
+  "overall_rating",
+  "overall_rank",
+  "runner_type",
+  "all_american_count",
+  "second_team_all_american_count",
+];
+
+function sameValue(first, second) {
+  if (first === null || first === undefined) return second === null || second === undefined;
+  if (second === null || second === undefined) return false;
+  if (typeof first === "string" || typeof second === "string") return first === second;
+  return Math.round(Number(first) * 100) === Math.round(Number(second) * 100);
+}
 const UPDATE_BATCH_SIZE = 12;
 
 async function fetchPerformanceRows(supabase) {
@@ -23,7 +45,7 @@ async function fetchPerformanceRows(supabase) {
   for (let offset = 0; ; offset += PAGE_SIZE) {
     const { data, error } = await supabase
       .from("tfrrs_athlete_performance")
-      .select("tfrrs_id, athlete_name, race_history")
+      .select("*")
       .order("tfrrs_id")
       .range(offset, offset + PAGE_SIZE - 1);
 
@@ -184,6 +206,36 @@ async function main() {
     `Win factor ratings available: ${winFactorAvailable}/${calculatedRows.length}.`,
   );
 
+  const existingByTfrrsId = new Map(rows.map((row) => [row.tfrrs_id, row]));
+  const newValuesFor = (row) => ({
+    cross_country_rating: row.crossCountry,
+    indoor_rating: row.indoor,
+    outdoor_rating: row.outdoor,
+    indoor_consistency_rating: row.indoorConsistency,
+    outdoor_consistency_rating: row.outdoorConsistency,
+    speed_rating: row.speed,
+    endurance_rating: row.endurance,
+    win_factor_rating: row.winFactor,
+    runner_type: row.runnerType,
+    overall_rating: row.overallRating,
+    overall_rank: overallRankByTfrrsId.get(row.tfrrsId) ?? null,
+    all_american_count: row.allAmericanCount,
+    second_team_all_american_count: row.secondTeamAllAmericanCount,
+  });
+  const hasChanged = (row) => {
+    const existing = existingByTfrrsId.get(row.tfrrsId);
+    const newValues = newValuesFor(row);
+    return (
+      existing &&
+      TRACKED_COLUMNS.some(
+        (column) => !sameValue(existing[column], newValues[column]),
+      )
+    );
+  };
+  console.log(
+    `Athletes with changed card values: ${calculatedRows.filter(hasChanged).length}/${calculatedRows.length}.`,
+  );
+
   if (dryRun) {
     console.log("Dry run complete; Supabase was not changed.");
     return;
@@ -198,9 +250,22 @@ async function main() {
     const batch = calculatedRows.slice(index, index + UPDATE_BATCH_SIZE);
     const results = await Promise.all(
       batch.map(async (row) => {
+        const existing = existingByTfrrsId.get(row.tfrrsId);
+        // Keep the last snapshot until a card value actually changes again.
+        const snapshot = hasChanged(row)
+          ? {
+              previous_ratings: {
+                ...Object.fromEntries(
+                  TRACKED_COLUMNS.map((column) => [column, existing[column] ?? null]),
+                ),
+                recorded_at: new Date().toISOString(),
+              },
+            }
+          : {};
         const { data, error } = await supabase
           .from("tfrrs_athlete_performance")
           .update({
+            ...snapshot,
             cross_country_rating: row.crossCountry,
             indoor_rating: row.indoor,
             outdoor_rating: row.outdoor,
